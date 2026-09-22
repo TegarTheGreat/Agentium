@@ -196,7 +196,10 @@ internal/bench/      ukur startup, RAM, token, skor
 ```
 
 ### 4.7 Roadmap
-1. **v0.1:** loop + 5 tool paralel + klien OpenAI-compatible & Anthropic (API key, Ollama) + output ringkas + **`agentium bench`** (startup, RAM, token/tugas).
+1. **v0.1 ✅ selesai:** loop + 5 tool paralel + klien OpenAI-compatible & Anthropic (API key, Ollama, 15 provider bawaan + custom) + output ringkas + gerbang risiko dasar + sesi `-c` + **`agentium bench`**.
+   - **Hasil terukur:** binary 6,6 MB, startup ~2,5 ms, RSS ~7 MB, overhead prompt+tool ~600 token.
+   - Target di bagian 3 sudah terlampaui untuk startup (< 30 ms), binary (< 15 MB), RAM (< 30 MB), dan overhead (≤ 800 token).
+   - Belum diuji dengan API model sungguhan karena tidak ada API key di lingkungan build. Semua tes memakai server model palsu untuk kedua protokol.
 2. **v0.2:** memori (USER/MEMORY snapshot, FTS5, auto-recall, `@remember`/`@decide`) + elision.
 3. **v0.3:** verifikasi otomatis + sandbox + gerbang risiko + profil adaptif per model.
 4. **v0.4:** klien Gemini, models.dev penuh, OAuth ChatGPT/Copilot/OpenRouter, Bedrock/Vertex/Azure, fallback, fast mode.

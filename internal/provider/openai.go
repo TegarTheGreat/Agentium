@@ -1,0 +1,214 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync/atomic"
+)
+
+// OpenAI speaks the Chat Completions protocol, which most providers
+// (OpenAI, OpenRouter, Groq, Cerebras, DeepSeek, xAI, Mistral, Gemini's
+// compat endpoint, Ollama, LM Studio, vLLM, ...) accept.
+type OpenAI struct {
+	BaseURL string // e.g. https://api.openai.com/v1
+	APIKey  string
+	Headers map[string]string
+
+	noUsageOpt atomic.Bool // endpoint rejected stream_options
+}
+
+type oaMsg struct {
+	Role       string       `json:"role"`
+	Content    *string      `json:"content"`
+	ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string       `json:"tool_call_id,omitempty"`
+}
+
+type oaToolCall struct {
+	Index    *int   `json:"index,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type oaChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content   string       `json:"content"`
+			ToolCalls []oaToolCall `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func strp(s string) *string { return &s }
+
+func (c *OpenAI) body(req Request) map[string]any {
+	msgs := make([]oaMsg, 0, len(req.Messages)+1)
+	if req.System != "" {
+		msgs = append(msgs, oaMsg{Role: "system", Content: strp(req.System)})
+	}
+	for _, m := range req.Messages {
+		switch m.Role {
+		case RoleUser:
+			msgs = append(msgs, oaMsg{Role: "user", Content: strp(m.Text)})
+		case RoleAssistant:
+			om := oaMsg{Role: "assistant"}
+			if m.Text != "" || len(m.ToolCalls) == 0 {
+				om.Content = strp(m.Text)
+			}
+			for _, tc := range m.ToolCalls {
+				var otc oaToolCall
+				otc.ID, otc.Type = tc.ID, "function"
+				otc.Function.Name = tc.Name
+				otc.Function.Arguments = string(tc.Args)
+				om.ToolCalls = append(om.ToolCalls, otc)
+			}
+			msgs = append(msgs, om)
+		case RoleTool:
+			msgs = append(msgs, oaMsg{Role: "tool", Content: strp(m.Text), ToolCallID: m.ToolCallID})
+		}
+	}
+	b := map[string]any{
+		"model":    req.Model,
+		"messages": msgs,
+		"stream":   true,
+	}
+	if !c.noUsageOpt.Load() {
+		b["stream_options"] = map[string]any{"include_usage": true}
+	}
+	if req.MaxTokens > 0 {
+		b["max_tokens"] = req.MaxTokens
+	}
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]any, len(req.Tools))
+		for i, t := range req.Tools {
+			tools[i] = map[string]any{"type": "function", "function": map[string]any{
+				"name": t.Name, "description": t.Description, "parameters": t.Schema,
+			}}
+		}
+		b["tools"] = tools
+	}
+	return b
+}
+
+// Stream implements Client.
+func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (Response, error) {
+	h := map[string]string{}
+	if c.APIKey != "" {
+		h["Authorization"] = "Bearer " + c.APIKey
+	}
+	for k, v := range c.Headers {
+		h[k] = v
+	}
+	url := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
+	resp, err := postStream(ctx, url, h, c.body(req))
+	var he *HTTPError
+	if errors.As(err, &he) && he.Status == 400 && strings.Contains(he.Body, "stream_options") && !c.noUsageOpt.Load() {
+		// Some compatible servers reject stream_options; retry without it.
+		c.noUsageOpt.Store(true)
+		resp, err = postStream(ctx, url, h, c.body(req))
+	}
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+
+	var out Response
+	var text strings.Builder
+	type partial struct {
+		id, name string
+		args     strings.Builder
+	}
+	calls := map[int]*partial{}
+	var streamErr error
+	err = readSSE(resp.Body, func(_, data string) bool {
+		if data == "[DONE]" {
+			return false
+		}
+		var ch oaChunk
+		if json.Unmarshal([]byte(data), &ch) != nil {
+			return true
+		}
+		if ch.Error != nil {
+			streamErr = fmt.Errorf("stream error: %s", ch.Error.Message)
+			return false
+		}
+		if ch.Usage != nil {
+			out.Usage = Usage{
+				Input:     ch.Usage.PromptTokens - ch.Usage.PromptTokensDetails.CachedTokens,
+				Output:    ch.Usage.CompletionTokens,
+				CacheRead: ch.Usage.PromptTokensDetails.CachedTokens,
+			}
+		}
+		for _, choice := range ch.Choices {
+			if d := choice.Delta.Content; d != "" {
+				text.WriteString(d)
+				if onText != nil {
+					onText(d)
+				}
+			}
+			for i, tc := range choice.Delta.ToolCalls {
+				idx := i
+				if tc.Index != nil {
+					idx = *tc.Index
+				}
+				p := calls[idx]
+				if p == nil {
+					p = &partial{}
+					calls[idx] = p
+				}
+				if tc.ID != "" {
+					p.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					p.name = tc.Function.Name
+				}
+				p.args.WriteString(tc.Function.Arguments)
+			}
+			if choice.FinishReason != "" {
+				out.StopReason = choice.FinishReason
+			}
+		}
+		return true
+	})
+	if err == nil {
+		err = streamErr
+	}
+	out.Text = text.String()
+	idxs := make([]int, 0, len(calls))
+	for i := range calls {
+		idxs = append(idxs, i)
+	}
+	sort.Ints(idxs)
+	for n, i := range idxs {
+		p := calls[i]
+		args := strings.TrimSpace(p.args.String())
+		if args == "" {
+			args = "{}"
+		}
+		id := p.id
+		if id == "" {
+			id = fmt.Sprintf("call_%d", n)
+		}
+		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: id, Name: p.name, Args: json.RawMessage(args)})
+	}
+	return out, err
+}
