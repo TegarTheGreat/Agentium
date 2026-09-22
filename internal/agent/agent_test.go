@@ -1,0 +1,230 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tegarthegreat/agentium/internal/policy"
+	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/tool"
+)
+
+// script is a fake model that replays responses and records requests.
+type script struct {
+	mu    sync.Mutex
+	steps []func(req provider.Request) (provider.Response, error)
+	reqs  []provider.Request
+}
+
+func (s *script) Stream(_ context.Context, req provider.Request, onText func(string)) (provider.Response, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := req
+	cp.Messages = append([]provider.Message(nil), req.Messages...)
+	s.reqs = append(s.reqs, cp)
+	if len(s.steps) == 0 {
+		return provider.Response{Text: "done"}, nil
+	}
+	step := s.steps[0]
+	s.steps = s.steps[1:]
+	r, err := step(req)
+	if r.Text != "" && onText != nil {
+		onText(r.Text)
+	}
+	return r, err
+}
+
+func calls(cs ...provider.ToolCall) func(provider.Request) (provider.Response, error) {
+	return func(provider.Request) (provider.Response, error) {
+		return provider.Response{ToolCalls: cs, Usage: provider.Usage{Input: 10, Output: 5}}, nil
+	}
+}
+
+func tc(id, name, args string) provider.ToolCall {
+	return provider.ToolCall{ID: id, Name: name, Args: json.RawMessage(args)}
+}
+
+func newAgent(t *testing.T, s *script) *Agent {
+	t.Helper()
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	return &Agent{
+		Client: s, Model: "fake", System: SystemPrompt(dir), Tools: tool.All(),
+		Env: &tool.Env{Root: dir, Gate: &policy.Gate{Mode: policy.Auto, Root: dir}},
+	}
+}
+
+func TestLoopRunsToolsAndStops(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "edit", `{"path":"a.txt","new":"alpha"}`), tc("2", "edit", `{"path":"b.txt","new":"beta"}`)),
+		calls(tc("3", "read", `{"path":"a.txt"}`), tc("4", "nope", `{}`), tc("5", "read", `{bad json`)),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "All set."}, nil },
+	}}
+	a := newAgent(t, s)
+	var text strings.Builder
+	a.Events.Text = func(d string) { text.WriteString(d) }
+	st, err := a.Run(context.Background(), "make files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Turns != 3 || st.ToolCalls != 5 || st.Usage.Input != 20 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if text.String() != "All set." {
+		t.Fatalf("text = %q", text.String())
+	}
+	b, _ := os.ReadFile(filepath.Join(a.Env.Root, "b.txt"))
+	if string(b) != "beta" {
+		t.Fatalf("b.txt = %q", b)
+	}
+	// Results come back in call order with errors flagged.
+	last := s.reqs[2].Messages
+	res := last[len(last)-3:]
+	if res[0].ToolCallID != "3" || res[0].Text != "alpha" || res[0].IsError {
+		t.Fatalf("read result = %+v", res[0])
+	}
+	if !res[1].IsError || !strings.Contains(res[1].Text, "unknown tool") {
+		t.Fatalf("unknown tool result = %+v", res[1])
+	}
+	if !res[2].IsError || !strings.Contains(res[2].Text, "not valid JSON") {
+		t.Fatalf("bad args result = %+v", res[2])
+	}
+	// System prompt and tools are identical on every turn (cacheable).
+	for _, r := range s.reqs[1:] {
+		if r.System != s.reqs[0].System || len(r.Tools) != 5 {
+			t.Fatal("prefix changed between turns")
+		}
+	}
+}
+
+func TestToolsRunInParallel(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "bash", `{"cmd":"sleep 0.4"}`), tc("2", "bash", `{"cmd":"sleep 0.4"}`), tc("3", "bash", `{"cmd":"sleep 0.4"}`)),
+	}}
+	a := newAgent(t, s)
+	t0 := time.Now()
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(t0); d > 1*time.Second {
+		t.Fatalf("3×0.4s tools took %s; not parallel", d)
+	}
+}
+
+func TestRetryOnlyBeforeStreaming(t *testing.T) {
+	n := 0
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			n++
+			return provider.Response{}, &provider.HTTPError{Status: 429}
+		},
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "ok"}, nil },
+	}}
+	a := newAgent(t, s)
+	var retries int
+	a.Events.Retry = func(error, time.Duration) { retries++ }
+	if _, err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if retries != 1 {
+		t.Fatalf("retries = %d", retries)
+	}
+
+	s2 := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{}, &provider.HTTPError{Status: 401, Body: "bad key"}
+		},
+	}}
+	if _, err := newAgent(t, s2).Run(context.Background(), "hi"); err == nil {
+		t.Fatal("non-retryable error must surface")
+	}
+}
+
+func TestMaxTurns(t *testing.T) {
+	loop := func(provider.Request) (provider.Response, error) {
+		return provider.Response{ToolCalls: []provider.ToolCall{tc("x", "read", `{"path":"."}`)}}, nil
+	}
+	s := &script{steps: []func(provider.Request) (provider.Response, error){loop, loop, loop, loop}}
+	a := newAgent(t, s)
+	a.MaxTurns = 3
+	if _, err := a.Run(context.Background(), "spin"); !errors.Is(err, ErrMaxTurns) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestElide(t *testing.T) {
+	a := &Agent{ContextChars: 5000}
+	big := strings.Repeat("z", 2000)
+	for i := 0; i < 10; i++ {
+		a.Messages = append(a.Messages,
+			provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{tc("i", "read", `{}`)}},
+			provider.Message{Role: provider.RoleTool, ToolCallID: "i", Text: big})
+	}
+	a.elide()
+	elided := 0
+	for i, m := range a.Messages {
+		if m.Role != provider.RoleTool {
+			continue
+		}
+		if strings.Contains(m.Text, "[elided") {
+			elided++
+			if i >= len(a.Messages)-2*keepRecentTools {
+				t.Fatal("recent tool output was elided")
+			}
+		}
+	}
+	if elided != 10-keepRecentTools {
+		t.Fatalf("elided %d, want %d", elided, 10-keepRecentTools)
+	}
+	// Under budget: untouched.
+	b := &Agent{ContextChars: 1 << 30, Messages: []provider.Message{{Role: provider.RoleTool, Text: big}}}
+	b.elide()
+	if b.Messages[0].Text != big {
+		t.Fatal("elided under budget")
+	}
+}
+
+func TestCancelStopsTools(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "bash", `{"cmd":"sleep 10"}`)),
+	}}
+	a := newAgent(t, s)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
+	t0 := time.Now()
+	_, err := a.Run(ctx, "go")
+	if !errors.Is(err, context.Canceled) || time.Since(t0) > 3*time.Second {
+		t.Fatalf("err=%v after %s", err, time.Since(t0))
+	}
+	// Conversation stays well-formed: the tool call has a result.
+	last := a.Messages[len(a.Messages)-1]
+	if last.Role != provider.RoleTool || last.ToolCallID != "1" {
+		t.Fatalf("last message = %+v", last)
+	}
+}
+
+func TestSystemPromptSmallAndIncludesAgentsMD(t *testing.T) {
+	t.Setenv("AGENTIUM_HOME", t.TempDir())
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	os.Mkdir(filepath.Join(dir, ".git"), 0o755)
+	sub := filepath.Join(dir, "pkg")
+	os.Mkdir(sub, 0o755)
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("Use tabs."), 0o644)
+	os.WriteFile(filepath.Join(sub, "CLAUDE.md"), []byte("Pkg rule."), 0o644)
+	p := SystemPrompt(sub)
+	if !strings.Contains(p, "Use tabs.") || !strings.Contains(p, "Pkg rule.") || !strings.Contains(p, "git=yes") {
+		t.Fatalf("prompt missing context:\n%s", p)
+	}
+	if strings.Index(p, "Use tabs.") > strings.Index(p, "Pkg rule.") {
+		t.Fatal("root instructions should come before nested ones")
+	}
+	if len(basePrompt) > 1500 {
+		t.Fatalf("base prompt grew to %d chars; keep it lean", len(basePrompt))
+	}
+}
