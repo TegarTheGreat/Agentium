@@ -55,10 +55,14 @@ func setWinsize(f *os.File, rows, cols uint16) {
 
 // sessionPIDs lists the live processes in session sid.
 func sessionPIDs(sid int) []int {
-	out, _ := exec.Command("/usr/bin/pgrep", "-s", strconv.Itoa(sid), ".").Output()
+	out, _ := exec.Command("/bin/ps", "-A", "-o", "pid=").Output()
 	var pids []int
 	for _, f := range strings.Fields(string(out)) {
-		if pid, err := strconv.Atoi(f); err == nil {
+		pid, err := strconv.Atoi(f)
+		if err != nil {
+			continue
+		}
+		if s, err := syscall.Getsid(pid); err == nil && s == sid {
 			pids = append(pids, pid)
 		}
 	}

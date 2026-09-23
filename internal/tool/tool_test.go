@@ -949,7 +949,8 @@ func TestTTYJobs(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		if !gone {
-			t.Fatalf("pid %s from the stopped shell is still running", m[1])
+			ps, _ := exec.Command("ps", "-o", "pid,ppid,pgid,stat,command", "-p", m[1]).CombinedOutput()
+			t.Fatalf("pid %s from the stopped shell is still running:\n%s", m[1], ps)
 		}
 		e.Sandbox = nil
 	}
