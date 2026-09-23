@@ -133,35 +133,76 @@ func outlineFile(p string) (string, error) {
 	return fmt.Sprintf("(%d lines; read with offset/limit for bodies)\n%s", lines, codemap.Format(syms)), nil
 }
 
-// outlineDir renders a map of every source file below dir: top-level
-// definitions per file.
+// mapBudget caps a directory outline (~2k tokens). Anything bigger is
+// shown as a ranked map: the most depended-on files, and those touched
+// this session, first.
+const mapBudget = 8 * 1024
+
+// outlineDir renders a map of the source files below dir: the full
+// top-level outline when it fits the budget, else a ranked repo map.
 func (e *Env) outlineDir(ctx context.Context, dir string) string {
 	ix, prefix := e.codeIndex(ctx, dir)
-	var sb strings.Builder
-	n, total := 0, 0
+	var full strings.Builder
+	files := 0
 	ix.Each(func(rel string, f *codemap.FileEntry) {
-		if !underPrefix(rel, prefix) {
+		if !underPrefix(rel, prefix) || full.Len() > mapBudget {
 			return
 		}
-		total++
-		if n >= outlineMaxFiles || sb.Len() > outlineMaxBytes {
-			return
-		}
-		n++
-		fmt.Fprintf(&sb, "== %s (%d lines)\n", display(ix.Root, rel, e.Root), f.Lines)
+		files++
+		fmt.Fprintf(&full, "== %s (%d lines)\n", display(ix.Root, rel, e.Root), f.Lines)
 		var top []codemap.Symbol
 		for _, s := range f.Syms {
 			if s.Depth == 0 {
 				top = append(top, s)
 			}
 		}
-		sb.WriteString(codemap.Format(top))
+		full.WriteString(codemap.Format(top))
 	})
-	if total > n {
-		fmt.Fprintf(&sb, "[... %d more files; outline a subdirectory]\n", total-n)
-	}
-	if sb.Len() == 0 {
+	if files == 0 {
 		return "(no source files)"
+	}
+	if full.Len() <= mapBudget {
+		return full.String()
+	}
+	return e.rankedMap(ix, prefix)
+}
+
+func (e *Env) rankedMap(ix *codemap.Index, prefix string) string {
+	focus := map[string]bool{}
+	e.mu.Lock()
+	for p := range e.seen {
+		if rel, err := filepath.Rel(ix.Root, p); err == nil && !strings.HasPrefix(rel, "..") {
+			focus[rel] = true
+		}
+	}
+	e.mu.Unlock()
+	ranked := ix.Rank(prefix, focus)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "(%d source files, ranked: most depended-on and recently touched first; top definitions only. Outline a file or subdirectory for more.)\n", len(ranked))
+	shown := 0
+	for _, r := range ranked {
+		var syms []codemap.Symbol
+		for _, s := range r.Syms {
+			if s.Depth <= 1 && len(syms) < 6 {
+				syms = append(syms, s)
+			}
+		}
+		sort.Slice(syms, func(a, b int) bool { return syms[a].Line < syms[b].Line })
+		for i := range syms {
+			syms[i].Depth = 0
+		}
+		block := fmt.Sprintf("== %s (%d lines)\n%s", display(ix.Root, r.Rel, e.Root), r.File.Lines, codemap.Format(syms))
+		if sb.Len()+len(block) > mapBudget {
+			if sb.Len()+len(r.Rel)+4 > mapBudget+1024 {
+				break
+			}
+			continue // a smaller file further down may still fit
+		}
+		sb.WriteString(block)
+		shown++
+	}
+	if rest := len(ranked) - shown; rest > 0 {
+		fmt.Fprintf(&sb, "[... %d more files]\n", rest)
 	}
 	return sb.String()
 }
