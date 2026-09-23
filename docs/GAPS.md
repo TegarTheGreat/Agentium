@@ -132,32 +132,32 @@ Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 
 ---
 
-## D. Status per item (v0.6.0)
+## D. Status tiap item (v0.6.0)
 
 | # | Item | Status |
 |---|---|---|
-| P0-1 | Bypassable gate | ✅ OS sandbox (Landlock / sandbox-exec). Writes only in the workspace and caches, network off unless `net=true` is approved. The deny-list got wider and now acts as the second layer. Reading credentials needs approval. |
-| P0-2 | SSRF in `fetch` | ✅ localhost, private IPs, link-local/metadata and CGNAT are blocked. Checked before the request, on every redirect, and at dial time. |
-| P0-3 | No undo | ✅ Shadow-git checkpoint per turn, `/undo` + `agentium undo`, a guard against blind overwrites, and a guard against files that went stale since they were read. |
-| P0-4 | Context full | ✅ Per-model context window, elision of old output and edit arguments, compaction with `fast_model`. |
-| P0-5 | Stream hangs | ✅ 120 s idle timeout, incomplete streams detected, retries (mid-stream too) that respect `Retry-After`. |
-| P1-6 | Automatic verification | ✅ Lint gate on edit (Go/JSON/Python/shell/JS) + one verification reminder before finishing. |
-| P1-7 | Stuck detector | ✅ Warning at 3×, stop at 5× (same call and same result). |
-| P1-8 | Rigid edit tool | ✅ Tolerates CRLF, trailing whitespace and indentation (with re-indent), shows a diffstat. |
-| P1-9 | Hidden files in search | ✅ `rg --hidden` minus `.git`. |
-| P1-10 | Reasoning/thinking | ✅ Adaptive thinking + effort, signed blocks replayed unchanged, `drop_block` for models that require append-only history, `reasoning_effort`, `max_completion_tokens`, `reasoning_content`, Gemini thought signatures. |
-| P1-11 | Truncated replies | ✅ Half-written calls dropped, model asked to continue (at most 2×). |
-| P1-12 | Fallback / fast model | ✅ Sticky `fallback` chain; `fast_model` used for compaction and `tidy`. |
-| P1-13 | Hints in tool output | ✅ Clipped output says how to see the rest. |
-| P1-14 | Tested against real APIs | ❌ Not yet. No API keys in the build environment. |
-| P2-15 | Memory | ✅ USER/MEMORY snapshots, decision log, journal, automatic BM25 recall, `tidy`, redaction and injection filtering. |
-| P2-16 | Broad login | ✅ models.dev (180+ providers), OpenRouter OAuth, GitHub Models, Azure, Bedrock (SigV4), Vertex, OS keychain. ❌ ChatGPT/Copilot OAuth (needs an official client ID). Native Gemini protocol replaced by the compat endpoint + thought signatures. |
-| P2-17 | Headless | ✅ `--json` (JSON Lines), exit codes 0/1/2/130, `--max-cost`. |
-| P2-18 | Terminal UX | ✅ Line editor, history, paste, `/sessions`, `/resume`, session pruning. ❌ Markdown rendering (intentionally plain for now). |
-| P2-19 | Real benchmark | ✅ Harbor adapter for Terminal-Bench 2.x (answer isolation handled by Harbor). ❌ Not run yet. |
-| P2-20 | Distribution | ✅ goreleaser + release workflow + `install.sh` (with checksum). ❌ LICENSE (owner's decision). |
-| P2-21 | Plaintext credentials | ✅ OS keychain when available. |
-| P2-22 | Extensions | ✅ `post_edit` / `stop` hooks, MCP stdio (tools `mcp__server__tool`). |
-| P2-23 | Parallel for big tasks | ✅ `--best-of N --check CMD` in git worktrees. |
+| P0-1 | Gerbang keamanan bisa dilewati | ✅ Sandbox OS (Landlock / sandbox-exec): tulis hanya di workspace dan cache, jaringan mati kecuali `net=true` disetujui. Deny-list diperluas jadi lapisan kedua. Membaca kredensial perlu persetujuan. |
+| P0-2 | SSRF di `fetch` | ✅ localhost, IP privat, link-local/metadata, dan CGNAT diblokir. Dicek sebelum request, di setiap redirect, dan saat koneksi dibuka. |
+| P0-3 | Tidak ada undo | ✅ Checkpoint shadow-git per giliran, `/undo` + `agentium undo`, penjaga overwrite buta, dan penjaga file yang sudah berubah sejak dibaca. |
+| P0-4 | Konteks penuh | ✅ Ukuran jendela konteks per model, elision output dan argumen edit lama, compaction dengan `fast_model`. |
+| P0-5 | Stream menggantung | ✅ Idle timeout 120 dtk, deteksi stream tidak lengkap, retry (termasuk di tengah stream) yang menghormati `Retry-After`. |
+| P1-6 | Verifikasi otomatis | ✅ Lint gate pada edit (Go/JSON/Python/shell/JS) + satu pengingat verifikasi sebelum selesai. |
+| P1-7 | Deteksi macet | ✅ Peringatan di 3×, berhenti di 5× (panggilan dan hasil yang sama). |
+| P1-8 | Edit tool kaku | ✅ Toleran CRLF, spasi di akhir baris, dan indentasi (dengan re-indent), plus diffstat. |
+| P1-9 | File tersembunyi di search | ✅ `rg --hidden` tanpa `.git`. |
+| P1-10 | Reasoning/thinking | ✅ Adaptive thinking + effort, blok bertanda tangan dikirim balik tanpa diubah, `drop_block` untuk model yang mewajibkan riwayat append-only, `reasoning_effort`, `max_completion_tokens`, `reasoning_content`, thought signature Gemini. |
+| P1-11 | Jawaban terpotong | ✅ Tool call yang setengah jadi dibuang, model diminta melanjutkan (maksimal 2×). |
+| P1-12 | Fallback / model fast | ✅ Rantai `fallback` yang lengket; `fast_model` dipakai untuk compaction dan `tidy`. |
+| P1-13 | Petunjuk di output tool | ✅ Output yang dipotong memberi tahu cara melihat sisanya. |
+| P1-14 | Uji dengan API asli | ❌ Belum. Tidak ada API key di lingkungan build. |
+| P2-15 | Memori | ✅ Snapshot USER/MEMORY, log keputusan, journal, recall BM25 otomatis, `tidy`, penyamaran secret, dan filter injeksi. |
+| P2-16 | Login luas | ✅ models.dev (180+ provider), OAuth OpenRouter, GitHub Models, Azure, Bedrock (SigV4), Vertex, keychain OS. ❌ OAuth ChatGPT/Copilot (butuh client ID resmi). Protokol Gemini native diganti endpoint kompatibel + thought signature. |
+| P2-17 | Headless | ✅ `--json` (JSON Lines), exit code 0/1/2/130, `--max-cost`. |
+| P2-18 | UX terminal | ✅ Line editor, riwayat, paste, `/sessions`, `/resume`, pembersihan sesi. ❌ Render markdown (sengaja tetap polos dulu). |
+| P2-19 | Benchmark sungguhan | ✅ Adaptor Harbor untuk Terminal-Bench 2.x (isolasi jawaban ditangani Harbor). ❌ Belum dijalankan. |
+| P2-20 | Distribusi | ✅ goreleaser + workflow rilis + `install.sh` (dengan checksum). ❌ LICENSE (keputusan pemilik repo). |
+| P2-21 | Kredensial plaintext | ✅ Keychain OS kalau tersedia. |
+| P2-22 | Ekstensi | ✅ Hook `post_edit` / `stop`, MCP stdio (tool `mcp__server__tool`). |
+| P2-23 | Paralel untuk tugas besar | ✅ `--best-of N --check CMD` di git worktree. |
 
-**Next steps with the most impact:** a real test with an API key (`agentium bench -m …`), then a Terminal-Bench 2.x run against Codex CLI / Claude Code / Pi on the same model.
+**Langkah berikutnya yang paling berdampak:** uji nyata dengan API key (`agentium bench -m …`), lalu jalankan Terminal-Bench 2.x dan bandingkan dengan Codex CLI / Claude Code / Pi pada model yang sama.
