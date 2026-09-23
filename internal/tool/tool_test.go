@@ -488,3 +488,35 @@ func TestSafeDialAllowsConfiguredProxy(t *testing.T) {
 		t.Fatal("private targets stay blocked behind a proxy")
 	}
 }
+
+func TestPlanMode(t *testing.T) {
+	e := env(t)
+	e.Gate.SetMode(policy.Plan)
+	os.WriteFile(filepath.Join(e.Root, "a.txt"), []byte("one\n"), 0o644)
+	call(t, readTool, e, `{"path":"a.txt"}`)
+	if _, err := call(t, editTool, e, `{"path":"a.txt","old":"one","new":"two"}`); err == nil || !strings.Contains(err.Error(), "plan mode") {
+		t.Fatalf("edit in plan mode: %v", err)
+	}
+	// Without a sandbox only read-only commands run.
+	if out, err := call(t, bashTool, e, `{"cmd":"cat a.txt"}`); err != nil || !strings.Contains(out, "one") {
+		t.Fatalf("read-only bash: %q %v", out, err)
+	}
+	if _, err := call(t, bashTool, e, `{"cmd":"touch b.txt"}`); err == nil || !strings.Contains(err.Error(), "plan mode") {
+		t.Fatalf("mutating bash without sandbox: %v", err)
+	}
+	if !sandbox.Probe().Available {
+		return
+	}
+	// With a sandbox any command runs, but the workspace is read-only.
+	e.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(e.Root)}
+	out, err := call(t, bashTool, e, `{"cmd":"touch b.txt; echo done"}`)
+	if err != nil || !strings.Contains(out, "done") {
+		t.Fatalf("sandboxed plan bash: %q %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(e.Root, "b.txt")); err == nil {
+		t.Fatal("plan mode wrote to the workspace")
+	}
+	if _, err := call(t, bashTool, e, `{"cmd":"rm -rf ."}`); err == nil {
+		t.Fatal("risky command allowed in plan mode")
+	}
+}

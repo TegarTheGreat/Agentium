@@ -37,14 +37,28 @@ var bashTool = Tool{
 		if a.Cmd == "" {
 			return "", errors.New("cmd is required")
 		}
-		if env.Gate != nil {
+		plan := env.Gate != nil && env.Gate.GetMode() == policy.Plan
+		switch {
+		case plan && env.Sandbox != nil:
+			// The sandbox makes the workspace read-only below, so any
+			// non-destructive command may run.
+			if why := policy.RiskyCommand(a.Cmd); why != "" {
+				return "", fmt.Errorf("denied (%s; plan mode is read-only)", why)
+			}
+		case env.Gate != nil:
 			if ok, why := env.Gate.Bash(a.Cmd); !ok {
+				if plan {
+					return "", fmt.Errorf("denied (%s); only read-only commands run in plan mode", why)
+				}
 				return "", fmt.Errorf("denied (%s); choose another approach or ask the user", why)
 			}
 		}
 		var box *sandbox.Config
 		if env.Sandbox != nil {
 			cfg := *env.Sandbox
+			if plan {
+				cfg.Write = sandbox.ReadOnly(cfg.Write, env.Root)
+			}
 			if a.Net {
 				ok, why := true, ""
 				if env.Gate != nil {
@@ -59,7 +73,9 @@ var bashTool = Tool{
 			}
 			box = &cfg
 		}
-		env.mutate()
+		if !plan {
+			env.mutate()
+		}
 		t := a.Timeout
 		if t <= 0 {
 			t = bashDefaultTimeout

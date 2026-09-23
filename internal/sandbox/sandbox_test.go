@@ -109,3 +109,11 @@ func TestDefaultWrite(t *testing.T) {
 		t.Fatalf("workspace missing from %v", w)
 	}
 }
+
+func TestReadOnlyDropsWorkspace(t *testing.T) {
+	got := ReadOnly([]string{"/tmp", "/tmp/w", "/tmp/w/sub", "/home/u/.cache", "/dev/null"}, "/tmp/w")
+	want := []string{"/home/u/.cache", "/dev/null"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}

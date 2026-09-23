@@ -470,3 +470,18 @@ func TestCompactionInsideOneRun(t *testing.T) {
 		t.Fatal("tool call and result must stay paired")
 	}
 }
+
+func TestPlanModeNote(t *testing.T) {
+	s := &script{}
+	a := newAgent(t, s)
+	a.Env.Gate.SetMode(policy.Plan)
+	if _, err := a.Run(context.Background(), "add a flag"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.reqs[0].Messages[0].Text; !strings.HasSuffix(got, policy.PlanNote) {
+		t.Fatalf("plan note missing: %q", got)
+	}
+	if strings.Contains(s.reqs[0].System, "plan mode") {
+		t.Fatal("plan note must stay out of the cached system prompt")
+	}
+}
