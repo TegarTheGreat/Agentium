@@ -1,6 +1,6 @@
 # Agentium
 
-A fast, minimal coding agent for the terminal. It ships as one small static binary with six tools and a system prompt under 1k tokens, and it works with any model provider. It also has an OS sandbox, undo, cross-session memory, and verification built in.
+A fast, minimal coding agent for the terminal. It ships as one small static binary with seven tools and a fixed prompt of about 1.1k tokens, and it works with any model provider. It also has an OS sandbox, undo, cross-session memory, and verification built in.
 
 Example session:
 
@@ -20,11 +20,11 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 
 | | Agentium (measured, `agentium bench`) |
 |---|---|
-| Binary | 8.1 MB, static, no runtime |
-| Startup | ~4 ms |
-| Memory | ~8 MB RSS |
-| Prompt + tool schemas | ~960 tokens (memory rules and `todo` included) |
-| Tools | `read` `edit` `bash` `search` `fetch` `todo` (+ MCP tools if configured) |
+| Binary | 8.8 MB, static, no runtime |
+| Startup | ~5 ms |
+| Memory | ~10 MB RSS |
+| Prompt + tool schemas | ~1.1k tokens (memory rules, `todo` and `task` included) |
+| Tools | `read` `edit` `bash` `search` `fetch` `todo` `task` (+ MCP tools if configured) |
 
 ## What it does
 
@@ -106,7 +106,15 @@ make build
 **Extensible**
 - **Skills.** A skill is a folder with a `SKILL.md` (the format Claude Code and Codex use). Skills in `~/.agentium/skills`, `~/.claude/skills` and each `.agentium/skills` or `.claude/skills` of the project are listed in one line each; the model reads a skill when a task matches it, and `/name [task]` runs one directly.
 - `agentium skills add <dir | git URL | owner/repo[#ref]>` fetches without running anything, pins the commit, lists bundled scripts, and installs only after you confirm. There is no marketplace to trust: you choose the source. Also `skills list|show|remove`.
-- **MCP** stdio servers (tools appear as `mcp__server__tool`) and **hooks** (`post_edit`, `stop`).
+- **MCP servers**, local (stdio) or remote (`"url"` with `"headers"`, Streamable HTTP or `"type": "sse"`). Their tools appear as `mcp__server__tool`, and a stdio server's stderr goes to `~/.agentium/logs/`.
+- **Hooks**: `post_edit` and `stop`.
+- **Editors:** `agentium acp` speaks the Agent Client Protocol, so Zed, JetBrains and other ACP clients can use Agentium. Tool calls, plans and permission prompts appear in the editor.
+
+**Works like a team**
+- **Sub-agents.** `task {prompt, explore?}` gives a self-contained job to a sub-agent with a fresh context, and only its report comes back. Several run in parallel; `explore` makes one read-only.
+- **Background jobs.** `bash {background:true}` keeps dev servers, watchers and REPLs running. The model reads new output, sends input and stops them by job id. Jobs end with the session.
+- **Language servers.** After each edit, the project's language server reports the file's errors: type errors, bad imports, calls to things that do not exist. Supported: gopls, pyright, typescript-language-server, rust-analyzer and clangd, when installed.
+- **Web search.** `fetch {search:"…"}` uses Brave or Tavily when you have a key, otherwise DuckDuckGo.
 
 ## Use
 
@@ -178,7 +186,7 @@ For Terminal-Bench 2.x via Harbor, see [bench/terminalbench](bench/terminalbench
 
 ## Status
 
-v0.9.0. Design principles (brain, natural laws, physics mapped to concrete mechanisms): [docs/DESIGN.md](docs/DESIGN.md). Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux and macOS. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
+v0.10.0. Linux and macOS are fully supported. On Windows, commands run in Git Bash (or PowerShell) without an OS sandbox. Design principles (brain, natural laws, physics mapped to concrete mechanisms): [docs/DESIGN.md](docs/DESIGN.md). Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux and macOS. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
 
 ## Develop
 
