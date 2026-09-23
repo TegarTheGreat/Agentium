@@ -13,6 +13,7 @@ import (
 
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 )
 
 // Env is shared by all tools in a session.
@@ -21,6 +22,10 @@ type Env struct {
 	Gate *policy.Gate
 	// AllowPrivateNet lets fetch reach localhost and private networks.
 	AllowPrivateNet bool
+	// Sandbox confines bash commands; nil runs them unconfined.
+	Sandbox *sandbox.Config
+	// Net decides whether a sandboxed command may use the network.
+	Net policy.NetPolicy
 	// BeforeMutate, if set, runs once per turn before the first edit or
 	// bash call. It is used to checkpoint the workspace for undo.
 	BeforeMutate func()

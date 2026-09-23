@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/policy"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 )
 
 func env(t *testing.T) *Env {
@@ -288,5 +289,38 @@ func TestBeforeMutateOncePerTurn(t *testing.T) {
 	call(t, bashTool, e, `{"cmd":"true"}`)
 	if n != 2 {
 		t.Fatalf("new turn should checkpoint again, got %d", n)
+	}
+}
+
+func TestBashSandbox(t *testing.T) {
+	if !sandbox.Probe().Available {
+		t.Skip(sandbox.Probe().Detail)
+	}
+	e := env(t)
+	outside, _ := filepath.EvalSymlinks(t.TempDir())
+	e.Sandbox = &sandbox.Config{Write: []string{e.Root, "/dev"}}
+	out, err := call(t, bashTool, e, `{"cmd":"echo hi > in.txt && cat in.txt"}`)
+	if err != nil || !strings.Contains(out, "hi") {
+		t.Fatalf("inside write: %q %v", out, err)
+	}
+	out, _ = call(t, bashTool, e, fmt.Sprintf(`{"cmd":"echo x > %s/out.txt"}`, outside))
+	if !strings.Contains(out, "[exit") || !strings.Contains(out, "[sandbox:") {
+		t.Fatalf("outside write should fail with a sandbox hint: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "out.txt")); err == nil {
+		t.Fatal("file written outside the sandbox")
+	}
+	// net=true needs approval; with no approver it is denied.
+	if _, err := call(t, bashTool, e, `{"cmd":"true","net":true}`); err == nil || !strings.Contains(err.Error(), "network denied") {
+		t.Fatalf("net without approval: %v", err)
+	}
+	e.Net = policy.NetAllow
+	if _, err := call(t, bashTool, e, `{"cmd":"true","net":true}`); err != nil {
+		t.Fatalf("net allowed by policy: %v", err)
+	}
+	e.Net = policy.NetDeny
+	e.Gate.SetMode(policy.Yolo)
+	if _, err := call(t, bashTool, e, `{"cmd":"true","net":true}`); err == nil {
+		t.Fatal("deny policy wins even in yolo mode")
 	}
 }

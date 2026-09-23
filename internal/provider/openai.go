@@ -139,8 +139,10 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 	}
 	calls := map[int]*partial{}
 	var streamErr error
+	done := false
 	err = readSSE(resp.Body, func(_, data string) bool {
 		if data == "[DONE]" {
+			done = true
 			return false
 		}
 		var ch oaChunk
@@ -191,6 +193,12 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 	})
 	if err == nil {
 		err = streamErr
+	}
+	if err == nil && !done && out.StopReason == "" {
+		err = ErrIncomplete
+	}
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrStalled) {
+		err = ctx.Err()
 	}
 	out.Text = text.String()
 	idxs := make([]int, 0, len(calls))

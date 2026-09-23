@@ -7,6 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"strings"
+	"syscall"
+	"time"
 )
 
 // Role of a message in the conversation.
@@ -85,17 +90,48 @@ type Client interface {
 type HTTPError struct {
 	Status int
 	Body   string
+	// RetryAfter is the server's requested wait, if it sent one.
+	RetryAfter time.Duration
 }
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("api error %d: %s", e.Status, e.Body)
 }
 
-// Retryable reports whether err is worth retrying (rate limit / overload / 5xx).
+// ErrStalled means the stream sent nothing for too long.
+var ErrStalled = errors.New("stream stalled")
+
+// ErrIncomplete means the stream ended before the model finished.
+var ErrIncomplete = errors.New("stream ended early")
+
+// Retryable reports whether err is worth retrying: rate limits, overload,
+// 5xx, and broken or stalled connections. Client errors (4xx) are not.
 func Retryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
 	var he *HTTPError
 	if errors.As(err, &he) {
 		return he.Status == 429 || he.Status == 408 || he.Status == 529 || he.Status >= 500
 	}
-	return false
+	if errors.Is(err, ErrStalled) || errors.Is(err, ErrIncomplete) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection reset") || strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "stream error") && strings.Contains(msg, "INTERNAL_ERROR")
+}
+
+// RetryAfter returns the server-requested delay carried by err, if any.
+func RetryAfter(err error) time.Duration {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.RetryAfter
+	}
+	return 0
 }
