@@ -47,6 +47,10 @@ type Agent struct {
 	// Verify makes the agent remind the model, once per run, to run a
 	// check when it tries to finish after changing code without one.
 	Verify bool
+	// Reasoning configures thinking (effort and model capabilities).
+	Reasoning provider.Reasoning
+	// FastMode requests the provider's fast output mode.
+	FastMode bool
 	// OnRemember receives durable facts surfaced during compaction.
 	OnRemember func(fact string)
 	Events     Events
@@ -73,6 +77,8 @@ var (
 	// ErrStuck is returned when the model keeps repeating the same action
 	// with the same result.
 	ErrStuck = errors.New("stopped: the same action kept giving the same result")
+	// ErrRefused is returned when the provider's safety system declined.
+	ErrRefused = errors.New("stopped: the model declined the request")
 	// ErrTruncated is returned when replies keep hitting the output limit.
 	ErrTruncated = errors.New("stopped: replies keep hitting the output token limit")
 )
@@ -118,6 +124,7 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		a.manageContext(ctx)
 		resp, err := a.call(ctx, provider.Request{
 			Model: a.Model, System: a.System, Messages: a.Messages, Tools: defs, MaxTokens: a.MaxTokens,
+			Reasoning: a.Reasoning, Fast: a.FastMode,
 		})
 		st.Turns++
 		a.Turns++
@@ -134,7 +141,16 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		if truncated {
 			resp.ToolCalls = validCalls(resp.ToolCalls)
 		}
-		a.Messages = append(a.Messages, provider.Message{Role: provider.RoleAssistant, Text: resp.Text, ToolCalls: resp.ToolCalls})
+		msg := provider.Message{Role: provider.RoleAssistant, Text: resp.Text, ToolCalls: resp.ToolCalls,
+			Raw: resp.Raw, RawModel: a.Model, Reasoning: resp.Reasoning}
+		if truncated {
+			msg.Raw = nil // it may hold a cut-off tool call we dropped
+		}
+		a.Messages = append(a.Messages, msg)
+		if resp.StopReason == "refusal" {
+			a.notice("the model declined this request")
+			return done(ErrRefused)
+		}
 		if a.Events.TurnFinish != nil {
 			a.Events.TurnFinish(resp)
 		}

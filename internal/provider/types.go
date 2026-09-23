@@ -28,6 +28,9 @@ type ToolCall struct {
 	ID   string          `json:"id"`
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args"`
+	// Extra is provider data that must be sent back with the call
+	// (e.g. Gemini's thought signature in extra_content).
+	Extra json.RawMessage `json:"extra,omitempty"`
 }
 
 // Message is one provider-neutral conversation entry.
@@ -38,6 +41,17 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	IsError    bool       `json:"is_error,omitempty"`
+
+	// Raw is the provider-native content of an assistant message (for
+	// Anthropic: the content blocks, including signed thinking blocks,
+	// which must be replayed unchanged). RawModel is the model that
+	// produced it; Raw is only replayed to that same model. Code that
+	// edits history must clear Raw on the affected messages.
+	Raw      json.RawMessage `json:"raw,omitempty"`
+	RawModel string          `json:"raw_model,omitempty"`
+	// Reasoning is visible reasoning text some OpenAI-compatible models
+	// return (reasoning_content) and need back on later turns.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // ToolDef describes a tool to the model. Schema is a JSON Schema object.
@@ -63,6 +77,15 @@ func (u *Usage) Add(u2 Usage) {
 	u.CacheWrite += u2.CacheWrite
 }
 
+// Reasoning configures thinking for one request. Capabilities come from
+// the model registry; zero values mean "provider default".
+type Reasoning struct {
+	Effort      string   // low | medium | high | xhigh | max (or minimal) — "" = model default
+	Efforts     []string // efforts the model accepts; non-empty means adaptive-capable
+	Budget      bool     // model only supports budget_tokens thinking
+	Interleaved string   // assistant field that carries reasoning back (e.g. reasoning_content)
+}
+
 // Request is one model call.
 type Request struct {
 	Model     string
@@ -70,6 +93,9 @@ type Request struct {
 	Messages  []Message
 	Tools     []ToolDef
 	MaxTokens int
+	Reasoning Reasoning
+	// Fast asks for the provider's fast output mode when available.
+	Fast bool
 }
 
 // Response is the assembled result of a streamed model call.
@@ -78,6 +104,39 @@ type Response struct {
 	ToolCalls  []ToolCall
 	Usage      Usage
 	StopReason string
+	Raw        json.RawMessage // provider-native assistant content, see Message.Raw
+	Reasoning  string
+}
+
+// ClosestEffort maps want onto the values a model supports.
+func ClosestEffort(want string, supported []string) string {
+	if want == "" || len(supported) == 0 {
+		return want
+	}
+	order := []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+	rank := func(v string) int {
+		for i, o := range order {
+			if o == v {
+				return i
+			}
+		}
+		return -1
+	}
+	best, bestD := supported[0], 99
+	w := rank(want)
+	for _, s := range supported {
+		if s == want {
+			return s
+		}
+		d := rank(s) - w
+		if d < 0 {
+			d = -d
+		}
+		if rank(s) >= 0 && d < bestD {
+			best, bestD = s, d
+		}
+	}
+	return best
 }
 
 // Client streams one model call. onText receives text deltas as they arrive

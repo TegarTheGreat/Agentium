@@ -306,3 +306,165 @@ func TestRetryAfter(t *testing.T) {
 		t.Fatal("parseRetryAfter")
 	}
 }
+
+func TestAnthropicThinkingRoundTrip(t *testing.T) {
+	events := []string{
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n",
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"plan\"}}\n\n",
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIG1\"}}\n\n",
+		"data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"OPAQUE\"}}\n\n",
+		"data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+		"data: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"text_delta\",\"text\":\"Reading.\"}}\n\n",
+		"data: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu\",\"name\":\"read\"}}\n\n",
+		"data: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"a\\\"}\"}}\n\n",
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":9}}\n\n",
+		"data: {\"type\":\"message_stop\"}\n\n",
+	}
+	var body map[string]any
+	var hdr http.Header
+	srv := sseServer(t, events, &body, &hdr)
+	defer srv.Close()
+	c := &Anthropic{BaseURL: srv.URL, APIKey: "k"}
+	resp, err := c.Stream(context.Background(), Request{Model: "claude-opus-5-5"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []map[string]any
+	json.Unmarshal(resp.Raw, &raw)
+	if len(raw) != 4 || raw[0]["type"] != "thinking" || raw[0]["signature"] != "SIG1" || raw[0]["thinking"] != "plan" ||
+		raw[1]["type"] != "redacted_thinking" || raw[1]["data"] != "OPAQUE" || raw[3]["type"] != "tool_use" {
+		t.Fatalf("raw = %s", resp.Raw)
+	}
+	hist := []Message{
+		{Role: RoleUser, Text: "go"},
+		{Role: RoleAssistant, Text: resp.Text, ToolCalls: resp.ToolCalls, Raw: resp.Raw, RawModel: "claude-opus-5-5"},
+		{Role: RoleTool, ToolCallID: "tu", Text: "data"},
+	}
+	// Same model: blocks replayed verbatim, in order.
+	b, _ := c.body(Request{Model: "claude-opus-5-5", Messages: hist})
+	asst := mustJSON(b["messages"].([]anMsg)[1].Content)
+	if !strings.Contains(string(asst), "SIG1") || !strings.Contains(string(asst), "OPAQUE") {
+		t.Fatalf("thinking not replayed: %s", asst)
+	}
+	// Other model: rebuilt from text + tool calls, no thinking.
+	b, _ = c.body(Request{Model: "claude-sonnet-5", Messages: hist})
+	asst = mustJSON(b["messages"].([]anMsg)[1].Content)
+	if strings.Contains(string(asst), "SIG1") || !strings.Contains(string(asst), "tool_use") {
+		t.Fatalf("cross-model replay: %s", asst)
+	}
+}
+
+func TestAnthropicReasoningParams(t *testing.T) {
+	c := &Anthropic{BaseURL: "https://api.anthropic.com"}
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
+	b, betas := c.body(Request{Model: "claude-opus-5-5", Reasoning: Reasoning{Effort: "high", Efforts: efforts}, Fast: true})
+	th := b["thinking"].(map[string]any)
+	if th["type"] != "adaptive" || th["block_binding"] == nil {
+		t.Fatalf("thinking = %v", th)
+	}
+	if b["output_config"].(map[string]any)["effort"] != "high" || b["speed"] != "fast" {
+		t.Fatalf("effort/speed: %v %v", b["output_config"], b["speed"])
+	}
+	if strings.Join(betas, ",") != "thinking-binding-controls-2026-08-01,fast-mode-2026-02-01" {
+		t.Fatalf("betas = %v", betas)
+	}
+	// Sonnet 5: adaptive, no binding controls, no fast mode.
+	b, betas = c.body(Request{Model: "claude-sonnet-5", Reasoning: Reasoning{Efforts: efforts}, Fast: true})
+	if b["thinking"].(map[string]any)["block_binding"] != nil || b["speed"] != nil || len(betas) != 0 || b["output_config"] != nil {
+		t.Fatalf("sonnet 5 body: %v %v", b, betas)
+	}
+	// Budget-only model (Haiku 4.5): budget thinking only when effort asked.
+	b, _ = c.body(Request{Model: "claude-haiku-4-5", Reasoning: Reasoning{Budget: true}})
+	if b["thinking"] != nil {
+		t.Fatal("no effort: no thinking")
+	}
+	b, _ = c.body(Request{Model: "claude-haiku-4-5", MaxTokens: 4000, Reasoning: Reasoning{Budget: true, Effort: "high"}})
+	if b["thinking"].(map[string]any)["budget_tokens"] != 16000 || b["max_tokens"].(int) <= 16000 {
+		t.Fatalf("budget: %v max=%v", b["thinking"], b["max_tokens"])
+	}
+	// Compatible endpoints get no Anthropic-only beta features.
+	c2 := &Anthropic{BaseURL: "https://proxy.example"}
+	b, betas = c2.body(Request{Model: "claude-opus-5-5", Reasoning: Reasoning{Efforts: efforts}, Fast: true, Tools: sampleReq.Tools})
+	if len(betas) != 0 || b["speed"] != nil || strings.Contains(string(mustJSON(b["tools"])), "eager") {
+		t.Fatalf("proxy body: %v %v", b, betas)
+	}
+}
+
+func TestOpenAIReasoningAndExtras(t *testing.T) {
+	events := []string{
+		`data: {"choices":[{"delta":{"reasoning_content":"think "}}]}` + "\n\n",
+		`data: {"choices":[{"delta":{"reasoning_content":"more"}}]}` + "\n\n",
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{}"},"extra_content":{"google":{"thought_signature":"TS"}}}]}}]}` + "\n\n",
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}
+	var body map[string]any
+	srv := sseServer(t, events, &body, nil)
+	defer srv.Close()
+	c := &OpenAI{BaseURL: srv.URL}
+	resp, err := c.Stream(context.Background(), Request{Model: "deepseek-v4-flash"}, nil)
+	if err != nil || resp.Reasoning != "think more" || !strings.Contains(string(resp.ToolCalls[0].Extra), "TS") {
+		t.Fatalf("resp=%+v err=%v", resp, err)
+	}
+	hist := []Message{{Role: RoleUser, Text: "x"},
+		{Role: RoleAssistant, ToolCalls: resp.ToolCalls, Reasoning: resp.Reasoning, RawModel: "deepseek-v4-flash"},
+		{Role: RoleTool, ToolCallID: "c1", Text: "ok"}}
+	b := c.body(Request{Model: "deepseek-v4-flash", Messages: hist, MaxTokens: 100,
+		Reasoning: Reasoning{Effort: "xhigh", Efforts: []string{"low", "high", "max"}, Interleaved: "reasoning_content"}})
+	j := string(mustJSON(b))
+	for _, want := range []string{`"reasoning_content":"think more"`, `"thought_signature":"TS"`, `"reasoning_effort":"high"`, `"max_tokens":100`} {
+		if !strings.Contains(j, want) {
+			t.Errorf("body missing %s: %s", want, j)
+		}
+	}
+	// Official OpenAI uses max_completion_tokens.
+	b = (&OpenAI{BaseURL: "https://api.openai.com/v1"}).body(Request{Model: "gpt-5.6", MaxTokens: 100})
+	if b["max_completion_tokens"] != 100 || b["max_tokens"] != nil {
+		t.Fatalf("official body %v", b)
+	}
+}
+
+func TestClosestEffort(t *testing.T) {
+	if ClosestEffort("xhigh", []string{"low", "medium", "high"}) != "high" || ClosestEffort("max", nil) != "max" || ClosestEffort("low", []string{"minimal", "low"}) != "low" {
+		t.Fatal("ClosestEffort")
+	}
+}
+
+type stub struct {
+	err   error
+	calls int
+	model string
+}
+
+func (s *stub) Stream(_ context.Context, req Request, _ func(string)) (Response, error) {
+	s.calls++
+	s.model = req.Model
+	if s.err != nil {
+		return Response{}, s.err
+	}
+	return Response{Text: "from " + req.Model}, nil
+}
+
+func TestFallback(t *testing.T) {
+	a := &stub{err: &HTTPError{Status: 529}}
+	b := &stub{}
+	swaps := 0
+	f := &Fallback{Chain: []Resolved{{Model: "main", Client: a}, {Model: "backup", Client: b}}, OnSwap: func(_, _ Resolved, _ error) { swaps++ }}
+	resp, err := f.Stream(context.Background(), Request{Model: "ignored"}, nil)
+	if err != nil || resp.Text != "from backup" || swaps != 1 || f.Active().Model != "backup" {
+		t.Fatalf("resp=%+v err=%v swaps=%d", resp, err, swaps)
+	}
+	// Sticky: the next request goes straight to the backup.
+	f.Stream(context.Background(), Request{}, nil)
+	if a.calls != 1 || b.calls != 2 {
+		t.Fatalf("calls a=%d b=%d", a.calls, b.calls)
+	}
+	// Non-retryable errors are returned without trying others.
+	c := &stub{err: &HTTPError{Status: 400}}
+	d := &stub{}
+	f2 := &Fallback{Chain: []Resolved{{Model: "x", Client: c}, {Model: "y", Client: d}}}
+	if _, err := f2.Stream(context.Background(), Request{}, nil); err == nil || d.calls != 0 {
+		t.Fatal("400 must not fall back")
+	}
+}

@@ -26,6 +26,9 @@ type Session struct {
 	Checkpoints []Checkpoint `json:"checkpoints,omitempty"`
 	// Note is delivered to the model with the next input (see agent.Note).
 	Note string `json:"note,omitempty"`
+	// SystemHash identifies the system prompt the messages were produced
+	// under; signed thinking blocks are only valid under the same one.
+	SystemHash string `json:"system_hash,omitempty"`
 }
 
 // Checkpoint is a restorable workspace snapshot.
