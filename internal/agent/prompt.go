@@ -22,13 +22,22 @@ Rules:
 - Ask the user only when blocked on a decision that is theirs.
 - Final reply: what changed and the verification result, in as few lines as possible.`
 
+// memoryRules is added only when memory is enabled.
+const memoryRules = `
+
+Memory: <memory> holds notes from past sessions; <recall> may bring relevant past context. To save something for future sessions, put a line in your reply: "@remember <project fact>", "@prefer <user preference>", "@decide <decision> — <why>" (add "supersedes D-xxx" when replacing one), "@forget <text>". Save only durable, non-obvious facts (conventions, commands, lessons from mistakes, user preferences), never secrets.`
+
 const maxContextFile = 12 * 1024
 
-// SystemPrompt builds the system prompt for a workspace. Its content is
-// stable for the whole session so providers can cache it.
-func SystemPrompt(root string) string {
+// SystemPrompt builds the system prompt for a workspace. With memory on,
+// the memory rules and snapshot are included. The result is stable for
+// the whole session so providers can cache it.
+func SystemPrompt(root string, memoryOn bool, snapshot string) string {
 	var sb strings.Builder
 	sb.WriteString(basePrompt)
+	if memoryOn {
+		sb.WriteString(memoryRules)
+	}
 	fmt.Fprintf(&sb, "\n\nEnv: cwd=%s os=%s/%s date=%s", root, runtime.GOOS, runtime.GOARCH, time.Now().Format("2006-01-02"))
 	if isGitRepo(root) {
 		sb.WriteString(" git=yes")
@@ -43,6 +52,9 @@ func SystemPrompt(root string) string {
 			s = s[:maxContextFile] + "\n[truncated]"
 		}
 		fmt.Fprintf(&sb, "\n\n<instructions file=%q>\n%s\n</instructions>", f, strings.TrimSpace(s))
+	}
+	if memoryOn && snapshot != "" {
+		sb.WriteString("\n\n" + snapshot)
 	}
 	return sb.String()
 }

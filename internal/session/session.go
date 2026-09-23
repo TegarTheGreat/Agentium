@@ -2,10 +2,12 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/config"
@@ -84,6 +86,15 @@ func (s *Session) Save() error {
 
 // Latest returns the most recent session for cwd, or nil.
 func Latest(cwd string) (*Session, error) {
+	ss, err := ForCwd(cwd, 1)
+	if err != nil || len(ss) == 0 {
+		return nil, err
+	}
+	return ss[0], nil
+}
+
+// ForCwd returns up to max sessions for cwd, newest first.
+func ForCwd(cwd string, max int) ([]*Session, error) {
 	ents, err := os.ReadDir(dir())
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -99,15 +110,23 @@ func Latest(cwd string) (*Session, error) {
 	}
 	// IDs are timestamps, so name order is time order.
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	var out []*Session
 	for _, n := range names {
 		b, err := os.ReadFile(filepath.Join(dir(), n))
 		if err != nil {
 			continue
 		}
+		// Cheap pre-check before a full decode of a large file.
+		if !bytes.Contains(b[:min(len(b), 4096)], []byte(strconv.Quote(cwd))) {
+			continue
+		}
 		var s Session
 		if json.Unmarshal(b, &s) == nil && s.Cwd == cwd {
-			return &s, nil
+			out = append(out, &s)
+			if len(out) >= max {
+				break
+			}
 		}
 	}
-	return nil, nil
+	return out, nil
 }

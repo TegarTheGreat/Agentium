@@ -56,7 +56,7 @@ func newAgent(t *testing.T, s *script) *Agent {
 	t.Helper()
 	dir, _ := filepath.EvalSymlinks(t.TempDir())
 	return &Agent{
-		Client: s, Model: "fake", System: SystemPrompt(dir), Tools: tool.All(),
+		Client: s, Model: "fake", System: SystemPrompt(dir, false, ""), Tools: tool.All(),
 		Env: &tool.Env{Root: dir, Gate: &policy.Gate{Mode: policy.Auto, Root: dir}},
 	}
 }
@@ -234,7 +234,7 @@ func TestSystemPromptSmallAndIncludesAgentsMD(t *testing.T) {
 	os.Mkdir(sub, 0o755)
 	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("Use tabs."), 0o644)
 	os.WriteFile(filepath.Join(sub, "CLAUDE.md"), []byte("Pkg rule."), 0o644)
-	p := SystemPrompt(sub)
+	p := SystemPrompt(sub, false, "")
 	if !strings.Contains(p, "Use tabs.") || !strings.Contains(p, "Pkg rule.") || !strings.Contains(p, "git=yes") {
 		t.Fatalf("prompt missing context:\n%s", p)
 	}

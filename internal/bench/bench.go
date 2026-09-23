@@ -62,7 +62,7 @@ func MeasureOffline(runs int) (Offline, error) {
 		return o, err
 	}
 	defer os.RemoveAll(dir)
-	o.PromptChars = len(agent.SystemPrompt(dir))
+	o.PromptChars = len(agent.SystemPrompt(dir, true, ""))
 	defs, _ := json.Marshal(tool.Defs(tool.All()))
 	o.ToolChars = len(defs)
 	// ~4 characters per token is the usual estimate for English + JSON.
@@ -186,7 +186,7 @@ func RunLive(ctx context.Context, client provider.Client, model string, tasks []
 			env.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(dir)}
 		}
 		a := &agent.Agent{
-			Client: client, Model: model, System: agent.SystemPrompt(dir),
+			Client: client, Model: model, System: agent.SystemPrompt(dir, false, ""),
 			Tools: tool.All(), Env: env,
 			MaxTurns: 20, ContextTokens: provider.ContextWindow(model), Verify: true,
 			Events: agent.Events{TurnFinish: func(r provider.Response) {
