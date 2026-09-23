@@ -803,3 +803,33 @@ func TestEditKeepsHardLinks(t *testing.T) {
 		t.Fatalf("hard link split: %q", b)
 	}
 }
+
+func TestBackgroundJobs(t *testing.T) {
+	e := env(t)
+	defer e.KillJobs()
+	out, err := call(t, bashTool, e, `{"cmd":"echo ready; while read l; do echo got:$l; done","background":true}`)
+	if err != nil || !strings.Contains(out, "job 1 started (running)") || !strings.Contains(out, "ready") {
+		t.Fatalf("start: %q %v", out, err)
+	}
+	out, _ = call(t, bashTool, e, `{"job":1,"stdin":"hello\n"}`)
+	if !strings.Contains(out, "got:hello") || strings.Contains(out, "ready") {
+		t.Fatalf("stdin/new output only: %q", out)
+	}
+	out, _ = call(t, bashTool, e, `{}`)
+	if !strings.Contains(out, "job 1 · running") {
+		t.Fatalf("list: %q", out)
+	}
+	out, _ = call(t, bashTool, e, `{"job":1,"kill":true}`)
+	if !strings.Contains(out, "job 1 stopped") {
+		t.Fatalf("kill: %q", out)
+	}
+	if _, err := call(t, bashTool, e, `{"job":1,"stdin":"x\n"}`); err == nil {
+		t.Fatal("input to an exited job must fail")
+	}
+	// A short job finishes and reports its exit code.
+	call(t, bashTool, e, `{"cmd":"echo done; exit 3","background":true}`)
+	time.Sleep(300 * time.Millisecond)
+	if out, _ := call(t, bashTool, e, `{"job":2}`); !strings.Contains(out, "exited 3") {
+		t.Fatalf("exit: %q", out)
+	}
+}

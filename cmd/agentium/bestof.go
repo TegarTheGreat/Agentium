@@ -126,6 +126,7 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 				},
 			}
 			c.stats, c.runErr = try.Run(ctx, prompt+"\n\nWhen done, this check must pass: "+check)
+			env.KillJobs()
 			c.cost = try.Spent
 			out, err := runCheck(ctx, c.work, check, env.Sandbox)
 			c.checkOut, c.pass = out, err == nil

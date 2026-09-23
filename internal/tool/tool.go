@@ -49,6 +49,7 @@ type Env struct {
 	seen    map[string]stamp
 	shown   map[string]stamp // read results still in the conversation
 	gitg    *gitGuard        // git config snapshot after the last command
+	jobs    *jobTable        // background jobs
 	cix     *codemap.Index
 	cixMu   sync.Mutex // serializes index updates
 }

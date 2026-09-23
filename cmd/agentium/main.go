@@ -433,6 +433,7 @@ func run(args []string) error {
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
 	a.Tools = append(a.Tools, a.TodoTool())
+	defer a.Env.KillJobs() // background servers do not outlive the session
 	if mem != nil {
 		a.Env.Recall = mem.search
 		if stale := mem.store.Stale(); len(stale) > 0 && !*quiet {
@@ -554,6 +555,7 @@ func run(args []string) error {
 			u.mu.Lock()
 			u.endLine()
 			u.mu.Unlock()
+			a.Env.KillJobs()
 			os.Exit(130)
 		}
 	}()
