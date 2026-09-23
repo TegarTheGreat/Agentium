@@ -1,10 +1,22 @@
+<div align="center">
+
 # Agentium
 
-A fast, minimal coding agent for the terminal. It ships as one small static binary with seven tools and a fixed prompt of about 1.1k tokens, and it works with any model provider. It also has an OS sandbox, undo, cross-session memory, and verification built in.
+**A fast, minimal coding agent for the terminal.**
 
-Example session:
+One static binary · any model provider · sandboxed by default
 
-```
+[![CI](https://github.com/TegarTheGreat/Agentium/actions/workflows/ci.yml/badge.svg)](https://github.com/TegarTheGreat/Agentium/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+</div>
+
+---
+
+Agentium reads, edits, runs and verifies code in your repository. It keeps its prompt small and its output short, and puts the reliability work into the harness: sandboxed commands, edits that cannot break a file, verification before it reports done, undo for every turn, and memory that carries across sessions.
+
+```console
 $ agentium "the tests in ./calc fail, fix them"
 › bash go test ./calc/...
 › read calc/add.go
@@ -14,148 +26,133 @@ Fixed Add: it subtracted instead of adding. go test ./calc/... passes.
 · 4 turns · 4 tools · in 6.1k (cached 4.8k) · out 180 · 5.2s · $0.0213
 ```
 
-## Why
+## Contents
 
-Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt and tool definitions before your first word, and OpenCode sends about 7k and can grow to gigabytes of RAM. The 2026 data ([docs/RESEARCH.md](docs/RESEARCH.md), [docs/GAPS.md](docs/GAPS.md)) points the same way. Minimal harnesses match or beat heavy ones. What moves scores is deterministic machinery around the model: verification, lint-gated edits, sandboxing, and stuck detection. Agentium is built from those findings.
+- [Highlights](#highlights)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Providers and authentication](#providers-and-authentication)
+- [Configuration](#configuration)
+- [Tools](#tools)
+- [Safety](#safety)
+- [Reliability](#reliability)
+- [Memory](#memory)
+- [Extending Agentium](#extending-agentium)
+- [Platform support](#platform-support)
+- [Benchmarking](#benchmarking)
+- [Development](#development)
+- [License](#license)
 
-| | Agentium (measured, `agentium bench`) |
+## Highlights
+
+| | |
 |---|---|
-| Binary | 8.8 MB, static, no runtime |
-| Startup | ~5 ms |
-| Memory | ~10 MB RSS |
-| Prompt + tool schemas | ~1.1k tokens (memory rules, `todo` and `task` included) |
-| Tools | `read` `edit` `bash` `search` `fetch` `todo` `task` (+ MCP tools if configured) |
+| **Small** | 8.8 MB static binary, no runtime dependencies |
+| **Fast** | ~6 ms startup, ~10 MB memory |
+| **Lean prompt** | ~1k tokens of system prompt and tool schemas, fixed for the session so it stays cached |
+| **Any provider** | 19 built-in providers plus every compatible provider in the [models.dev](https://models.dev) registry |
+| **Sandboxed** | Landlock on Linux, `sandbox-exec` on macOS; network off unless approved |
+| **Recoverable** | Every turn is checkpointed; `/undo` reverts it, including changes made by shell commands |
+| **Remembers** | Project memory, decisions and lessons learned from past errors, recalled only when relevant |
+| **Integrates** | MCP (stdio and HTTP, with OAuth), Agent Client Protocol for editors, `SKILL.md` skills, hooks |
 
-## What it does
+Figures are measured with `agentium bench` on Linux amd64.
 
-**Fast and to the point**
-- Terse by default: no preamble or recap, a plan only for big tasks, and "done" means verified.
-- Tool calls in the same turn run in parallel. Edits to the same file are serialized.
-- The system prompt and tool list are fixed for the session, and Anthropic cache breakpoints are set automatically. Cost is shown per turn.
-- Output is clipped head+tail with a hint on how to see the rest.
-- **Code map.** A per-project index of definitions and identifiers, cached on disk and refreshed only for changed files (Go's standard library, ~13k files: 3.3 s the first time, under 0.5 s after).
-  - `read` on a directory shows a gitignore-aware tree.
-  - `read {outline:true}` shows a file's definitions with line numbers. On a large directory it gives a ranked repo map (PageRank over "file uses what another file defines", as in Aider, favoring files you touched) within ~2k tokens.
-  - `search {symbol:"Type.Method"}` finds definitions; `search {refs:"Name"}` finds uses with the enclosing function (`main.py:5 [in App.run]`).
-  - Go is parsed exactly; Python, JS/TS, Rust, Java, Kotlin, C#, Swift, PHP, C/C++, Ruby and more use line patterns that handle comments, template strings, docstrings and Rust lifetimes.
-  - The map is on demand, never pushed into the prompt: 2026 studies found always-injected context and imprecise retrieval neutral or harmful.
-- Markdown replies are rendered in the terminal while they stream (bold, `code`, bullets, fenced code untouched). Pipes get raw Markdown.
+## Installation
 
-**Reliable**
-- **Lint-gated edits.** An edit that would break a file that parsed before (Go, JSON, Python, shell, JS) is rejected and the file stays untouched. The edit tool tolerates CRLF, trailing-whitespace and indentation differences, and re-indents to the file's style.
-- **Verify before finishing.** If the model changed code and ran no build or test afterwards, it is asked once to verify.
-- **Stuck detector.** The same call with the same result 3× gets a warning; 5× stops the run.
-- **Thinks harder only when needed.** Work starts at the configured reasoning effort. After three failing tool batches in a row, or a stuck warning, effort goes up one level (at most twice per turn), and the next turn starts at the configured level again.
-- **Atomic edits.** Every edit goes to a temporary file, is synced, renamed into place and read back to confirm. A crash or a full disk leaves the old file or the new one, never half of each.
-- **No duplicate reads.** Re-reading an unchanged file returns a pointer to the earlier result instead of the same text again.
-- **Stream robustness.** Truncated replies are continued. Stalled or broken streams are retried, honouring `Retry-After`. A fallback model chain takes over when the main model is down.
-- **Context management.** Each model's context window is known. Old tool output and old edit payloads are elided at 55% of the window, and older turns are summarized at 85%.
-- **Best of N.** `--best-of N --check "make test"` runs N attempts in parallel git worktrees and applies the passing one with the smallest diff.
+**With Go** (1.24 or newer):
 
-**Safe**
-- **OS sandbox for shell commands.** Landlock on Linux, `sandbox-exec` on macOS.
-  - Only the workspace, temp dirs and build caches are writable. Directories on `PATH` and tool init-script directories are not.
-  - TCP is blocked unless a command asks for `net` and you approve it. Kernels that cannot block the network (Linux < 6.7) are reported at startup.
-- **Deterministic approval gate.** Risky commands (`rm -rf`, force push, `sudo`, `curl | sh`, deleting via scripts, touching credentials) and reads of SSH keys or cloud credentials need approval. Modes are `ask`, `auto` (default) and `yolo`.
-- **No credential leaks.**
-  - Shell commands, hooks and MCP servers run without credential-looking environment variables (`sandbox.pass_env` allows specific ones).
-  - `fetch` refuses URLs that carry a secret, and refuses localhost, private networks and cloud metadata addresses, including on redirects.
-  - `.env` files need approval to read.
-- **`.git` guard.** A command that adds a git setting or hook that runs programs (`core.fsmonitor`, `hooksPath`, filters, `!` aliases) is undone and reported, since git would run it later outside the sandbox.
-- Commands that hand work to a process outside the sandbox (tmux, docker, systemd-run, at, osascript) count as risky.
-- **Checkpoints.** Every turn that changes something is snapshotted in a shadow git repository (your `.git` is untouched). `/undo` or `agentium undo` reverts it, including changes made by shell commands.
-- Edits refuse to blindly overwrite an existing file, or to write a file changed on disk since the model read it.
-- **Plan mode.** `--plan` or `/plan`: the agent investigates and answers with a plan, and cannot change anything. With the sandbox the workspace is mounted read-only, so any non-destructive command can still run; without it only read-only commands pass. `/go` carries the plan out.
+```sh
+go install github.com/tegarthegreat/agentium/cmd/agentium@latest
+```
 
-**Remembers**
-- **Long-term.**
-  - `USER.md` (your preferences) and `MEMORY.md` (per project, shared by every subdirectory of the repo) are small files injected as a frozen snapshot, together with active decisions from `DECISIONS.md` (with `supersedes`).
-  - The model saves memory with plain lines in its reply: `@remember`, `@prefer`, `@decide … (supersedes D-003)`, `@forget`.
-  - Each entry is dated and cites the files it mentions. Notes whose files are gone, or that nobody confirmed for four months, are hidden and listed for `agentium tidy`. A near-duplicate replaces the older note instead of piling up.
-  - When a file is full, the weakest note is forgotten (invalid first, then uncited, then least recently confirmed) and moved to the journal, where recall can still find it.
-  - **Learns from mistakes.** When a failing command passes later, the harness records what failed and what fixed it. A lesson whose failure recurs across turns is promoted to `MEMORY.md`.
-  - Secrets are redacted and injection-like text is refused. Memory written in a turn that read web pages or MCP output is held for review.
-- **Recall.**
-  - A local BM25 index over decisions, a per-turn journal (including the errors hit) and past sessions.
-  - At most two precise snippets are pushed before a turn.
-  - The model can look up more with `search {memory:"…"}`, e.g. "have we seen this error before".
-- **Working memory.** The harness keeps a ledger:
-  - files read and changed;
-  - recent commands with exit codes;
-  - the latest unresolved error;
-  - a `todo` list for multi-step work.
-
-  It survives compaction verbatim, so the summary never has to reconstruct it.
-
-**Any provider**
-- Two wire protocols (OpenAI Chat Completions and Anthropic Messages) plus Bedrock and Vertex clients cover the built-ins and every compatible provider in the [models.dev](https://models.dev) registry (180+).
-- Built in: `anthropic`, `openai`, `gemini`, `openrouter`, `groq`, `cerebras`, `deepseek`, `xai`, `mistral`, `together`, `fireworks`, `moonshot`, `zai`, `github` (GitHub Models), `azure`, `bedrock`, `vertex`, `ollama`, `lmstudio`.
-- **Images.** `read` on a PNG/JPEG/GIF/WebP shows it to the model, and `@screenshot.png` in a prompt attaches it, for models that accept images (from models.dev, else known multimodal families).
-- **Reasoning.** Adaptive thinking and `--effort` on Claude (signed thinking blocks are replayed exactly as the API requires), `reasoning_effort` on OpenAI-compatible models, reasoning replay for DeepSeek-style models, and Gemini thought signatures. `--fast` uses Claude's fast mode where available.
-
-## Install
+**Prebuilt binary** (Linux and macOS; downloads the latest [release](https://github.com/TegarTheGreat/Agentium/releases)):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/TegarTheGreat/Agentium/main/install.sh | sh
-# or
-go install github.com/tegarthegreat/agentium/cmd/agentium@latest
-# or from a clone
+```
+
+**From source:**
+
+```sh
+git clone https://github.com/TegarTheGreat/Agentium && cd Agentium
 make build
 ```
 
-**Extensible**
-- **Skills.** A skill is a folder with a `SKILL.md` (the format Claude Code and Codex use). Skills in `~/.agentium/skills`, `~/.claude/skills` and each `.agentium/skills` or `.claude/skills` of the project are listed in one line each; the model reads a skill when a task matches it, and `/name [task]` runs one directly.
-- `agentium skills add <dir | git URL | owner/repo[#ref]>` fetches without running anything, pins the commit, lists bundled scripts, and installs only after you confirm. There is no marketplace to trust: you choose the source. Also `skills list|show|remove`.
-- **MCP servers**, local (stdio) or remote (`"url"` with `"headers"`, Streamable HTTP or `"type": "sse"`). Their tools appear as `mcp__server__tool`, and a stdio server's stderr goes to `~/.agentium/logs/`. Servers that need OAuth (MCP authorization spec: discovery, dynamic client registration, PKCE) log in with `agentium mcp login <name>`; tokens refresh automatically. `agentium mcp list` shows status.
-- **Hooks**: `post_edit` and `stop`.
-- **Editors:** `agentium acp` speaks the Agent Client Protocol, so Zed, JetBrains and other ACP clients can use Agentium. Tool calls, plans and permission prompts appear in the editor. Messages are checked in CI against the schemas of the official ACP SDK.
-
-**Works like a team**
-- **Sub-agents.** `task {prompt, explore?}` gives a self-contained job to a sub-agent with a fresh context, and only its report comes back. Several run in parallel; `explore` makes one read-only.
-- **Background jobs.** `bash {background:true}` keeps dev servers, watchers and REPLs running. The model reads new output, sends input and stops them by job id. `tty:true` runs a job in a pseudo-terminal for programs that insist on one (Linux and macOS). Jobs end with the session.
-- **Language servers.** After each edit, the project's language server reports the file's errors: type errors, bad imports, calls to things that do not exist. Supported: gopls, pyright, typescript-language-server, rust-analyzer and clangd, when installed.
-- **Web search.** `fetch {search:"…"}` uses Brave or Tavily when you have a key, otherwise DuckDuckGo.
-
-## Use
+## Quick start
 
 ```sh
-export ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, ...
-agentium                              # interactive
+export ANTHROPIC_API_KEY=...        # or OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, ...
+agentium                            # interactive session
 agentium "add a --json flag to main.go"
-git diff | agentium -p "review this"  # stdin works too
-agentium -c "now update the docs"     # continue the last session here
-agentium -m ollama/qwen3-coder        # local model
-agentium --effort xhigh --fast "…"    # more thinking, faster output
-agentium --json "…"                   # JSON Lines events for CI; exit 0/1/2/130
-agentium --best-of 3 --check "go test ./..." "fix the flaky test"
-agentium --max-cost 0.50 "…"          # stop at 50 cents
-agentium --plan "how would we add OAuth?"   # read-only; answers with a plan
-agentium "why does @screenshot.png look broken?"
 ```
 
-In a session:
-- **Commands:** `/plan`, `/go`, `/<skill> [task]`, `/skills`, `/undo`, `/sessions`, `/resume <n>`, `/clear`, `/model <provider/model>`, `/mode ask|auto|yolo|plan`, `/usage`, `/exit`.
-- **Keys:** ↑/↓ history, Ctrl-A/E/U/K/W. Pastes keep their newlines. End a line with `\` for a newline. Ctrl-C interrupts a running turn.
+### Common invocations
 
-Other commands: `agentium providers`, `agentium models [provider] [--refresh]`, `agentium login [--oauth] <provider>`, `agentium logout <provider>`, `agentium undo`, `agentium tidy`, `agentium skills`, `agentium mcp list|login|logout`, `agentium acp`, `agentium bench [-m model]`. Set `AGENTIUM_RAW=1` (or `NO_COLOR`) for unrendered output.
+| Command | Purpose |
+|---|---|
+| `agentium "task"` | Run a single task and exit |
+| `git diff \| agentium -p "review this"` | Use stdin as context |
+| `agentium -c "now update the docs"` | Continue the last session in this directory |
+| `agentium -m ollama/qwen3-coder` | Use a specific model, including local ones |
+| `agentium --plan "how would we add OAuth?"` | Investigate read-only and answer with a plan |
+| `agentium --effort xhigh --fast "…"` | More reasoning, faster output where supported |
+| `agentium --json "…"` | JSON Lines events for CI (exit codes 0/1/2/130) |
+| `agentium --max-cost 0.50 "…"` | Stop once the session has cost $0.50 |
+| `agentium --best-of 3 --check "go test ./..." "…"` | Run 3 attempts in parallel worktrees, keep the passing one with the smallest diff |
+| `agentium "why does @screenshot.png look broken?"` | Attach an image to the prompt |
 
-## Login
+### Interactive session
+
+| | |
+|---|---|
+| **Commands** | `/plan` `/go` `/undo` `/sessions` `/resume <n>` `/clear` `/model <provider/model>` `/mode ask\|auto\|yolo\|plan` `/usage` `/skills` `/<skill> [task]` `/exit` |
+| **Keys** | ↑/↓ history · Ctrl-A/E/U/K/W · pastes keep their newlines · end a line with `\` for a newline · Ctrl-C interrupts a running turn |
+
+### Subcommands
+
+| Command | Purpose |
+|---|---|
+| `agentium login [--oauth] <provider>` / `logout <provider>` | Manage credentials |
+| `agentium providers` | List providers and credential status |
+| `agentium models [provider] [--refresh]` | List models with context size and price |
+| `agentium undo` | Revert the last turn's changes in this directory |
+| `agentium tidy [--yes]` | Review and consolidate long-term memory |
+| `agentium skills [list\|show\|add\|remove]` | Manage skills |
+| `agentium mcp [list\|login\|logout <name>]` | Manage remote MCP servers and their login |
+| `agentium acp [-m model]` | Serve the Agent Client Protocol on stdio |
+| `agentium bench [-m model]` | Measure performance; with `-m`, run live tasks |
+
+Set `AGENTIUM_RAW=1` or `NO_COLOR` for unrendered output. Run `agentium --help` for every flag.
+
+## Providers and authentication
+
+Agentium speaks the OpenAI Chat Completions and Anthropic Messages protocols, with native clients for Bedrock, Vertex and Gemini.
+
+**Built in:** `anthropic` · `openai` · `gemini` · `openrouter` · `groq` · `cerebras` · `deepseek` · `xai` · `mistral` · `together` · `fireworks` · `moonshot` · `zai` · `github` (GitHub Models) · `azure` · `bedrock` · `vertex` · `ollama` · `lmstudio`
 
 ```sh
-agentium login openai                # API key → OS keychain (or ~/.agentium/auth.json, 0600)
-agentium login --oauth openrouter    # browser login (OpenRouter's official PKCE flow)
-gh auth login                        # then -m github/<model> works without a key
+agentium login openai                # API key, stored in the OS keychain (or ~/.agentium/auth.json, mode 0600)
+agentium login --oauth openrouter    # browser login (PKCE)
+gh auth login                        # enables -m github/<model> without a separate key
 ```
 
-- **Bedrock:** set `AWS_BEARER_TOKEN_BEDROCK`, or set `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` together with `AWS_REGION`.
-- **Vertex:** set `GOOGLE_CLOUD_PROJECT` (and optionally `CLOUD_ML_REGION`), then run `gcloud auth application-default login`.
-- **Azure:** set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY`.
+| Provider | Environment |
+|---|---|
+| Bedrock | `AWS_BEARER_TOKEN_BEDROCK`, or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION` |
+| Vertex | `GOOGLE_CLOUD_PROJECT` (optional `CLOUD_ML_REGION`), then `gcloud auth application-default login` |
+| Azure OpenAI | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` |
 
-Subscription logins for Anthropic and Google are not offered, because their terms prohibit use in third-party tools. ChatGPT and Copilot subscription logins need an official client registration and are not included yet.
+**Model features:**
+- **Reasoning:** `--effort` maps to each provider's reasoning controls, and reasoning state is replayed as each API requires.
+- **Images:** `read` on a PNG, JPEG, GIF or WebP shows it to vision-capable models, and `@file.png` in a prompt attaches it.
+- **Fallback:** a fallback chain takes over when the main model is unavailable.
 
-## Configure
+Subscription logins are offered only where the provider's terms allow third-party clients.
 
-`~/.agentium/config.json` (every field optional):
+## Configuration
+
+`~/.agentium/config.json` (every field is optional):
 
 ```json
 {
@@ -166,35 +163,138 @@ Subscription logins for Anthropic and Google are not offered, because their term
   "mode": "auto",
   "sandbox": { "network": "ask", "write": ["~/data"] },
   "hooks": { "post_edit": ["gofmt -w {path}"], "stop": ["notify-send agentium done"] },
-  "mcp": { "github": { "command": "github-mcp-server", "args": ["stdio"], "env": { "GITHUB_TOKEN": "$GITHUB_TOKEN" } } },
-  "providers": { "corp": { "protocol": "openai", "base_url": "https://llm.corp.example/v1", "api_key_env": "CORP_KEY" } },
-  "memory": true, "checkpoints": true, "verify": true, "fetch_private": false
+  "mcp": {
+    "github": { "command": "github-mcp-server", "args": ["stdio"], "env": { "GITHUB_TOKEN": "$GITHUB_TOKEN" } },
+    "docs":   { "url": "https://mcp.example.com/mcp" }
+  },
+  "providers": {
+    "corp": { "protocol": "openai", "base_url": "https://llm.corp.example/v1", "api_key_env": "CORP_KEY" }
+  },
+  "memory": true,
+  "checkpoints": true,
+  "verify": true,
+  "fetch_private": false
 }
 ```
 
-- **Project instructions** come from `AGENTS.md` (or `CLAUDE.md`), read from the repo root down to the current directory, plus `~/.agentium/AGENTS.md`.
-- **Memory** lives in `~/.agentium/USER.md` and `~/.agentium/projects/<id>/`.
+| File | Purpose |
+|---|---|
+| `AGENTS.md` (or `CLAUDE.md`) | Project instructions, read from the repository root down to the current directory |
+| `~/.agentium/AGENTS.md` | Personal instructions for every project |
+| `~/.agentium/USER.md` | Your preferences, maintained by the agent |
+| `~/.agentium/projects/<id>/` | Per-project memory, decisions and journal |
 
-## Benchmark
+## Tools
+
+The model has seven tools, plus any tools from configured MCP servers.
+
+| Tool | What it does |
+|---|---|
+| `read` | Read files (streams large ones, rejects binary), show a directory as a gitignore-aware tree, outline a file's definitions, or produce a ranked map of a large codebase within ~2k tokens |
+| `edit` | Create or change files: tolerant matching (CRLF, whitespace, indentation), lint-gated, atomic |
+| `bash` | Run commands in the sandbox; background jobs with input, output and stop controls; pseudo-terminal mode for interactive programs |
+| `search` | Text search, symbol definitions (`Type.Method`), references with their enclosing function, and past memory |
+| `fetch` | Fetch a URL as text, or search the web (Brave, Tavily or DuckDuckGo) |
+| `todo` | Keep a checklist for multi-step work |
+| `task` | Hand a self-contained job to a sub-agent with a fresh context; several can run in parallel, optionally read-only |
+
+**Code intelligence.**
+- The code index is cached per project and refreshed only for changed files.
+- Go is parsed exactly. Python, JavaScript/TypeScript, Rust, Java, Kotlin, C#, Swift, PHP, C/C++, Ruby and others use a scanner that understands comments, strings, docstrings and template literals.
+- After each edit, the project's language server reports new errors. Supported: gopls, pyright, typescript-language-server, rust-analyzer, clangd.
+
+## Safety
+
+| Layer | Behavior |
+|---|---|
+| **OS sandbox** | Shell commands can write only to the workspace, temp directories and build caches. Network access is blocked unless a command requests it and you approve. |
+| **Approval gate** | Risky actions need approval, for example `rm -rf`, force pushes, `sudo`, piping downloads to a shell, credential files and handing work to processes outside the sandbox. Modes: `ask` (every action), `auto` (risky only, default), `yolo` (never), `plan` (read-only). |
+| **Credential isolation** | Commands, hooks and MCP servers run without credential-like environment variables (`sandbox.pass_env` allows specific ones). `fetch` refuses URLs that carry secrets, and private or metadata addresses. `.env` files need approval to read. |
+| **Repository guard** | Git settings or hooks that would run programs outside the sandbox are undone and reported. Edits inside `.git` need approval. |
+| **Checkpoints** | Each turn is snapshotted in a shadow repository; your own `.git` is never touched. `/undo` restores the previous state. |
+| **Write protection** | Existing files are never overwritten blindly, and a file changed on disk since it was read is not overwritten. |
+
+## Reliability
+
+- **Lint-gated edits:** an edit that would break a file that parsed before is rejected, and the file stays unchanged.
+- **Atomic writes:** each edit is written to a temporary file, synced, renamed into place and read back.
+- **Verification:** if code changed and nothing was built or tested afterwards, the model is asked to verify before finishing.
+- **Stuck detection:** a repeated identical call and result triggers a warning, then stops the run.
+- **Adaptive effort:** reasoning effort rises only after repeated failures, and resets on the next turn.
+- **Resilient streaming:** truncated replies are continued; stalled streams are retried, honoring `Retry-After`.
+- **Context management:** old tool output is elided at 55% of the context window, and older turns are summarized at 85%.
+
+## Memory
+
+| Scope | How it works |
+|---|---|
+| **Long-term** | `USER.md`, a per-project `MEMORY.md` and `DECISIONS.md`. The model records notes with `@remember`, `@prefer`, `@decide` and `@forget`. Entries are dated and cite the files they concern. |
+| **Maintenance** | Near-duplicates replace older notes. Notes whose files are gone, or that nobody has confirmed for four months, are hidden and listed by `agentium tidy`. When memory is full, the weakest note moves to the journal. |
+| **Learning** | When a failing command later passes, the failure and its fix are recorded. A lesson whose failure recurs is promoted to project memory. |
+| **Recall** | A local BM25 index covers decisions, the journal and past sessions. At most two precise matches are added before a turn; the model can search for more. |
+| **Working memory** | Files read and changed, recent commands with exit codes, the latest unresolved error and the todo list survive context compaction verbatim. |
+| **Hygiene** | Secrets are redacted, and instruction-like text is refused. Notes written after reading web or MCP content are held for review. |
+
+## Extending Agentium
+
+**Skills.**
+- A skill is a directory containing a `SKILL.md` in the Agent Skills format.
+- Skills are loaded from `~/.agentium/skills`, `~/.claude/skills`, and the project's `.agentium/skills` and `.claude/skills`.
+- Only a one-line index enters the prompt. `/name [task]` runs a skill directly.
 
 ```sh
-agentium bench                                 # binary size, startup, RSS, prompt overhead
-agentium bench -m anthropic/claude-sonnet-5    # + 5 live tasks: pass rate, turns, tokens, time
+agentium skills add owner/repo#ref     # also a local directory or git URL
 ```
 
-For Terminal-Bench 2.x via Harbor, see [bench/terminalbench](bench/terminalbench/README.md). It compares harnesses on the same model.
+Installation fetches without executing anything, pins the commit and lists bundled scripts, then asks for confirmation.
 
-## Status
-
-v0.11.0. Linux and macOS are fully supported. On Windows, commands run in Git Bash (or PowerShell), the line editor works in the console, and a Job Object ends every command Agentium started when it exits; there is **no OS sandbox on Windows**, so the approval gate is the only guard there (use `ask` mode). Design principles (brain, natural laws, physics mapped to concrete mechanisms): [docs/DESIGN.md](docs/DESIGN.md). Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux, macOS and Windows. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
-
-## Develop
+**MCP servers.**
+- Local servers use stdio. Remote servers use Streamable HTTP or SSE (`"url"`, optional `"headers"`).
+- Tools appear as `mcp__<server>__<tool>`.
+- Servers that require OAuth are supported: discovery, dynamic client registration and PKCE.
 
 ```sh
+agentium mcp login docs   # opens the browser; tokens are stored and refreshed automatically
+agentium mcp list         # servers and login status
+```
+
+**Hooks.** `post_edit` runs after each edit (`{path}` is substituted). `stop` runs when a task finishes.
+
+**Editors.** `agentium acp` implements the [Agent Client Protocol](https://agentclientprotocol.com), so ACP clients such as Zed and JetBrains IDEs can use Agentium. Tool calls, plans and permission prompts appear in the editor.
+
+## Platform support
+
+| Platform | Status |
+|---|---|
+| **Linux** | Full support. Sandbox via Landlock; network isolation requires kernel 6.7 or newer, and a warning is shown otherwise. |
+| **macOS** | Full support. Sandbox via `sandbox-exec`. |
+| **Windows** | Supported without an OS sandbox. Commands run in Git Bash, falling back to PowerShell. Child processes are contained in a Job Object and end with Agentium. Use `ask` mode, since the approval gate is the only guard. |
+
+## Benchmarking
+
+```sh
+agentium bench                                # binary size, startup time, memory, prompt overhead
+agentium bench -m anthropic/claude-sonnet-5   # adds live tasks: pass rate, turns, tokens, time
+```
+
+A [Terminal-Bench 2.x adapter](bench/terminalbench/README.md) for Harbor is included.
+
+## Development
+
+```sh
+make build   # build ./agentium
 make test    # go vet + go test -race
-make cross   # linux/darwin/windows binaries in dist/
+make cross   # binaries for Linux, macOS and Windows in dist/
 ```
+
+- **Tests:** unit and end-to-end suites run against fake model servers for every protocol, a fake MCP server and real pseudo-terminals.
+- **CI:** runs on Linux, macOS and Windows, and validates the ACP server against the official SDK schemas.
+- **Releases:** built with GoReleaser when a `v*` tag is pushed.
+
+Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
+
+> **Status:** v0.11.0. Agentium has not yet been evaluated end to end against live model APIs or a full Terminal-Bench run. Bug reports are welcome.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) © 2026 TegarTheGreat and Agentium contributors
