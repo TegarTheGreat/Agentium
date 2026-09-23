@@ -520,3 +520,35 @@ func TestPlanMode(t *testing.T) {
 		t.Fatal("risky command allowed in plan mode")
 	}
 }
+
+func TestOutlineAndSymbol(t *testing.T) {
+	e := env(t)
+	os.MkdirAll(filepath.Join(e.Root, "pkg"), 0o755)
+	os.WriteFile(filepath.Join(e.Root, "pkg", "a.go"), []byte("package pkg\n\ntype Svc struct{}\n\nfunc (s *Svc) Start() error {\n\treturn nil\n}\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "b.py"), []byte("class Svc:\n    def start(self):\n        pass\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "notes.md"), []byte("# Svc"), 0o644)
+
+	out, err := call(t, readTool, e, `{"path":"pkg/a.go","outline":true}`)
+	if err != nil || !strings.Contains(out, "5: func (s *Svc) Start() error") || strings.Contains(out, "return nil") {
+		t.Fatalf("file outline: %q %v", out, err)
+	}
+	// An outline is not a full read: overwriting still needs a real read.
+	if _, err := call(t, editTool, e, `{"path":"pkg/a.go","new":"package pkg\n"}`); err == nil {
+		t.Fatal("outline must not count as having read the file")
+	}
+	out, _ = call(t, readTool, e, `{"path":".","outline":true}`)
+	if !strings.Contains(out, "== b.py\n1: class Svc") || !strings.Contains(out, "== pkg/a.go") || strings.Contains(out, "notes.md") || strings.Contains(out, "def start") {
+		t.Fatalf("dir outline: %q", out)
+	}
+	out, _ = call(t, searchTool, e, `{"symbol":"Svc.Start"}`)
+	if strings.TrimSpace(out) != "pkg/a.go:5: func (s *Svc) Start() error" {
+		t.Fatalf("symbol: %q", out)
+	}
+	out, _ = call(t, searchTool, e, `{"symbol":"Svc"}`)
+	if !strings.Contains(out, "b.py:1: class Svc") || !strings.Contains(out, "pkg/a.go:3: type Svc struct") {
+		t.Fatalf("symbol Svc: %q", out)
+	}
+	if _, err := call(t, readTool, e, `{"path":"notes.md","outline":true}`); err == nil {
+		t.Fatal("unsupported outline should error")
+	}
+}

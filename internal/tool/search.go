@@ -19,20 +19,21 @@ const searchMaxLines = 200
 
 var searchTool = Tool{
 	Def: providerDef("search",
-		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob. Respects .gitignore.",
-		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"}}}`),
+		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob; symbol = where a function/type/class is defined (Name or Type.Name). Respects .gitignore.",
+		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"},"symbol":{"type":"string"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
 			Pattern    string `json:"pattern"`
 			Path       string `json:"path"`
 			Glob       string `json:"glob"`
 			IgnoreCase bool   `json:"ignore_case"`
+			Symbol     string `json:"symbol"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
 		}
-		if a.Pattern == "" && a.Glob == "" {
-			return "", errors.New("give pattern and/or glob")
+		if a.Pattern == "" && a.Glob == "" && a.Symbol == "" {
+			return "", errors.New("give pattern, glob or symbol")
 		}
 		dir := env.Root
 		if a.Path != "" {
@@ -42,6 +43,9 @@ var searchTool = Tool{
 			if ok, why := env.Gate.Read(dir); !ok {
 				return "", fmt.Errorf("denied (%s)", why)
 			}
+		}
+		if a.Symbol != "" {
+			return findSymbol(ctx, env.Root, dir, a.Symbol), nil
 		}
 		if rg := ripgrep(); rg != "" {
 			return runRipgrep(ctx, rg, env.Root, dir, a.Pattern, a.Glob, a.IgnoreCase)
