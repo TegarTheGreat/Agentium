@@ -272,7 +272,13 @@ func hasPrefix(args []string, prefix string) bool {
 
 // Outside reports whether path resolves outside root.
 func Outside(root, path string) bool {
-	if !filepath.IsAbs(path) {
+	switch {
+	case filepath.IsAbs(path):
+	case strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`):
+		// Rooted but without a drive (Windows): the root of root's drive,
+		// not a path inside the workspace.
+		path = filepath.VolumeName(root) + path
+	default:
 		path = filepath.Join(root, path)
 	}
 	rel, err := filepath.Rel(root, filepath.Clean(path))
