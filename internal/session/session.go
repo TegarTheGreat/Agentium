@@ -133,3 +133,27 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 	}
 	return out, nil
 }
+
+// Prune deletes sessions beyond the newest keep that are older than maxAge.
+func Prune(keep int, maxAge time.Duration) {
+	ents, err := os.ReadDir(dir())
+	if err != nil {
+		return
+	}
+	var names []string
+	for _, e := range ents {
+		if filepath.Ext(e.Name()) == ".json" {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	if len(names) <= keep {
+		return
+	}
+	for _, n := range names[keep:] {
+		p := filepath.Join(dir(), n)
+		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > maxAge {
+			_ = os.Remove(p)
+		}
+	}
+}
