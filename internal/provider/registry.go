@@ -39,7 +39,7 @@ var Builtin = []Spec{
 	{ID: "openrouter", Protocol: "openai", BaseURL: "https://openrouter.ai/api/v1", KeyEnv: []string{"OPENROUTER_API_KEY"}, Default: "anthropic/claude-sonnet-5"},
 	{ID: "groq", Protocol: "openai", BaseURL: "https://api.groq.com/openai/v1", KeyEnv: []string{"GROQ_API_KEY"}},
 	{ID: "cerebras", Protocol: "openai", BaseURL: "https://api.cerebras.ai/v1", KeyEnv: []string{"CEREBRAS_API_KEY"}},
-	{ID: "deepseek", Protocol: "openai", BaseURL: "https://api.deepseek.com/v1", KeyEnv: []string{"DEEPSEEK_API_KEY"}, Default: "deepseek-v4-flash"},
+	{ID: "deepseek", Protocol: "openai", BaseURL: "https://api.deepseek.com/v1", KeyEnv: []string{"DEEPSEEK_API_KEY"}, Default: "deepseek-flash"},
 	{ID: "xai", Protocol: "openai", BaseURL: "https://api.x.ai/v1", KeyEnv: []string{"XAI_API_KEY"}},
 	{ID: "mistral", Protocol: "openai", BaseURL: "https://api.mistral.ai/v1", KeyEnv: []string{"MISTRAL_API_KEY"}},
 	{ID: "together", Protocol: "openai", BaseURL: "https://api.together.xyz/v1", KeyEnv: []string{"TOGETHER_API_KEY"}},
@@ -241,6 +241,8 @@ func Resolve(ref string, cfg config.Config, auth config.Auth) (Resolved, error) 
 		if _, ok := specs[ref[:i]]; ok {
 			pid, model = ref[:i], ref[i+1:]
 		}
+	} else if _, ok := specs[ref]; ok {
+		pid = ref // a provider alone: its default model
 	}
 	if pid == "" {
 		pid, model = guess(ref), ref

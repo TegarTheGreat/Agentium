@@ -958,3 +958,20 @@ func TestTTYJobs(t *testing.T) {
 		t.Fatalf("cleanTTY: %q", cleanTTY("\x1b[31mred\x1b[0m\r\nline\rprogress 50%\rprogress 100%"))
 	}
 }
+
+func TestBashKillWithJobNumber(t *testing.T) {
+	e := env(t)
+	defer e.KillJobs()
+	out, err := call(t, bashTool, e, `{"cmd":"sleep 30","background":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Fields(out)[1]
+	// Some models put the job id in kill.
+	if _, err := call(t, bashTool, e, `{"kill":`+id+`}`); err != nil {
+		t.Fatalf("kill:<id>: %v", err)
+	}
+	if out, _ := call(t, bashTool, e, `{"job":`+id+`}`); !strings.Contains(out, "exited") {
+		t.Fatalf("job still running: %q", out)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -259,4 +260,18 @@ func Clip(s string, max int) string {
 // "powershell", "cmd"), for the system prompt.
 func ShellName() string {
 	return strings.TrimSuffix(strings.ToLower(filepath.Base(shellPath())), ".exe")
+}
+
+type liveKey struct{}
+
+// WithLive returns a context in which shell commands also copy their
+// output to w as it arrives, so a UI can show progress. w must be safe
+// for concurrent writes (stdout and stderr share it).
+func WithLive(ctx context.Context, w io.Writer) context.Context {
+	return context.WithValue(ctx, liveKey{}, w)
+}
+
+func liveFrom(ctx context.Context) io.Writer {
+	w, _ := ctx.Value(liveKey{}).(io.Writer)
+	return w
 }

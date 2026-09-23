@@ -131,6 +131,26 @@ func Load() (Config, error) {
 	return c, err
 }
 
+// Set changes one top-level field of config.json (nil removes it),
+// leaving every other field, including unknown ones, as written.
+func Set(key string, value any) error {
+	path := filepath.Join(Home(), "config.json")
+	m := map[string]json.RawMessage{}
+	if err := readJSON(path, &m); err != nil {
+		return err
+	}
+	if value == nil {
+		delete(m, key)
+	} else {
+		b, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		m[key] = b
+	}
+	return writeJSON(path, m, 0o600)
+}
+
 // Credential is a stored secret for one provider. With Keychain set the
 // secret lives in the OS keychain and APIKey is empty.
 type Credential struct {

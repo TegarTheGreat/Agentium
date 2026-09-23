@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -68,6 +69,7 @@ type editor struct {
 	buf    []rune
 	pos    int
 	prompt string
+	draft  []rune // text to start with (typed during the last turn)
 }
 
 // key reads one input event (a rune or an escape sequence).
@@ -91,6 +93,9 @@ func (e *editor) key() (string, error) {
 		return string(buf), nil
 	}
 	seq := []byte{0x1b}
+	if !inputReady(e.in, 40*time.Millisecond) {
+		return "\x1b", nil // Esc on its own
+	}
 	for i := 0; i < 8; i++ {
 		if _, err := e.in.Read(b[:]); err != nil {
 			return string(seq), nil
@@ -143,10 +148,20 @@ func (e *editor) render(width int) {
 	e.out.WriteString(sb.String())
 }
 
+// strWidth is the display width of s; ANSI escape sequences count zero.
 func strWidth(s string) int {
-	n := 0
+	n, esc := 0, false
 	for _, r := range s {
-		n += runeWidth(r)
+		switch {
+		case esc:
+			if r >= 0x40 && r <= 0x7e && r != '[' {
+				esc = false
+			}
+		case r == 0x1b:
+			esc = true
+		default:
+			n += runeWidth(r)
+		}
 	}
 	return n
 }
@@ -217,7 +232,8 @@ func (e *editor) readLine() (string, error) {
 	defer restore()
 	e.out.WriteString("\x1b[?2004h") // bracketed paste on
 	defer e.out.WriteString("\x1b[?2004l")
-	e.buf, e.pos = nil, 0
+	e.buf, e.pos = e.draft, len(e.draft)
+	e.draft = nil
 	hi := len(e.hist.items)
 	var draft []rune
 	width := termWidth(e.out)

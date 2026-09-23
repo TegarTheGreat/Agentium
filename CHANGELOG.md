@@ -2,6 +2,41 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-09-23
+
+A redesigned terminal experience, tested end to end against a live model (DeepSeek).
+
+### Added
+
+- **Setup inside the app.** On first run Agentium walks you through choosing a provider, pasting an API key (masked and checked against the provider) and picking a model from the provider's live model list, with context size and price. No separate `login` step is needed.
+- **Live progress.** A spinner shows while the model is thinking. Each running command shows its elapsed time and its latest output lines, so long installs and builds never look frozen. Finished steps are recorded as `✓`/`✗` lines with their duration.
+- **Type while the agent works.** Messages typed during a turn are queued and sent when it finishes; queued `/commands` run as commands. Ctrl-C clears the typed text, or interrupts the turn.
+- **New commands:** `/login`, `/logout`, `/effort`, `/config` and `/help`. `/model` and `/mode` open arrow-key menus with type-to-filter, and the chosen model is saved as the default.
+- **Clearer approvals:** single-key prompts such as "Run this command?" and "Change this file?".
+- **Friendlier installer:** step-by-step output, a real download progress bar (percent, size, speed), retries, and a source build when no release binary exists.
+
+### Changed
+
+- A new session banner, colored prompt and a compact summary after each turn.
+- Repeated identical steps (such as several edits to one file) collapse into one line with a count.
+- Paths in step lines are shown relative to the workspace.
+- The model is told that commands already start in the workspace, so it stops prefixing them with `cd`.
+
+### Fixed
+
+- `-m deepseek` (a provider without a model) now uses that provider's default model.
+- The DeepSeek default model is now `deepseek-flash`, which the API accepts.
+- `bash {kill: <job id>}`, as some models send it, now stops the job instead of failing.
+- A lone Esc key no longer swallows the next keystrokes.
+
+### Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/TegarTheGreat/Agentium/main/install.sh | sh
+# or
+go install github.com/tegarthegreat/agentium/cmd/agentium@v0.12.0
+```
+
 ## [0.11.0] - 2026-09-23
 
 First public release. Agentium is a fast, minimal coding agent for the terminal, distributed as a single static binary for Linux, macOS and Windows.
@@ -63,4 +98,5 @@ go install github.com/tegarthegreat/agentium/cmd/agentium@v0.11.0
 
 Windows users can download the `.zip` archive below.
 
+[0.12.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.12.0
 [0.11.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.11.0

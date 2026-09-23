@@ -26,6 +26,8 @@ type Events struct {
 	Notice func(msg string)
 	// SubToolStart observes tool calls made by sub-agents.
 	SubToolStart func(call provider.ToolCall)
+	// ToolOutput receives a running command's output as it arrives.
+	ToolOutput func(call provider.ToolCall, chunk []byte)
 }
 
 // Agent holds one conversation.
@@ -320,6 +322,9 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 				err = errors.New("arguments are not valid JSON")
 			default:
 				tctx, images := tool.WithImageSink(context.WithValue(ctx, agentKey{}, a))
+				if f := a.Events.ToolOutput; f != nil {
+					tctx = tool.WithLive(tctx, liveWriter(func(p []byte) { f(c, p) }))
+				}
 				res, err = safeRun(tctx, t, a.Env, c.Args)
 				imgs = images()
 				a.Ledger.record(c.Name, c.Args, res, err)
@@ -342,6 +347,11 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 	wg.Wait()
 	return out
 }
+
+// liveWriter adapts a callback to io.Writer.
+type liveWriter func([]byte)
+
+func (w liveWriter) Write(p []byte) (int, error) { w(p); return len(p), nil }
 
 func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessage) (res string, err error) {
 	defer func() {

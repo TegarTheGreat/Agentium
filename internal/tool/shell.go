@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,26 +31,39 @@ var bashTool = Tool{
 		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"},"net":{"type":"boolean"},"background":{"type":"boolean"},"tty":{"type":"boolean"},"job":{"type":"integer"},"stdin":{"type":"string"},"kill":{"type":"boolean"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
-			Cmd        string `json:"cmd"`
-			Timeout    int    `json:"timeout"`
-			Net        bool   `json:"net"`
-			Background bool   `json:"background"`
-			TTY        bool   `json:"tty"`
-			Job        int    `json:"job"`
-			Stdin      string `json:"stdin"`
-			Kill       bool   `json:"kill"`
+			Cmd        string          `json:"cmd"`
+			Timeout    int             `json:"timeout"`
+			Net        bool            `json:"net"`
+			Background bool            `json:"background"`
+			TTY        bool            `json:"tty"`
+			Job        int             `json:"job"`
+			Stdin      string          `json:"stdin"`
+			Kill       json.RawMessage `json:"kill"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
+		}
+		// kill is a boolean; some models send the job id there instead.
+		kill := false
+		switch k := strings.TrimSpace(string(a.Kill)); {
+		case k == "" || k == "false" || k == "null":
+		case k == "true":
+			kill = true
+		default:
+			n, err := strconv.Atoi(strings.Trim(k, `"`))
+			if err != nil || n <= 0 || (a.Job > 0 && a.Job != n) {
+				return "", errors.New("kill must be true, with the job id in job")
+			}
+			a.Job, kill = n, true
 		}
 		if a.Job > 0 {
 			if a.Cmd != "" {
 				return "", errors.New("give either cmd or job, not both")
 			}
-			return env.jobAction(ctx, a.Job, a.Stdin, a.Kill, a.Timeout)
+			return env.jobAction(ctx, a.Job, a.Stdin, kill, a.Timeout)
 		}
 		if a.Cmd == "" {
-			if a.Stdin != "" || a.Kill {
+			if a.Stdin != "" || kill {
 				return "", errors.New("stdin and kill need a job id")
 			}
 			return env.listJobs(), nil
@@ -183,8 +199,12 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	// wait on them forever once the shell itself has exited.
 	cmd.WaitDelay = 500 * time.Millisecond
 	var out lockedBuffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var w io.Writer = &out
+	if lw := liveFrom(ctx); lw != nil {
+		w = io.MultiWriter(&out, lw)
+	}
+	cmd.Stdout = w
+	cmd.Stderr = w
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}

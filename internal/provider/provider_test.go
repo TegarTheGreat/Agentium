@@ -542,3 +542,28 @@ func TestVision(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveProviderOnly(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "k")
+	r, err := Resolve("deepseek", config.Config{}, config.Auth{})
+	if err != nil || r.Provider != "deepseek" || r.Model != "deepseek-flash" {
+		t.Fatalf("got %s/%s, %v", r.Provider, r.Model, err)
+	}
+}
+
+func TestListModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer k" {
+			http.Error(w, "bad", 400)
+			return
+		}
+		w.Write([]byte(`{"data":[{"id":"m-b"},{"id":"m-a"}]}`))
+	}))
+	defer srv.Close()
+	cfg := config.Config{Providers: map[string]config.ProviderConf{"x": {Protocol: "openai", BaseURL: srv.URL + "/v1", APIKeyEnv: "X_KEY"}}}
+	t.Setenv("X_KEY", "k")
+	ids, err := ListModels(context.Background(), "x", cfg, config.Auth{})
+	if err != nil || strings.Join(ids, ",") != "m-a,m-b" {
+		t.Fatalf("%v %v", ids, err)
+	}
+}

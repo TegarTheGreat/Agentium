@@ -39,7 +39,7 @@ func SystemPrompt(root string, memoryOn bool, snapshot string) string {
 	if memoryOn {
 		sb.WriteString(memoryRules)
 	}
-	fmt.Fprintf(&sb, "\n\nEnv: cwd=%s os=%s/%s date=%s", root, runtime.GOOS, runtime.GOARCH, time.Now().Format("2006-01-02"))
+	fmt.Fprintf(&sb, "\n\nEnv: cwd=%s (bash starts here; no cd needed) os=%s/%s date=%s", root, runtime.GOOS, runtime.GOARCH, time.Now().Format("2006-01-02"))
 	if sh := tool.ShellName(); sh != "bash" {
 		fmt.Fprintf(&sb, " shell=%s", sh) // bash commands must be written for this shell
 	}

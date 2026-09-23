@@ -32,7 +32,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.11.0"
+var version = "0.12.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -181,6 +181,28 @@ type ui struct {
 	color   bool
 	midLine bool      // stdout has text without a trailing newline
 	md      *mdStream // renders Markdown when stdout is a terminal
+	cwd     string
+
+	// Live status area (terminal only): what is running right now.
+	live     bool
+	thinking bool
+	thinkT   time.Time
+	tools    []*liveTool
+	drawn    int // lines of the live area on screen
+	frame    int
+	paused   bool // an approval prompt owns the terminal
+	// afterTool: the last line printed was a tool line, so a reply
+	// starts after a blank line.
+	afterTool bool
+	held      []string // lines printed while an approval prompt waited
+	lastKey   string   // the last tool line, for collapsing repeats
+	lastCount int
+
+	// Type-ahead while a turn runs (see typeahead.go).
+	keys   chan string
+	typing []rune
+	queued []string
+	cancel func()
 }
 
 func (u *ui) dim(s string) string {
@@ -193,6 +215,13 @@ func (u *ui) dim(s string) string {
 func (u *ui) text(d string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.clearLive()
+	u.thinking = false
+	u.lastKey = ""
+	if u.afterTool && d != "" {
+		os.Stderr.WriteString("\n")
+		u.afterTool = false
+	}
 	if u.md != nil {
 		u.md.Write(d)
 		u.midLine = u.md.Pending()
@@ -224,8 +253,15 @@ func (u *ui) line(s string) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if u.paused {
+		u.held = append(u.held, u.dim(s))
+		return
+	}
+	u.clearLive()
 	u.endLine()
+	u.lastKey = ""
 	fmt.Fprintln(os.Stderr, u.dim(s))
+	u.drawLive()
 }
 
 func summarizeCall(c provider.ToolCall) string {
@@ -253,6 +289,10 @@ func summarizeCall(c provider.ToolCall) string {
 	}
 	if c.Name == "search" && m["glob"] != nil && m["pattern"] != nil {
 		s = fmt.Sprintf("%v in %v", m["pattern"], m["glob"])
+	}
+	if strings.TrimSpace(s) == "" && len(c.Args) > 2 {
+		// Unexpected argument shape: show it rather than a bare name.
+		s = string(c.Args)
 	}
 	s = strings.ReplaceAll(s, "\n", " ⏎ ")
 	if len(s) > 100 {
@@ -304,6 +344,14 @@ func (a *approver) ask(action, reason string) bool {
 	defer a.mu.Unlock()
 	if a.gate.GetMode() == policy.Yolo { // "always" chosen meanwhile
 		return true
+	}
+	if a.ui.live && lineEditing {
+		if k, err := a.ui.approve(action, reason); err == nil {
+			if k == "a" {
+				a.gate.SetMode(policy.Yolo)
+			}
+			return k == "y" || k == "a"
+		}
 	}
 	a.ui.mu.Lock()
 	a.ui.endLine()
@@ -369,6 +417,37 @@ func run(args []string) error {
 	}
 	ref := firstNonEmpty(*modelRef, os.Getenv("AGENTIUM_MODEL"), cfg.Model)
 	res, err := provider.Resolve(ref, cfg, auth)
+	if err != nil && stdinTTY && isTTY(os.Stderr) && !*asJSON && lineEditing {
+		// First run (or a missing key): set up a provider right here.
+		su := &ui{color: os.Getenv("NO_COLOR") == ""}
+		fmt.Fprintln(os.Stderr, "\n"+su.paint(cCyan, "◆")+" "+su.paint(cBold, "Welcome to Agentium"))
+		if !strings.HasPrefix(err.Error(), "no model configured") {
+			su.note(firstLine(err.Error()))
+		}
+		su.note("Let's connect a model. Your key is stored in the OS keychain or ~/.agentium/auth.json (0600).")
+		pid := ""
+		if *modelRef != "" {
+			pid, _, _ = strings.Cut(*modelRef, "/")
+			if _, ok := provider.Specs(cfg)[pid]; !ok {
+				pid = ""
+			}
+		}
+		newRef, serr := su.setup(pid)
+		if serr != nil {
+			if errors.Is(serr, errCanceled) {
+				return errors.New("setup canceled; run agentium again or use `agentium login <provider>`")
+			}
+			return serr
+		}
+		su.success("Using " + newRef + " (saved as your default)")
+		if auth, err = config.LoadAuth(); err != nil {
+			return err
+		}
+		if *modelRef != "" && strings.Contains(*modelRef, "/") {
+			newRef = *modelRef
+		}
+		res, err = provider.Resolve(newRef, cfg, auth)
+	}
 	if err != nil {
 		return err
 	}
@@ -394,6 +473,7 @@ func run(args []string) error {
 		*quiet = true
 	}
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
+	u.live = isTTY(os.Stderr) && !*quiet && os.Getenv("TERM") != "dumb"
 	if !*asJSON && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" && os.Getenv("AGENTIUM_RAW") == "" {
 		u.md = newMD(os.Stdout)
 	}
@@ -573,6 +653,16 @@ func run(args []string) error {
 		},
 	}
 
+	if u.live {
+		u.cwd = cwd
+		a.Events.ToolStart = u.toolStart
+		a.Events.SubToolStart = u.subTool
+		a.Events.ToolDone = u.toolDone
+		a.Events.ToolOutput = u.toolOutput
+		a.Events.Notice = func(msg string) { u.line("· " + msg); u.think() }
+		u.startTicker()
+	}
+
 	var active atomic.Pointer[context.CancelFunc]
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
@@ -590,6 +680,7 @@ func run(args []string) error {
 		}
 	}()
 
+	interactive := false // type-ahead only where queued input gets sent
 	turn := func(input string) error {
 		curPrompt = input
 		replies, edited = nil, nil
@@ -615,7 +706,14 @@ func run(args []string) error {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		active.Store(&cancel)
+		u.beginTurn()
+		stopTyping := func() {}
+		if interactive {
+			stopTyping = u.startTyping(cancel)
+		}
 		st, err := a.Run(ctx, send)
+		stopTyping()
+		u.endTurn()
 		if mem != nil {
 			mem.afterTurn(input, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), u.line)
 		}
@@ -627,7 +725,9 @@ func run(args []string) error {
 		u.mu.Lock()
 		u.endLine()
 		u.mu.Unlock()
-		if !*quiet {
+		if !*quiet && u.live {
+			fmt.Fprintln(os.Stderr, u.turnSummary(st, err, turnCost(res, fb, st)))
+		} else if !*quiet {
 			line := statsLine(st)
 			info, known := res.Info, res.Known
 			if fb != nil {
@@ -708,7 +808,12 @@ func run(args []string) error {
 	if a.Env.Sandbox != nil {
 		box = "sandboxed"
 	}
-	fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
+	if u.live {
+		u.banner(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)
+	} else {
+		fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
+	}
+	interactive = true
 	var ed *editor
 	if lineEditing && isTTY(os.Stderr) {
 		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
@@ -725,8 +830,20 @@ func run(args []string) error {
 		if gate.GetMode() == policy.Plan {
 			ps = "plan› "
 		}
-		if ed != nil {
+		if u.live {
+			ps = u.prompt(gate.GetMode() == policy.Plan)
+		}
+		next, queued, draft := u.takeQueued()
+		if queued {
+			// A message typed while the last turn ran.
+			line = next
+			fmt.Fprintln(os.Stderr, "\n"+ps+line)
+			if ed != nil {
+				ed.hist.add(line)
+			}
+		} else if ed != nil {
 			ed.prompt = ps
+			ed.draft = []rune(draft)
 			fmt.Fprint(os.Stderr, "\n")
 			line, err = ed.readLine()
 			if errors.Is(err, errInterrupt) || errors.Is(err, errEOF) {
@@ -777,7 +894,7 @@ func run(args []string) error {
 				printSkills(skills)
 				continue
 			}
-			if done := slash(line, a, gate, cfg, auth, sess, store); done {
+			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box}); done {
 				return nil
 			}
 			continue
@@ -792,36 +909,175 @@ func run(args []string) error {
 	}
 }
 
-func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, auth config.Auth, sess *session.Session, store *checkpoint.Store) (exit bool) {
+// slashEnv is what slash commands may read and change.
+type slashEnv struct {
+	a     *agent.Agent
+	gate  *policy.Gate
+	cfg   config.Config
+	sess  *session.Session
+	store *checkpoint.Store
+	res   *provider.Resolved
+	u     *ui
+	box   string
+}
+
+// switchModel points the agent at ref and saves it as the default.
+func (e *slashEnv) switchModel(ref string) error {
+	auth, err := config.LoadAuth()
+	if err != nil {
+		return err
+	}
+	res, err := provider.Resolve(ref, e.cfg, auth)
+	if err != nil {
+		return err
+	}
+	a := e.a
+	a.Client, a.Model = res.Client, res.Model
+	a.Env.Vision = res.Vision()
+	// The new model's reasoning capabilities, same requested effort.
+	a.Reasoning = res.Reasoning(a.Reasoning.Effort)
+	if res.Info.Context > 0 {
+		a.ContextTokens = res.Info.Context
+	}
+	*e.res = res
+	e.sess.Model = res.Provider + "/" + res.Model
+	_ = config.Set("model", e.sess.Model)
+	e.u.success("Model: " + e.sess.Model + e.u.paint(cDim, " (saved as default)"))
+	return nil
+}
+
+func slash(line string, e *slashEnv) (exit bool) {
+	a, gate, cfg, sess, store, u := e.a, e.gate, e.cfg, e.sess, e.store, e.u
 	f := strings.Fields(line)
 	switch f[0] {
+	case "/help", "/?":
+		u.help()
+	case "/login":
+		pid := ""
+		if len(f) > 1 {
+			pid = f[1]
+		}
+		ref, err := u.setup(pid)
+		if err != nil {
+			if !errors.Is(err, errCanceled) {
+				u.failure(err.Error())
+			}
+			return false
+		}
+		if err := e.switchModel(ref); err != nil {
+			u.failure(err.Error())
+		}
+	case "/logout":
+		if len(f) < 2 {
+			u.note("usage: /logout <provider>")
+			return false
+		}
+		if err := cmdLogout(f[1:]); err != nil {
+			u.failure(err.Error())
+			return false
+		}
+		u.success("Removed the stored key for " + f[1])
+	case "/config", "/settings":
+		u.showConfig(sess.Model, string(gate.GetMode()), a.Reasoning.Effort, e.box)
+	case "/effort":
+		lvl := ""
+		if len(f) > 1 {
+			lvl = f[1]
+		} else {
+			var err error
+			lvl, err = u.choose("Reasoning effort", []menuItem{
+				{value: "default", label: "Model default"},
+				{value: "low", hint: "fastest, cheapest"},
+				{value: "medium"},
+				{value: "high", hint: "more careful"},
+				{value: "xhigh", hint: "much more thinking"},
+				{value: "max", hint: "slowest, most thorough"},
+			}, firstNonEmpty(a.Reasoning.Effort, "default"), false)
+			if err != nil {
+				return false
+			}
+		}
+		if lvl == "default" {
+			lvl = ""
+		}
+		a.Reasoning.Effort = lvl
+		u.success("Effort: " + firstNonEmpty(lvl, "model default"))
+	case "/model":
+		if len(f) > 1 {
+			if err := e.switchModel(f[1]); err != nil {
+				u.failure(err.Error())
+			}
+			return false
+		}
+		auth, _ := config.LoadAuth()
+		cur := e.res.Provider
+		name := func(id string) string {
+			for _, p := range providerInfo {
+				if p.id == id {
+					return p.name
+				}
+			}
+			return id
+		}
+		items := []menuItem{{value: cur, label: name(cur), hint: "current"}}
+		specs := provider.Specs(cfg)
+		for _, p := range providerInfo {
+			if s, ok := specs[p.id]; ok && p.id != cur && !s.NoKey && provider.Key(s, auth) != "" {
+				items = append(items, menuItem{value: p.id, label: p.name, hint: "✓ connected"})
+			}
+		}
+		items = append(items, menuItem{value: "+", label: "Connect another provider…"})
+		pid, err := u.choose("Model: "+sess.Model+" · choose a provider", items, cur, false)
+		if err != nil {
+			return false
+		}
+		if pid == "+" {
+			ref, err := u.setup("")
+			if err == nil {
+				err = e.switchModel(ref)
+			}
+			if err != nil && !errors.Is(err, errCanceled) {
+				u.failure(err.Error())
+			}
+			return false
+		}
+		cm := ""
+		if pid == cur {
+			cm = e.res.Model
+		}
+		m, err := u.pickModel(pid, cfg, auth, cm)
+		if err != nil {
+			return false
+		}
+		if err := e.switchModel(pid + "/" + m); err != nil {
+			u.failure(err.Error())
+		}
+		return false
+	case "/mode":
+		if len(f) > 1 {
+			gate.SetMode(policy.ParseMode(f[1]))
+		} else if m, err := u.choose("Approval mode", []menuItem{
+			{value: "ask", hint: "confirm every change and command"},
+			{value: "auto", hint: "confirm only risky actions (default)"},
+			{value: "yolo", hint: "never ask"},
+			{value: "plan", hint: "read-only: investigate and propose a plan"},
+		}, string(gate.GetMode()), false); err == nil {
+			gate.SetMode(policy.ParseMode(m))
+		} else {
+			return false
+		}
+		u.success("Mode: " + string(gate.GetMode()))
+		return false
+	}
+	switch f[0] {
+	case "/help", "/?", "/login", "/logout", "/config", "/settings", "/effort", "/model", "/mode":
+		return false
 	case "/exit", "/quit", "/q":
 		return true
 	case "/clear", "/new":
 		a.Reset()
 		*sess = *session.New(sess.Cwd, sess.Model)
 		fmt.Fprintln(os.Stderr, "· new conversation")
-	case "/model":
-		if len(f) < 2 {
-			fmt.Fprintln(os.Stderr, "· model:", sess.Model)
-			return false
-		}
-		res, err := provider.Resolve(f[1], cfg, auth)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			return false
-		}
-		a.Client, a.Model = res.Client, res.Model
-		a.Env.Vision = res.Vision()
-		// The new model's reasoning capabilities, same requested effort.
-		a.Reasoning = res.Reasoning(a.Reasoning.Effort)
-		sess.Model = res.Provider + "/" + res.Model
-		fmt.Fprintln(os.Stderr, "· model:", sess.Model)
-	case "/mode":
-		if len(f) > 1 {
-			gate.SetMode(policy.ParseMode(f[1]))
-		}
-		fmt.Fprintln(os.Stderr, "· mode:", gate.GetMode())
 	case "/sessions":
 		list, _ := session.ForCwd(sess.Cwd, 10)
 		if len(list) == 0 {
@@ -879,7 +1135,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
 	default:
-		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo|plan> /plan /go /skills /<skill> /usage /exit")
+		u.failure("unknown command " + f[0] + u.paint(cDim, " · /help lists commands"))
 	}
 	return false
 }

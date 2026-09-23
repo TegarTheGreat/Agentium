@@ -82,10 +82,11 @@ make build
 ## Quick start
 
 ```sh
-export ANTHROPIC_API_KEY=...        # or OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, ...
-agentium                            # interactive session
+agentium                            # first run: pick a provider, paste a key, choose a model
 agentium "add a --json flag to main.go"
 ```
+
+On first run Agentium asks for a provider and key, then saves them. Environment variables such as `ANTHROPIC_API_KEY` or `DEEPSEEK_API_KEY` also work. While it works you see each step live: running commands show their latest output, and anything you type is queued for when the current turn finishes.
 
 ### Common invocations
 
@@ -106,8 +107,8 @@ agentium "add a --json flag to main.go"
 
 | | |
 |---|---|
-| **Commands** | `/plan` `/go` `/undo` `/sessions` `/resume <n>` `/clear` `/model <provider/model>` `/mode ask\|auto\|yolo\|plan` `/usage` `/skills` `/<skill> [task]` `/exit` |
-| **Keys** | ↑/↓ history · Ctrl-A/E/U/K/W · pastes keep their newlines · end a line with `\` for a newline · Ctrl-C interrupts a running turn |
+| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/exit` |
+| **Keys** | ↑/↓ history · Ctrl-A/E/U/K/W · pastes keep their newlines · end a line with `\` for a newline · Ctrl-C interrupts a running turn · typing during a turn queues a message |
 
 ### Subcommands
 
@@ -293,7 +294,7 @@ make cross   # binaries for Linux, macOS and Windows in dist/
 
 Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
 
-> **Status:** v0.11.0. Agentium has not yet been evaluated end to end against live model APIs or a full Terminal-Bench run. Bug reports are welcome.
+> **Status:** v0.12.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
 
 ## License
 

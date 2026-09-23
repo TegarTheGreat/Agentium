@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -72,3 +73,6 @@ func init() {
 		}
 	}
 }
+
+// inputReady: console input has no cheap poll here; wait for the key.
+func inputReady(*os.File, time.Duration) bool { return true }

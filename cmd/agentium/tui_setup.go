@@ -1,0 +1,610 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/tegarthegreat/agentium/internal/agent"
+	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/models"
+	"github.com/tegarthegreat/agentium/internal/provider"
+)
+
+// turnCost is the price of a turn's usage, 0 when unknown.
+func turnCost(res provider.Resolved, fb *provider.Fallback, st agent.Stats) float64 {
+	info, known := res.Info, res.Known
+	if fb != nil {
+		act := fb.Active()
+		info, known = act.Info, act.Known
+	}
+	if !known {
+		return 0
+	}
+	return info.Price(st.Usage.Input, st.Usage.Output, st.Usage.CacheRead, st.Usage.CacheWrite)
+}
+
+// turnSummary is the line printed after each turn in the terminal UI.
+func (u *ui) turnSummary(st agent.Stats, err error, cost float64) string {
+	us := st.Usage
+	parts := []string{fmt.Sprintf("%.1fs", st.Elapsed.Seconds())}
+	if st.ToolCalls > 0 {
+		parts = append(parts, fmt.Sprintf("%d step%s", st.ToolCalls, plural(st.ToolCalls)))
+	}
+	in := fmtK(us.Input+us.CacheRead+us.CacheWrite) + " in"
+	if us.CacheRead > 0 {
+		in += fmt.Sprintf(" (%s cached)", fmtK(us.CacheRead))
+	}
+	parts = append(parts, in, fmtK(us.Output)+" out")
+	if cost > 0 {
+		parts = append(parts, fmt.Sprintf("$%.4f", cost))
+	}
+	head := u.paint(cGreen, "●") + " "
+	if err != nil {
+		head = u.paint(cRed, "●") + " "
+	}
+	return "\n" + head + u.paint(cDim, strings.Join(parts, " · "))
+}
+
+// banner is shown when an interactive session starts.
+func (u *ui) banner(model, mode, box, cwd string) {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cwd, home) {
+		cwd = "~" + strings.TrimPrefix(cwd, home)
+	}
+	rows := []string{
+		u.paint(cCyan, "◆") + " " + u.paint(cBold, "Agentium") + " " + u.paint(cDim, version),
+		"",
+		u.paint(cDim, "model   ") + model,
+		u.paint(cDim, "mode    ") + mode + u.paint(cDim, " · "+box),
+		u.paint(cDim, "folder  ") + cwd,
+	}
+	w := 0
+	for _, r := range rows {
+		if n := strWidth(r); n > w {
+			w = n
+		}
+	}
+	if max := termWidth(os.Stderr) - 4; w > max {
+		w = max
+	}
+	var sb strings.Builder
+	sb.WriteString(u.paint(cGray, "╭"+strings.Repeat("─", w+2)+"╮") + "\n")
+	for _, r := range rows {
+		pad := w - strWidth(r)
+		if pad < 0 {
+			pad = 0
+		}
+		sb.WriteString(u.paint(cGray, "│") + " " + r + strings.Repeat(" ", pad) + " " + u.paint(cGray, "│") + "\n")
+	}
+	sb.WriteString(u.paint(cGray, "╰"+strings.Repeat("─", w+2)+"╯") + "\n")
+	sb.WriteString(u.paint(cDim, "  /help commands · /model switch model · /login add a provider · Ctrl-C interrupt") + "\n")
+	os.Stderr.WriteString(sb.String())
+}
+
+// prompt is the input prompt for the current mode.
+func (u *ui) prompt(plan bool) string {
+	if plan {
+		return u.paint(cMagenta, "plan ❯") + " "
+	}
+	return u.paint(cCyan, "❯") + " "
+}
+
+var helpRows = [][2]string{
+	{"/model", "choose a model (or /model provider/model)"},
+	{"/login", "add or change a provider's API key"},
+	{"/logout", "remove a provider's stored key"},
+	{"/mode", "approvals: ask · auto · yolo · plan"},
+	{"/effort", "reasoning effort: low · medium · high · xhigh · max"},
+	{"/plan  /go", "investigate read-only, then carry out the plan"},
+	{"/undo", "revert the last turn's file changes"},
+	{"/sessions  /resume", "list and continue saved conversations"},
+	{"/clear", "start a new conversation"},
+	{"/skills", "list skills; /<skill> [task] runs one"},
+	{"/usage", "tokens used in this session"},
+	{"/config", "show current settings"},
+	{"/exit", "quit (also Ctrl-D)"},
+}
+
+func (u *ui) help() {
+	var sb strings.Builder
+	sb.WriteString("\n" + u.paint(cBold, "Commands") + "\n")
+	for _, r := range helpRows {
+		sb.WriteString("  " + u.paint(cCyan, fmt.Sprintf("%-20s", r[0])) + u.paint(cDim, r[1]) + "\n")
+	}
+	sb.WriteString("\n" + u.paint(cBold, "Keys") + "\n")
+	sb.WriteString(u.paint(cDim, "  ↑/↓ history · Ctrl-A/E start/end · Ctrl-U/K/W delete · end a line with \\ for a newline\n"))
+	sb.WriteString(u.paint(cDim, "  @file.png attaches an image · Ctrl-C interrupts a running turn\n"))
+	os.Stderr.WriteString(sb.String())
+}
+
+// note prints a dim status line.
+func (u *ui) note(s string) { fmt.Fprintln(os.Stderr, u.paint(cDim, "  "+s)) }
+
+// success prints a green check line.
+func (u *ui) success(s string) { fmt.Fprintln(os.Stderr, u.paint(cGreen, "✓")+" "+s) }
+
+// failure prints a red error line.
+func (u *ui) failure(s string) { fmt.Fprintln(os.Stderr, u.paint(cRed, "✗")+" "+s) }
+
+// readKey reads one key press in raw mode.
+func readKey() (string, error) {
+	restore, err := makeRaw(os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	defer restore()
+	return (&editor{in: os.Stdin}).key()
+}
+
+// menuItem is one choice in a menu.
+type menuItem struct {
+	value, label, hint string
+}
+
+var errCanceled = errors.New("canceled")
+
+// choose shows an arrow-key menu and returns the chosen item's value.
+// Typing filters the list; with allowCustom, Enter on a filter that
+// matches nothing returns the typed text.
+func (u *ui) choose(title string, items []menuItem, current string, allowCustom bool) (string, error) {
+	if !isTTY(os.Stdin) || !isTTY(os.Stderr) {
+		return "", errors.New("not a terminal")
+	}
+	restore, err := makeRaw(os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	defer restore()
+	ed := &editor{in: os.Stdin}
+	out := os.Stderr
+	out.WriteString("\033[?25l") // hide cursor
+	fmt.Fprint(out, "\r\n"+u.paint(cBold, title)+"\r\n")
+	filter, sel, top, drawn := "", 0, 0, 0
+	defer func() {
+		// Remove the menu once answered; the caller reports the choice.
+		out.WriteString(strings.Repeat("\033[1A\033[2K", drawn+2) + "\r\033[?25h")
+	}()
+	for i, it := range items {
+		if it.value == current {
+			sel = i
+		}
+	}
+	const rows = 10
+	visible := func() []menuItem {
+		if filter == "" {
+			return items
+		}
+		var v []menuItem
+		f := strings.ToLower(filter)
+		for _, it := range items {
+			if strings.Contains(strings.ToLower(it.value+" "+it.label), f) {
+				v = append(v, it)
+			}
+		}
+		return v
+	}
+	width := termWidth(out) - 2
+	for {
+		vis := visible()
+		if sel >= len(vis) {
+			sel = len(vis) - 1
+		}
+		if sel < 0 {
+			sel = 0
+		}
+		if sel < top {
+			top = sel
+		}
+		if sel >= top+rows {
+			top = sel - rows + 1
+		}
+		var sb strings.Builder
+		for i := 0; i < drawn; i++ {
+			sb.WriteString("\033[1A\033[2K")
+		}
+		sb.WriteString("\r\033[2K")
+		lines := 0
+		hint := "↑/↓ move · Enter select · Esc cancel · type to filter"
+		if filter != "" {
+			hint = "filter: " + filter
+		}
+		sb.WriteString(u.paint(cDim, "  "+hint) + "\r\n")
+		lines++
+		for i := top; i < len(vis) && i < top+rows; i++ {
+			it := vis[i]
+			label := it.label
+			if label == "" {
+				label = it.value
+			}
+			row := "  " + label
+			if it.hint != "" {
+				row += "  " + u.paint(cDim, truncate(it.hint, width-strWidth(label)-6))
+			}
+			if i == sel {
+				row = u.paint(cCyan, "❯ "+label)
+				if it.hint != "" {
+					row += "  " + u.paint(cDim, truncate(it.hint, width-strWidth(label)-6))
+				}
+			}
+			sb.WriteString("\033[2K" + row + "\r\n")
+			lines++
+		}
+		if len(vis) == 0 {
+			msg := "  no match"
+			if allowCustom {
+				msg = "  Enter to use \"" + filter + "\""
+			}
+			sb.WriteString("\033[2K" + u.paint(cDim, msg) + "\r\n")
+			lines++
+		} else if len(vis) > rows {
+			sb.WriteString("\033[2K" + u.paint(cDim, fmt.Sprintf("  %d/%d", sel+1, len(vis))) + "\r\n")
+			lines++
+		}
+		out.WriteString(sb.String())
+		drawn = lines
+		k, err := ed.key()
+		if err != nil {
+			return "", err
+		}
+		switch k {
+		case "\x1b[A", "\x10", "\x1bOA":
+			sel--
+		case "\x1b[B", "\x0e", "\x1bOB":
+			sel++
+		case "\x1b[5~":
+			sel -= rows
+		case "\x1b[6~":
+			sel += rows
+		case "\r", "\n":
+			if len(vis) > 0 {
+				return vis[sel].value, nil
+			}
+			if allowCustom && filter != "" {
+				return filter, nil
+			}
+		case "\x1b", "\x03", "\x04":
+			return "", errCanceled
+		case "\x7f", "\x08":
+			if filter != "" {
+				r := []rune(filter)
+				filter = string(r[:len(r)-1])
+				sel, top = 0, 0
+			}
+		default:
+			if len(k) >= 1 && k[0] >= 0x20 && k[0] != 0x7f && !strings.HasPrefix(k, "\x1b") {
+				filter += k
+				sel, top = 0, 0
+			}
+		}
+	}
+}
+
+// readSecretMasked reads a secret showing • per character.
+func readSecretMasked(prompt string) (string, error) {
+	restore, err := makeRaw(os.Stdin)
+	if err != nil {
+		return readSecret(prompt) // no raw mode: stty fallback
+	}
+	defer restore()
+	out := os.Stderr
+	out.WriteString("\x1b[?2004h")
+	defer out.WriteString("\x1b[?2004l")
+	fmt.Fprint(out, prompt)
+	ed := &editor{in: os.Stdin}
+	var buf []rune
+	for {
+		k, err := ed.key()
+		if err != nil {
+			return "", err
+		}
+		switch k {
+		case "\r", "\n":
+			out.WriteString("\r\n")
+			return strings.TrimSpace(string(buf)), nil
+		case "\x03", "\x1b":
+			out.WriteString("\r\n")
+			return "", errCanceled
+		case "\x7f", "\x08":
+			if len(buf) > 0 {
+				buf = buf[:len(buf)-1]
+				out.WriteString("\b \b")
+			}
+		case "\x15":
+			out.WriteString(strings.Repeat("\b \b", len(buf)))
+			buf = nil
+		case "\x1b[200~", "\x1b[201~":
+		default:
+			if !strings.HasPrefix(k, "\x1b") {
+				for _, r := range k {
+					if r >= 0x20 {
+						buf = append(buf, r)
+						out.WriteString("•")
+					}
+				}
+			}
+		}
+	}
+}
+
+// providerInfo labels the providers offered by the setup menu.
+var providerInfo = []struct{ id, name, keyURL string }{
+	{"anthropic", "Anthropic (Claude)", "https://console.anthropic.com/settings/keys"},
+	{"openai", "OpenAI", "https://platform.openai.com/api-keys"},
+	{"gemini", "Google Gemini", "https://aistudio.google.com/apikey"},
+	{"deepseek", "DeepSeek", "https://platform.deepseek.com/api_keys"},
+	{"openrouter", "OpenRouter (hundreds of models)", "https://openrouter.ai/keys"},
+	{"xai", "xAI (Grok)", "https://console.x.ai"},
+	{"groq", "Groq", "https://console.groq.com/keys"},
+	{"cerebras", "Cerebras", "https://cloud.cerebras.ai"},
+	{"mistral", "Mistral", "https://console.mistral.ai/api-keys"},
+	{"moonshot", "Moonshot (Kimi)", "https://platform.moonshot.ai"},
+	{"zai", "Z.ai (GLM)", "https://z.ai/manage-apikey/apikey-list"},
+	{"together", "Together AI", "https://api.together.ai/settings/api-keys"},
+	{"fireworks", "Fireworks", "https://fireworks.ai/account/api-keys"},
+	{"github", "GitHub Models", "https://github.com/settings/tokens"},
+	{"ollama", "Ollama (local)", ""},
+	{"lmstudio", "LM Studio (local)", ""},
+}
+
+// saveKey stores a provider key in the OS keychain, else auth.json.
+func saveKey(id, key string) (string, error) {
+	auth, err := config.LoadAuth()
+	if err != nil {
+		return "", err
+	}
+	where := "~/.agentium/auth.json"
+	if config.KeychainAvailable() && config.KeychainSet(id, key) == nil {
+		auth[id] = config.Credential{Keychain: true}
+		where = "the OS keychain"
+	} else {
+		auth[id] = config.Credential{APIKey: key}
+	}
+	return where, config.SaveAuth(auth)
+}
+
+// setup walks through choosing a provider, entering its key and picking
+// a model, saves them, and returns the "provider/model" reference. With
+// pid set the provider step is skipped.
+func (u *ui) setup(pid string) (string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", err
+	}
+	auth, err := config.LoadAuth()
+	if err != nil {
+		return "", err
+	}
+	specs := provider.Specs(cfg)
+	if pid == "" {
+		var items []menuItem
+		for _, p := range providerInfo {
+			s, ok := specs[p.id]
+			if !ok {
+				continue
+			}
+			hint := "needs an API key"
+			switch {
+			case s.NoKey:
+				hint = "runs locally, no key"
+			case provider.Key(s, auth) != "":
+				hint = "✓ connected"
+			}
+			items = append(items, menuItem{value: p.id, label: p.name, hint: hint})
+		}
+		if pid, err = u.choose("Choose a provider", items, "", false); err != nil {
+			return "", err
+		}
+	}
+	s, ok := specs[pid]
+	if !ok {
+		return "", fmt.Errorf("unknown provider %q", pid)
+	}
+	name, keyURL := pid, ""
+	for _, p := range providerInfo {
+		if p.id == pid {
+			name, keyURL = p.name, p.keyURL
+		}
+	}
+	if !s.NoKey && s.Protocol != "bedrock" && s.Protocol != "vertex" {
+		has := provider.Key(s, auth) != ""
+		for attempt := 0; ; attempt++ {
+			if has && attempt == 0 {
+				replace, err := u.choose(name+" is already connected", []menuItem{
+					{value: "keep", label: "Keep the current key"},
+					{value: "new", label: "Enter a new key"},
+				}, "keep", false)
+				if err != nil {
+					return "", err
+				}
+				if replace == "keep" {
+					break
+				}
+			}
+			fmt.Fprintln(os.Stderr)
+			if keyURL != "" {
+				u.note("Get a key at " + keyURL)
+			}
+			key, err := readSecretMasked(u.paint(cBold, "  "+name+" API key: "))
+			if err != nil {
+				return "", err
+			}
+			if key == "" {
+				return "", errCanceled
+			}
+			where, err := saveKey(pid, key)
+			if err != nil {
+				return "", err
+			}
+			auth, _ = config.LoadAuth()
+			// Listing models doubles as a key check.
+			u.note("checking the key…")
+			if _, err := provider.ListModels(context.Background(), pid, cfg, auth); err != nil && strings.Contains(err.Error(), "401") {
+				u.failure("the key was rejected (" + firstLine(err.Error()) + "); try again")
+				has = false
+				continue
+			}
+			u.success("Saved the " + name + " key to " + where)
+			break
+		}
+	}
+	model, err := u.pickModel(pid, cfg, auth, "")
+	if err != nil {
+		return "", err
+	}
+	ref := pid + "/" + model
+	if err := config.Set("model", ref); err != nil {
+		return "", err
+	}
+	return ref, nil
+}
+
+// pickModel lists a provider's models (live from its API, with details
+// from models.dev) and returns the chosen model id.
+func (u *ui) pickModel(pid string, cfg config.Config, auth config.Auth, current string) (string, error) {
+	u.note("loading models…")
+	live, _ := provider.ListModels(context.Background(), pid, cfg, auth)
+	known := map[string]models.Model{}
+	registryID := pid
+	if a, ok := models.Aliases[pid]; ok {
+		registryID = a
+	}
+	for _, m := range models.List(config.Home(), registryID) {
+		known[m.ID] = m
+	}
+	ids := live
+	if len(ids) == 0 {
+		for id, m := range known {
+			if m.Tools {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+	}
+	def := provider.Specs(cfg)[pid].Default
+	if current == "" {
+		current = def
+	}
+	var items []menuItem
+	for _, id := range ids {
+		hint := ""
+		if m, ok := known[id]; ok {
+			if !m.Tools {
+				continue // cannot call tools: useless for an agent
+			}
+			hint = fmt.Sprintf("%s context", fmtK(m.Context))
+			if m.Cost.Input > 0 || m.Cost.Output > 0 {
+				hint += fmt.Sprintf(" · $%g / $%g per M tokens", m.Cost.Input, m.Cost.Output)
+			}
+		}
+		if id == def {
+			hint = strings.TrimPrefix(hint+" · recommended", " · ")
+		}
+		items = append(items, menuItem{value: id, hint: hint})
+	}
+	// Recommended first, then newest registry entries, then the rest.
+	sort.SliceStable(items, func(i, j int) bool {
+		if (items[i].value == def) != (items[j].value == def) {
+			return items[i].value == def
+		}
+		return known[items[i].value].Released > known[items[j].value].Released
+	})
+	if len(items) == 0 && def != "" {
+		items = append(items, menuItem{value: def, hint: "recommended"})
+	}
+	return u.choose("Choose a model", items, current, true)
+}
+
+// showConfig prints the current settings.
+func (u *ui) showConfig(model, mode, effort, box string) {
+	if effort == "" {
+		effort = "model default"
+	}
+	rows := [][2]string{
+		{"model", model}, {"mode", mode}, {"effort", effort}, {"sandbox", box},
+		{"config", filepath.Join(config.Home(), "config.json")},
+	}
+	fmt.Fprintln(os.Stderr)
+	for _, r := range rows {
+		fmt.Fprintln(os.Stderr, "  "+u.paint(cDim, fmt.Sprintf("%-8s", r[0]))+r[1])
+	}
+}
+
+// approvalTitle turns a gate action ("bash: cmd") into a question.
+func approvalTitle(action, reason string) (title, what string) {
+	kind, what, ok := strings.Cut(action, ": ")
+	if !ok {
+		return "Allow this?", action
+	}
+	switch kind {
+	case "bash":
+		title = "Run this command?"
+	case "write":
+		title = "Change this file?"
+	case "network":
+		title = "Allow network access for this command?"
+	case "read":
+		title = "Read this file?"
+	case "fetch":
+		title = "Fetch this URL?"
+	case "mcp":
+		title = "Use this MCP tool?"
+	default:
+		title = "Allow " + kind + "?"
+	}
+	if reason != "" && reason != "ask mode" && !strings.HasPrefix(title, "Allow network") {
+		title += "  " + reason
+	}
+	return title, what
+}
+
+// approve asks for permission with a single key press.
+func (u *ui) approve(action, reason string) (string, error) {
+	title, what := approvalTitle(action, reason)
+	u.mu.Lock()
+	u.paused = true
+	u.clearLive()
+	u.endLine()
+	u.afterTool = false
+	width := termWidth(os.Stderr) - 4
+	fmt.Fprintf(os.Stderr, "\n%s %s\n  %s\n  %s ",
+		u.paint(cYellow, "▲"), u.paint(cBold, title), u.paint(cCyan, truncate(what, width)),
+		u.paint(cDim, "[y] yes  [a] always  [n] no ›"))
+	u.mu.Unlock()
+	defer func() {
+		u.mu.Lock()
+		u.paused = false
+		held := u.held
+		u.held = nil
+		for _, l := range held {
+			fmt.Fprintln(os.Stderr, l)
+		}
+		u.mu.Unlock()
+	}()
+	start := time.Now()
+	u.drainKeys()
+	for {
+		k, err := u.nextKey()
+		if err != nil {
+			return "", err
+		}
+		if time.Since(start) < 400*time.Millisecond {
+			continue // keys typed before the prompt appeared are not answers
+		}
+		switch strings.ToLower(k) {
+		case "y":
+			fmt.Fprintln(os.Stderr, u.paint(cGreen, "yes"))
+			return "y", nil
+		case "a":
+			fmt.Fprintln(os.Stderr, u.paint(cGreen, "always"))
+			return "a", nil
+		case "n", "\r", "\n", "\x1b", "\x03":
+			fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
+			return "n", nil
+		}
+	}
+}
