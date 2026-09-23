@@ -463,3 +463,57 @@ func TestMCPEndToEnd(t *testing.T) {
 		t.Fatalf("MCP result missing: %s", second)
 	}
 }
+
+func TestBestOf(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if !strings.Contains(string(b), `"role":"tool"`) {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"e1","function":{"name":"edit","arguments":"{\"path\":\"calc.sh\",\"old\":\"$1 - $2\",\"new\":\"$1 + $2\"}"}}]}}]}`+"\n\n")
+		} else if !strings.Contains(string(b), "sh test.sh") && strings.Contains(string(b), "have not run a build") {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b1","function":{"name":"bash","arguments":"{\"cmd\":\"sh test.sh\"}"}}]}}]}`+"\n\n")
+		} else {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"fixed"}}]}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	gitc := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	gitc("init", "-q")
+	os.WriteFile(filepath.Join(dir, "calc.sh"), []byte("echo $(( $1 - $2 ))\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "test.sh"), []byte("[ \"$(sh calc.sh 2 3)\" = 5 ]\n"), 0o644)
+	gitc("add", "-A")
+	gitc("commit", "-q", "-m", "init")
+
+	stdout, stderr, err := runBin(t, home, dir, "", "--best-of", "3", "--check", "sh test.sh", "-m", "fakeoai/m", "fix calc")
+	if err != nil || !strings.Contains(stdout, "Applied attempt") {
+		t.Fatalf("%v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "calc.sh")); !strings.Contains(string(b), "$1 + $2") {
+		t.Fatalf("winner not applied: %s", b)
+	}
+	if strings.Count(stderr, "pass ·") != 3 {
+		t.Fatalf("expected 3 passing attempts:\n%s", stderr)
+	}
+	if out, _ := exec.Command("git", "-C", dir, "worktree", "list").Output(); strings.Count(string(out), "\n") != 1 {
+		t.Fatalf("worktrees not cleaned up:\n%s", out)
+	}
+	// A check that never passes applies nothing and exits 2.
+	os.WriteFile(filepath.Join(dir, "calc.sh"), []byte("echo $(( $1 - $2 ))\n"), 0o644)
+	_, _, err = runBin(t, home, dir, "", "--best-of", "2", "--check", "false", "-m", "fakeoai/m", "fix calc")
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("failing check: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "calc.sh")); !strings.Contains(string(b), "$1 - $2") {
+		t.Fatal("nothing should be applied when no attempt passes")
+	}
+}

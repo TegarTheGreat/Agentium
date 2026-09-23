@@ -59,6 +59,7 @@ Flags:
   -q                  quiet: no tool lines or stats
   --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
   --max-cost USD      stop once the session has cost this much (needs a known price)
+  --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
 
 In a session: /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
@@ -294,6 +295,8 @@ func run(args []string) error {
 	effort := fs.String("effort", "", "")
 	asJSON := fs.Bool("json", false, "")
 	maxCost := fs.Float64("max-cost", 0, "")
+	bestOf := fs.Int("best-of", 0, "")
+	check := fs.String("check", "", "")
 	fast := fs.Bool("fast", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -559,6 +562,21 @@ func run(args []string) error {
 		return err
 	}
 
+	if *bestOf > 1 {
+		if *prompt == "" {
+			return errors.New("--best-of needs a prompt")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		active.Store(&cancel)
+		defer cancel()
+		if store != nil {
+			if id, err := store.Snapshot(ctx, "before best-of"); err == nil {
+				sess.AddCheckpoint(id, *prompt)
+				_ = sess.Save()
+			}
+		}
+		return bestOfN(ctx, *bestOf, *check, *prompt, cwd, res, a, u)
+	}
 	if *prompt != "" && *asJSON {
 		jw := newJSONWriter(os.Stdout)
 		jw.emit(map[string]any{"type": "session", "id": sess.ID, "model": res.Provider + "/" + res.Model, "sandbox": a.Env.Sandbox != nil, "mode": string(gate.GetMode())})
