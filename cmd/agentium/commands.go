@@ -10,12 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/bench"
+	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/session"
 )
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
@@ -214,4 +217,75 @@ func cmdBench(args []string) error {
 		fmt.Printf("  total        %d/%d pass · %d turns · in %s · out %s · %.1fs\n", pass, len(results), turns, fmtK(tokIn), fmtK(tokOut), total.Seconds())
 	}
 	return err
+}
+
+func openCheckpoints(cfg config.Config, root string) *checkpoint.Store {
+	if cfg.Checkpoints != nil && !*cfg.Checkpoints {
+		return nil
+	}
+	s, err := checkpoint.Open(filepath.Join(config.Home(), "checkpoints"), root)
+	if err != nil {
+		return nil
+	}
+	return s
+}
+
+// undoLast restores the newest checkpoint of sess and returns a note for
+// the model describing what was reverted.
+func undoLast(store *checkpoint.Store, sess *session.Session) (string, error) {
+	if store == nil {
+		return "", errors.New("checkpoints are disabled (needs git, and \"checkpoints\" not false)")
+	}
+	cp, ok := sess.PopCheckpoint()
+	if !ok {
+		return "", errors.New("nothing to undo")
+	}
+	files, err := store.Restore(context.Background(), cp.ID)
+	if err != nil {
+		sess.AddCheckpoint(cp.ID, cp.Prompt)
+		return "", fmt.Errorf("undo failed: %v", err)
+	}
+	if len(files) == 0 {
+		fmt.Fprintf(os.Stderr, "· no file changes to revert for %q\n", firstLine(cp.Prompt))
+		return "", nil
+	}
+	fmt.Fprintf(os.Stderr, "· reverted %d file(s) changed by %q: %s\n", len(files), firstLine(cp.Prompt), strings.Join(limitList(files, 8), ", "))
+	return fmt.Sprintf("The user undid the file changes from the turn %q. Restored: %s. Re-read files before editing them.",
+		firstLine(cp.Prompt), strings.Join(limitList(files, 20), ", ")), nil
+}
+
+func limitList(xs []string, n int) []string {
+	if len(xs) <= n {
+		return xs
+	}
+	return append(append([]string(nil), xs[:n]...), fmt.Sprintf("… %d more", len(xs)-n))
+}
+
+func cmdUndo() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if r, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = r
+	}
+	sess, err := session.Latest(cwd)
+	if err != nil {
+		return err
+	}
+	if sess == nil {
+		return errors.New("no session in this directory")
+	}
+	note, err := undoLast(openCheckpoints(cfg, cwd), sess)
+	if err != nil {
+		return err
+	}
+	if note != "" {
+		sess.Note = note
+	}
+	return sess.Save()
 }

@@ -37,6 +37,7 @@ var bashTool = Tool{
 				return "", fmt.Errorf("denied (%s); choose another approach or ask the user", why)
 			}
 		}
+		env.mutate()
 		t := a.Timeout
 		if t <= 0 {
 			t = bashDefaultTimeout

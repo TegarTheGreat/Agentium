@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,7 +153,16 @@ func TestSearch(t *testing.T) {
 	write(t, e, "src/main.go", "package main\nfunc Hello() {}\n")
 	write(t, e, "src/util.go", "package main\nfunc helper() {}\n")
 	write(t, e, "README.md", "hello docs\n")
+	write(t, e, ".github/ci.yml", "run: func Hello\n")
+	write(t, e, ".git/config", "func Hello in git internals\n")
 	check := func(name string) {
+		out, _ := call(t, searchTool, e, `{"pattern":"run: func"}`)
+		if !strings.Contains(out, ".github/ci.yml") {
+			t.Fatalf("%s: hidden files must be searched: %q", name, out)
+		}
+		if out, _ := call(t, searchTool, e, `{"pattern":"git internals"}`); out != "(no matches)" {
+			t.Fatalf("%s: .git must be skipped: %q", name, out)
+		}
 		out, err := call(t, searchTool, e, `{"pattern":"func [Hh]el"}`)
 		if err != nil || !strings.Contains(out, "src/main.go:2:") || !strings.Contains(out, "src/util.go:2:") {
 			t.Fatalf("%s grep: %q %v", name, out, err)
@@ -173,7 +183,7 @@ func TestSearch(t *testing.T) {
 	check("default")
 	// Force the pure-Go fallback.
 	out, err := walkSearch(context.Background(), e.Root, e.Root, "func [Hh]el", "", false)
-	if err != nil || !strings.Contains(out, "src/main.go:2:") {
+	if err != nil || !strings.Contains(out, "src/main.go:2:") || !strings.Contains(out, ".github/ci.yml") || strings.Contains(out, "internals") {
 		t.Fatalf("fallback: %q %v", out, err)
 	}
 	out, _ = walkSearch(context.Background(), e.Root, e.Root, "", "src/**/*.go", false)
@@ -188,7 +198,18 @@ func TestFetch(t *testing.T) {
 		fmt.Fprint(w, `<html><head><title>x</title><script>evil()</script></head><body><h1>Title</h1><p>Hello &amp; welcome</p><ul><li>one</li></ul></body></html>`)
 	}))
 	defer srv.Close()
-	out, err := call(t, fetchTool, env(t), fmt.Sprintf(`{"url":%q}`, srv.URL))
+	// httptest listens on 127.0.0.1, which is blocked by default.
+	if _, err := call(t, fetchTool, env(t), fmt.Sprintf(`{"url":%q}`, srv.URL)); err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("loopback fetch must be blocked: %v", err)
+	}
+	for _, u := range []string{"http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "http://[::1]:9/", "http://localhost:1/"} {
+		if _, err := call(t, fetchTool, env(t), fmt.Sprintf(`{"url":%q}`, u)); err == nil || !strings.Contains(err.Error(), "blocked") {
+			t.Fatalf("%s must be blocked: %v", u, err)
+		}
+	}
+	e := env(t)
+	e.AllowPrivateNet = true
+	out, err := call(t, fetchTool, e, fmt.Sprintf(`{"url":%q}`, srv.URL))
 	if err != nil || !strings.Contains(out, "# Title") || !strings.Contains(out, "Hello & welcome") || strings.Contains(out, "evil") || !strings.Contains(out, "untrusted") {
 		t.Fatalf("%q %v", out, err)
 	}
@@ -213,5 +234,59 @@ func TestSchemasAreValidJSON(t *testing.T) {
 		if !json.Valid(tl.Def.Schema) {
 			t.Fatalf("%s schema invalid", tl.Def.Name)
 		}
+	}
+}
+
+func TestEditGuards(t *testing.T) {
+	e := env(t)
+	write(t, e, "a.go", "package a\n")
+	// Whole-file overwrite of an unread existing file is refused.
+	if _, err := call(t, editTool, e, `{"path":"a.go","new":"oops"}`); err == nil || !strings.Contains(err.Error(), "read it first") {
+		t.Fatalf("blind overwrite: %v", err)
+	}
+	call(t, readTool, e, `{"path":"a.go"}`)
+	if _, err := call(t, editTool, e, `{"path":"a.go","new":"package a\n\nvar X = 1\n"}`); err != nil {
+		t.Fatalf("overwrite after read: %v", err)
+	}
+	// Changed behind the agent's back: must re-read.
+	time.Sleep(10 * time.Millisecond)
+	write(t, e, "a.go", "package a\n\nvar X = 2 // edited by user\n")
+	if _, err := call(t, editTool, e, `{"path":"a.go","old":"var X","new":"var Y"}`); err == nil || !strings.Contains(err.Error(), "changed on disk") {
+		t.Fatalf("stale edit: %v", err)
+	}
+	call(t, readTool, e, `{"path":"a.go"}`)
+	if _, err := call(t, editTool, e, `{"path":"a.go","old":"var X","new":"var Y"}`); err != nil {
+		t.Fatalf("edit after re-read: %v", err)
+	}
+	// Consecutive own edits don't trip the stale check.
+	if _, err := call(t, editTool, e, `{"path":"a.go","old":"var Y","new":"var Z"}`); err != nil {
+		t.Fatalf("second own edit: %v", err)
+	}
+}
+
+func TestBeforeMutateOncePerTurn(t *testing.T) {
+	e := env(t)
+	var n int32
+	var mu sync.Mutex
+	e.BeforeMutate = func() { mu.Lock(); n++; mu.Unlock(); time.Sleep(50 * time.Millisecond) }
+	e.StartTurn()
+	done := make(chan struct{})
+	for i := 0; i < 5; i++ {
+		go func(i int) {
+			call(t, editTool, e, fmt.Sprintf(`{"path":"f%d.txt","new":"x"}`, i))
+			done <- struct{}{}
+		}(i)
+	}
+	for i := 0; i < 5; i++ {
+		<-done
+	}
+	call(t, readTool, e, `{"path":"f0.txt"}`) // reads never checkpoint
+	if n != 1 {
+		t.Fatalf("BeforeMutate ran %d times in one turn", n)
+	}
+	e.StartTurn()
+	call(t, bashTool, e, `{"cmd":"true"}`)
+	if n != 2 {
+		t.Fatalf("new turn should checkpoint again, got %d", n)
 	}
 }

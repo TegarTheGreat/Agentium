@@ -19,6 +19,39 @@ type Session struct {
 	Model    string             `json:"model"`
 	Updated  time.Time          `json:"updated"`
 	Messages []provider.Message `json:"messages"`
+	// Checkpoints are workspace snapshots taken before each turn that
+	// changed something, newest last.
+	Checkpoints []Checkpoint `json:"checkpoints,omitempty"`
+	// Note is delivered to the model with the next input (see agent.Note).
+	Note string `json:"note,omitempty"`
+}
+
+// Checkpoint is a restorable workspace snapshot.
+type Checkpoint struct {
+	ID     string    `json:"id"`
+	Prompt string    `json:"prompt"`
+	Time   time.Time `json:"time"`
+}
+
+const maxCheckpoints = 50
+
+// AddCheckpoint appends a snapshot, keeping the newest maxCheckpoints.
+func (s *Session) AddCheckpoint(id, prompt string) {
+	s.Checkpoints = append(s.Checkpoints, Checkpoint{ID: id, Prompt: prompt, Time: time.Now()})
+	if n := len(s.Checkpoints); n > maxCheckpoints {
+		s.Checkpoints = append([]Checkpoint(nil), s.Checkpoints[n-maxCheckpoints:]...)
+	}
+}
+
+// PopCheckpoint removes and returns the newest snapshot.
+func (s *Session) PopCheckpoint() (Checkpoint, bool) {
+	n := len(s.Checkpoints)
+	if n == 0 {
+		return Checkpoint{}, false
+	}
+	cp := s.Checkpoints[n-1]
+	s.Checkpoints = s.Checkpoints[:n-1]
+	return cp, true
 }
 
 func dir() string { return filepath.Join(config.Home(), "sessions") }
@@ -30,7 +63,7 @@ func New(cwd, model string) *Session {
 
 // Save writes the session atomically.
 func (s *Session) Save() error {
-	if len(s.Messages) == 0 {
+	if len(s.Messages) == 0 && len(s.Checkpoints) == 0 {
 		return nil
 	}
 	if err := os.MkdirAll(dir(), 0o700); err != nil {
