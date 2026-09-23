@@ -577,7 +577,7 @@ func run(args []string) error {
 		active.Store(&cancel)
 		st, err := a.Run(ctx, send)
 		if mem != nil {
-			mem.afterTurn(input, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Untrusted(), u.line)
+			mem.afterTurn(input, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), u.line)
 		}
 		runStopHooks(stopHooks, cwd)
 		active.Store(nil)
