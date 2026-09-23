@@ -129,3 +129,35 @@ Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 - https://github.blog/changelog/2026-02-25-github-copilot-cli-is-now-generally-available/ · https://cursor.com/blog/semsearch · https://cursor.com/blog/agent-sandboxing
 - https://docs.cline.bot/core-workflows/plan-and-act · https://blog.jetbrains.com/junie/2026/06/junie-coding-agent-out-of-beta/ · https://zed.dev/docs/ai/agent-panel
 - https://vibecodinghub.org/blog/roo-code-shutdown · https://kilo.ai/articles/roo-to-kilo-migration-guide · https://www.letta.com/blog/letta-code/
+
+---
+
+## D. Status per item (v0.6.0)
+
+| # | Item | Status |
+|---|---|---|
+| P0-1 | Bypassable gate | ✅ OS sandbox (Landlock / sandbox-exec). Writes only in the workspace and caches, network off unless `net=true` is approved. The deny-list got wider and now acts as the second layer. Reading credentials needs approval. |
+| P0-2 | SSRF in `fetch` | ✅ localhost, private IPs, link-local/metadata and CGNAT are blocked. Checked before the request, on every redirect, and at dial time. |
+| P0-3 | No undo | ✅ Shadow-git checkpoint per turn, `/undo` + `agentium undo`, a guard against blind overwrites, and a guard against files that went stale since they were read. |
+| P0-4 | Context full | ✅ Per-model context window, elision of old output and edit arguments, compaction with `fast_model`. |
+| P0-5 | Stream hangs | ✅ 120 s idle timeout, incomplete streams detected, retries (mid-stream too) that respect `Retry-After`. |
+| P1-6 | Automatic verification | ✅ Lint gate on edit (Go/JSON/Python/shell/JS) + one verification reminder before finishing. |
+| P1-7 | Stuck detector | ✅ Warning at 3×, stop at 5× (same call and same result). |
+| P1-8 | Rigid edit tool | ✅ Tolerates CRLF, trailing whitespace and indentation (with re-indent), shows a diffstat. |
+| P1-9 | Hidden files in search | ✅ `rg --hidden` minus `.git`. |
+| P1-10 | Reasoning/thinking | ✅ Adaptive thinking + effort, signed blocks replayed unchanged, `drop_block` for models that require append-only history, `reasoning_effort`, `max_completion_tokens`, `reasoning_content`, Gemini thought signatures. |
+| P1-11 | Truncated replies | ✅ Half-written calls dropped, model asked to continue (at most 2×). |
+| P1-12 | Fallback / fast model | ✅ Sticky `fallback` chain; `fast_model` used for compaction and `tidy`. |
+| P1-13 | Hints in tool output | ✅ Clipped output says how to see the rest. |
+| P1-14 | Tested against real APIs | ❌ Not yet. No API keys in the build environment. |
+| P2-15 | Memory | ✅ USER/MEMORY snapshots, decision log, journal, automatic BM25 recall, `tidy`, redaction and injection filtering. |
+| P2-16 | Broad login | ✅ models.dev (180+ providers), OpenRouter OAuth, GitHub Models, Azure, Bedrock (SigV4), Vertex, OS keychain. ❌ ChatGPT/Copilot OAuth (needs an official client ID). Native Gemini protocol replaced by the compat endpoint + thought signatures. |
+| P2-17 | Headless | ✅ `--json` (JSON Lines), exit codes 0/1/2/130, `--max-cost`. |
+| P2-18 | Terminal UX | ✅ Line editor, history, paste, `/sessions`, `/resume`, session pruning. ❌ Markdown rendering (intentionally plain for now). |
+| P2-19 | Real benchmark | ✅ Harbor adapter for Terminal-Bench 2.x (answer isolation handled by Harbor). ❌ Not run yet. |
+| P2-20 | Distribution | ✅ goreleaser + release workflow + `install.sh` (with checksum). ❌ LICENSE (owner's decision). |
+| P2-21 | Plaintext credentials | ✅ OS keychain when available. |
+| P2-22 | Extensions | ✅ `post_edit` / `stop` hooks, MCP stdio (tools `mcp__server__tool`). |
+| P2-23 | Parallel for big tasks | ✅ `--best-of N --check CMD` in git worktrees. |
+
+**Next steps with the most impact:** a real test with an API key (`agentium bench -m …`), then a Terminal-Bench 2.x run against Codex CLI / Claude Code / Pi on the same model.
