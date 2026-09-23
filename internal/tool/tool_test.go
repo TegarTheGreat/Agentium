@@ -922,7 +922,8 @@ func TestTTYJobs(t *testing.T) {
 	if sandbox.Probe().Available {
 		e.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(e.Root)}
 		out, _ := call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY; touch /etc/agentium-x 2>&1 | head -1","background":true,"tty":true}`)
-		if !strings.Contains(out, "IS_TTY") || !strings.Contains(strings.ToLower(out), "denied") && !strings.Contains(strings.ToLower(out), "read-only") {
+		low := strings.ToLower(out) // Linux: permission denied / read-only; macOS: operation not permitted
+		if !strings.Contains(out, "IS_TTY") || !strings.Contains(low, "denied") && !strings.Contains(low, "read-only") && !strings.Contains(low, "not permitted") {
 			t.Fatalf("sandboxed tty job: %q", out)
 		}
 		e.Sandbox = nil

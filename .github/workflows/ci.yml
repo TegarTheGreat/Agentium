@@ -17,6 +17,19 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: make build && ./agentium bench -runs 10
+  acp:
+    # agentium acp checked against the official ACP SDK's schemas.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: mkdir -p "$RUNNER_TEMP/acp" && npm install --prefix "$RUNNER_TEMP/acp" @agentclientprotocol/sdk@1
+      - run: ACP_SDK_DIR="$RUNNER_TEMP/acp" go test ./cmd/agentium -run ACPOfficialSDK -v
   windows:
     runs-on: windows-latest
     steps:

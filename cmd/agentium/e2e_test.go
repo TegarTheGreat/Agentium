@@ -696,3 +696,34 @@ func TestACPEndToEnd(t *testing.T) {
 		t.Fatalf("unknown method: %v", m)
 	}
 }
+
+// TestACPOfficialSDK runs the official ACP TypeScript SDK against
+// `agentium acp` (set ACP_SDK_DIR to a directory where
+// @agentclientprotocol/sdk is installed; CI does this).
+func TestACPOfficialSDK(t *testing.T) {
+	sdk := os.Getenv("ACP_SDK_DIR")
+	if sdk == "" {
+		t.Skip("ACP_SDK_DIR not set")
+	}
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	script, _ := filepath.Abs("testdata/acp_client.mjs")
+	cmd := exec.Command("node", script, sdk, buildBinary(t), dir)
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "FAKE_KEY=k", "AGENTIUM_OFFLINE=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	s := string(out)
+	for _, want := range []string{`"protocolVersion":1`, `"stopReason":"end_turn"`, `"permissions":1`, `"tool_call"`, `"tool_call_update"`, `"agent_message_chunk"`, `"current_mode_update"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %s in %s", want, s)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "hello.txt")); len(b) == 0 {
+		t.Error("the prompt did not create the file")
+	}
+}

@@ -32,7 +32,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.10.0"
+var version = "0.11.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -47,6 +47,7 @@ Usage:
   agentium undo                 revert the file changes of the last turn here
   agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
   agentium skills [list|show|add|remove]   manage SKILL.md skills (add: dir, git URL or owner/repo, pinned + reviewed)
+  agentium mcp [list|login|logout <name>]   remote MCP servers and their OAuth login
   agentium acp [-m model]       serve the Agent Client Protocol on stdio (Zed, JetBrains)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
@@ -107,6 +108,9 @@ func main() {
 			return
 		case "acp":
 			exit(cmdACP(os.Args[2:]))
+			return
+		case "mcp":
+			exit(cmdMCP(os.Args[2:]))
 			return
 		}
 	}
