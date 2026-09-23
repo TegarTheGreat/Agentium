@@ -119,7 +119,7 @@ func (e *Env) startJob(cmdline string, box *sandbox.Config) (string, error) {
 	id := t.next
 	t.mu.Unlock()
 
-	cmd := exec.Command(shellPath(), "-c", cmdline)
+	cmd := exec.Command(shellPath(), shellArgs(shellPath(), cmdline)...)
 	if box != nil {
 		c, _, err := sandbox.Command(shellPath(), cmdline, *box)
 		if err != nil {

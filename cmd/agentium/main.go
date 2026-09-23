@@ -438,6 +438,11 @@ func run(args []string) error {
 		tools = append(tools, tool.MCPTools(clients)...)
 	}
 	skills := skill.Discover(config.Home(), cwd)
+	if !*quiet {
+		for _, sh := range skill.Shadowed(config.Home(), cwd) {
+			fmt.Fprintln(os.Stderr, u.dim("· "+sh))
+		}
+	}
 	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + skill.Prompt(skills)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
@@ -593,6 +598,7 @@ func run(args []string) error {
 		}
 		if msg, ok, err := skill.Invoke(skills, input); ok {
 			if err != nil {
+				a.Attach = nil // don't carry this turn's images into the next
 				return err
 			}
 			send = msg

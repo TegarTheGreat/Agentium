@@ -164,7 +164,7 @@ func (l *lockedBuffer) String() string {
 func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config, passEnv []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.Command(shellPath(), "-c", cmdline)
+	cmd := exec.Command(shellPath(), shellArgs(shellPath(), cmdline)...)
 	if box != nil {
 		c, _, err := sandbox.Command(shellPath(), cmdline, *box)
 		if err != nil {
