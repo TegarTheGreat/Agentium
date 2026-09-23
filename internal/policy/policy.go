@@ -189,3 +189,12 @@ func (g *Gate) Read(path string) (bool, string) {
 	}
 	return g.ask("read: "+path, "credential file"), "credential file"
 }
+
+// External reports whether an external (MCP) tool may run. Only ask mode
+// gates them; in auto mode the user opted in by configuring the server.
+func (g *Gate) External(name string) (bool, string) {
+	if g.GetMode() != Ask {
+		return true, ""
+	}
+	return g.ask("mcp: "+name, "ask mode"), "ask mode"
+}
