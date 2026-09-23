@@ -378,6 +378,9 @@ func sandboxWanted(cfg config.Config) bool {
 
 // setupSandbox confines env's shell commands when possible.
 func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) sandbox.Status {
+	if cfg.Sandbox != nil {
+		env.PassEnv = cfg.Sandbox.PassEnv
+	}
 	st := sandbox.Probe()
 	if disabled || !sandboxWanted(cfg) || !st.Available {
 		return st
@@ -394,6 +397,7 @@ func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) 
 		}
 		env.Net = policy.ParseNet(cfg.Sandbox.Network)
 	}
+	sc.NetworkUnenforced = !st.Network
 	env.Sandbox = &sc
 	return st
 }

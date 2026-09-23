@@ -127,7 +127,7 @@ func capLines(s string, n int) string {
 // secretGlobs keep credential stores out of search results even when a
 // search covers the home directory.
 var secretGlobs = []string{".ssh/", ".aws/", ".gnupg/", ".kube/", ".docker/", ".netrc", ".npmrc", ".pypirc",
-	".git-credentials", ".config/gcloud/", ".config/gh/", ".agentium/"}
+	".git-credentials", ".config/gcloud/", ".config/gh/", ".agentium/", ".env", ".env.local", ".env.production", ".env.development"}
 
 var skipDirs = map[string]bool{".ssh": true, ".aws": true, ".gnupg": true, ".kube": true, ".docker": true, ".agentium": true, ".git": true, ".hg": true, ".svn": true, "node_modules": true, "vendor": true, ".venv": true, "venv": true, "dist": true, "build": true, "target": true, "__pycache__": true, ".next": true, ".cache": true}
 
@@ -159,7 +159,7 @@ func walkSearch(ctx context.Context, root, dir, pattern, glob string, icase bool
 		}
 		rel, _ := filepath.Rel(root, p)
 		switch d.Name() {
-		case ".netrc", ".npmrc", ".pypirc", ".git-credentials":
+		case ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".env", ".env.local", ".env.production", ".env.development":
 			return nil
 		}
 		if glob != "" && !globMatch(glob, rel) {

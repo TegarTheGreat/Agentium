@@ -29,6 +29,9 @@ type Env struct {
 	Sandbox *sandbox.Config
 	// Net decides whether a sandboxed command may use the network.
 	Net policy.NetPolicy
+	// PassEnv names credential-looking variables that commands may still
+	// see (all others are removed from their environment).
+	PassEnv []string
 	// PostEdit are shell commands run after each successful edit, with
 	// {path} replaced by the edited file (e.g. "gofmt -w {path}").
 	PostEdit []string

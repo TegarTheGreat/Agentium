@@ -310,7 +310,7 @@ func runPostEdit(env *Env, path string) string {
 	var notes []string
 	for _, h := range env.PostEdit {
 		cmd := strings.ReplaceAll(h, "{path}", shellQuote(path))
-		out, err := runShell(context.Background(), env.Root, cmd, 30*time.Second, env.Sandbox)
+		out, err := runShell(context.Background(), env.Root, cmd, 30*time.Second, env.Sandbox, env.PassEnv)
 		if err != nil || strings.Contains(out, "[exit ") {
 			notes = append(notes, fmt.Sprintf("hook %q: %s", h, Clip(strings.TrimSpace(out), 1500)))
 		}
