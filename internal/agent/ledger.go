@@ -21,6 +21,9 @@ type Ledger struct {
 	commands  []cmdRecord
 	lastError string // verbatim tail of the latest failure not yet fixed
 	errCmd    string
+	errLine   string   // the telling line of that failure
+	fixEdits  []string // files changed since it failed
+	lessons   []string // error → fix pairs of this turn
 	todos     []Todo
 
 	// Per user turn.
@@ -48,8 +51,16 @@ const (
 
 func (l *Ledger) startTurn() {
 	l.mu.Lock()
-	l.turnErrors, l.untrusted = nil, false
+	l.turnErrors, l.untrusted, l.lessons = nil, false, nil
 	l.mu.Unlock()
+}
+
+// Lessons returns this turn's resolved failures: what failed and what
+// made it pass.
+func (l *Ledger) Lessons() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.lessons...)
 }
 
 var exitLine = regexp.MustCompile(`\[exit (\d+)\]\s*$`)
@@ -66,6 +77,9 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 		l.read = pushUnique(l.read, str("path"), ledgerFiles)
 	case name == "edit" && err == nil:
 		l.edited = pushUnique(l.edited, str("path"), ledgerFiles)
+		if l.errCmd != "" {
+			l.fixEdits = pushUnique(l.fixEdits, str("path"), 8)
+		}
 	case name == "fetch" || strings.HasPrefix(name, "mcp__"):
 		l.untrusted = true
 	}
@@ -84,10 +98,17 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 			l.commands = l.commands[len(l.commands)-ledgerCommands:]
 		}
 		if !failed && cmd == l.errCmd {
-			l.lastError, l.errCmd = "", "" // the failing command passes now
+			// The failing command passes now: that is a lesson (the brain
+			// learns most from prediction errors that get resolved).
+			how := "after retrying"
+			if len(l.fixEdits) > 0 {
+				how = "after changing " + strings.Join(l.fixEdits, ", ")
+			}
+			l.lessons = append(l.lessons, fmt.Sprintf("`%s` failed (%s); passed %s", cmd, oneLine(l.errLine, 140), how))
+			l.lastError, l.errCmd, l.errLine, l.fixEdits = "", "", "", nil
 		}
-		if failed {
-			l.errCmd = cmd
+		if failed && cmd != l.errCmd {
+			l.errCmd, l.fixEdits = cmd, nil
 		}
 	}
 	if !failed {
@@ -101,6 +122,7 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 		l.errCmd = ""
 	}
 	l.lastError = fmt.Sprintf("%s %s:\n%s", name, oneLine(firstArg(name, a), 120), tailLines(text, errorTailLines, errorTailBytes))
+	l.errLine = errorLine(text)
 	l.turnErrors = append(l.turnErrors, fmt.Sprintf("%s %s → %s", name, oneLine(firstArg(name, a), 80), oneLine(errorLine(text), 160)))
 }
 

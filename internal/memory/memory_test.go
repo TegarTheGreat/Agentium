@@ -69,27 +69,40 @@ func TestSafety(t *testing.T) {
 	}
 }
 
-func TestLimit(t *testing.T) {
+func TestLimitForgetsWeakest(t *testing.T) {
 	s := open(t)
 	var last []string
 	for i := 0; i < 20; i++ {
 		// Distinct facts (similar ones would update each other).
 		last = s.Apply(Parse("@remember fact " + strings.Repeat(string(rune('a'+i)), 200)))
 	}
-	if !strings.Contains(last[0], "memory full") {
-		t.Fatalf("expected full: %v", last)
+	if !strings.Contains(last[0], "memory full: moved") {
+		t.Fatalf("expected eviction note: %v", last)
 	}
-	if b, _ := os.ReadFile(s.MemoryPath); len(b) > MemoryLimit+1 {
+	b, _ := os.ReadFile(s.MemoryPath)
+	if len(b) > MemoryLimit {
 		t.Fatalf("memory grew past its cap: %d", len(b))
+	}
+	if !strings.Contains(string(b), strings.Repeat("t", 200)) || strings.Contains(string(b), strings.Repeat("a", 200)) {
+		t.Fatal("newest must stay, oldest must go")
 	}
 	found := false
 	for _, e := range s.JournalEntries() {
-		if strings.Contains(e, "@pending remember") {
-			found = true
-		}
+		found = found || strings.Contains(e, "@evicted fact "+strings.Repeat("a", 200))
 	}
 	if !found {
-		t.Fatal("overflow should land in the journal")
+		t.Fatal("forgotten note should stay findable in the journal")
+	}
+	// A cited note outlives an uncited one of the same age.
+	root := t.TempDir()
+	os.WriteFile(root+"/Makefile", []byte("x"), 0o644)
+	s2, _ := Open(t.TempDir(), root)
+	s2.Apply(Parse("@remember build with the Makefile target release " + strings.Repeat("m", 150)))
+	for i := 0; i < 20; i++ {
+		s2.Apply(Parse("@remember note " + strings.Repeat(string(rune('a'+i)), 200)))
+	}
+	if !strings.Contains(read(s2.MemoryPath), "Makefile target release") {
+		t.Fatal("cited note was evicted before uncited ones")
 	}
 }
 
@@ -183,5 +196,22 @@ func TestHoldUntrusted(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("held item not journaled as pending")
+	}
+}
+
+func TestLessonsPromotedOnRecurrence(t *testing.T) {
+	s := open(t)
+	l1 := "`go test ./calc` failed (calc_test.go:9: got -1 want 3); passed after changing calc/add.go"
+	if rep := s.Lessons([]string{l1}, true); len(rep) != 0 {
+		t.Fatalf("first occurrence should stay in the journal: %v", rep)
+	}
+	s.Journal("user: fix\nlessons: " + l1)
+	l2 := "`go test ./calc` failed (calc_test.go:12: got -1 want 3); passed after changing calc/add.go"
+	rep := s.Lessons([]string{l2}, true)
+	if len(rep) != 1 || !strings.Contains(read(s.MemoryPath), "lesson: `go test ./calc` failed") {
+		t.Fatalf("recurring lesson not promoted: %v\n%s", rep, read(s.MemoryPath))
+	}
+	if rep := s.Lessons([]string{l2}, false); len(rep) != 0 {
+		t.Fatal("untrusted turns must not write memory")
 	}
 }

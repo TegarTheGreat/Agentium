@@ -75,15 +75,17 @@ func (s *Store) Apply(ds []Directive) []string {
 		switch d.Kind {
 		case "remember":
 			var upd bool
-			upd, err = s.Remember(text)
+			var ev []string
+			upd, ev, err = s.Remember(text)
 			if err == nil {
-				out = append(out, pick(upd, "updated note: ", "remembered: ")+clip(text, 80))
+				out = append(out, pick(upd, "updated note: ", "remembered: ")+clip(text, 80)+forgot(ev))
 			}
 		case "prefer":
 			var upd bool
-			upd, err = s.Prefer(text)
+			var ev []string
+			upd, ev, err = s.Prefer(text)
 			if err == nil {
-				out = append(out, pick(upd, "preference updated: ", "preference saved: ")+clip(text, 80))
+				out = append(out, pick(upd, "preference updated: ", "preference saved: ")+clip(text, 80)+forgot(ev))
 			}
 		case "decide":
 			var id string
@@ -138,4 +140,11 @@ func (s *Store) Hold(ds []Directive) []string {
 		out = append(out, "held for review (this turn read web/MCP content; run `agentium tidy`): "+clip(text, 60))
 	}
 	return out
+}
+
+func forgot(ev []string) string {
+	if len(ev) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (memory full: moved %d older note(s) to the journal, e.g. %q)", len(ev), clip(ev[0], 40))
 }

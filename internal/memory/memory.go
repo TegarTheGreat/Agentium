@@ -188,8 +188,13 @@ var ErrFull = errors.New("memory full")
 // upsert adds fact to a memory file, dated and with the project files it
 // cites. A near-duplicate of an existing entry replaces it (and refreshes
 // its date) instead of piling up, so updated facts win over old ones.
-func (s *Store) upsert(path, fact string, limit int, root string) (updated bool, err error) {
+// When the file is full, the weakest entries are forgotten to make room
+// (see weakest) and returned, so the caller can keep them in the journal.
+func (s *Store) upsert(path, fact string, limit int, root string) (updated bool, evicted []string, err error) {
 	e := Entry{Text: fact, Date: time.Now().Format("2006-01-02"), Cites: citations(root, fact)}
+	if len(e.String())+1 > limit {
+		return false, nil, ErrFull
+	}
 	lines := strings.Split(strings.TrimRight(read(path), "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines = nil
@@ -210,26 +215,79 @@ func (s *Store) upsert(path, fact string, limit int, root string) (updated bool,
 	} else {
 		lines = append(lines, e.String())
 	}
-	next := strings.Join(lines, "\n") + "\n"
-	if len(next) > limit {
-		return false, ErrFull
+	protect := replaced
+	if protect < 0 {
+		protect = len(lines) - 1
 	}
-	return replaced >= 0, write(path, next)
+	for len(strings.Join(lines, "\n"))+1 > limit {
+		i := weakest(lines, protect, root)
+		if i < 0 {
+			return false, nil, ErrFull
+		}
+		if old, ok := parseEntry(lines[i]); ok {
+			evicted = append(evicted, old.Text)
+		}
+		lines = append(lines[:i], lines[i+1:]...)
+		if i < protect {
+			protect--
+		}
+	}
+	return replaced >= 0, evicted, write(path, strings.Join(lines, "\n")+"\n")
+}
+
+// weakest picks the entry to forget, like a forgetting curve: invalid
+// notes (cited files gone) first, then uncited before cited, then the
+// least recently confirmed. Returns -1 when only the new entry is left.
+func weakest(lines []string, protect int, root string) int {
+	best, bestScore := -1, 0.0
+	now := time.Now()
+	for i, l := range lines {
+		e, ok := parseEntry(l)
+		if !ok || i == protect {
+			continue
+		}
+		score := 0.0 // higher = keep
+		if valid, _ := e.valid(root, now); valid {
+			score += 1000
+		}
+		if len(e.Cites) > 0 {
+			score += 100
+		}
+		if d, err := time.Parse("2006-01-02", e.Date); err == nil {
+			score += 90 - min(now.Sub(d).Hours()/24, 90) // fresher = stronger
+		}
+		if best < 0 || score < bestScore {
+			best, bestScore = i, score
+		}
+	}
+	return best
 }
 
 // Remember stores a project fact; updated reports that it replaced a
-// similar older one.
-func (s *Store) Remember(fact string) (updated bool, err error) {
+// similar older one, evicted what was forgotten to make room.
+func (s *Store) Remember(fact string) (updated bool, evicted []string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.upsert(s.MemoryPath, fact, MemoryLimit, s.Root)
+	updated, evicted, err = s.upsert(s.MemoryPath, fact, MemoryLimit, s.Root)
+	s.keepEvicted(evicted)
+	return
 }
 
 // Prefer stores a user-wide preference.
-func (s *Store) Prefer(fact string) (updated bool, err error) {
+func (s *Store) Prefer(fact string) (updated bool, evicted []string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.upsert(s.UserPath, fact, UserLimit, "")
+	updated, evicted, err = s.upsert(s.UserPath, fact, UserLimit, "")
+	s.keepEvicted(evicted)
+	return
+}
+
+// keepEvicted moves forgotten notes to the journal: out of every prompt,
+// still findable by recall. Caller holds s.mu.
+func (s *Store) keepEvicted(ev []string) {
+	for _, e := range ev {
+		_ = s.journalLocked("@evicted " + e)
+	}
 }
 
 var supersedes = regexp.MustCompile(`(?i)\b(?:supersedes|replaces)\s+(D-\d+)\b`)
@@ -304,6 +362,10 @@ func (s *Store) Forget(text string) (int, error) {
 func (s *Store) Journal(entry string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.journalLocked(entry)
+}
+
+func (s *Store) journalLocked(entry string) error {
 	p := filepath.Join(s.JournalDir, time.Now().Format("2006-01")+".md")
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -323,6 +385,38 @@ func (s *Store) JournalEntries() []string {
 			if e = strings.TrimSpace(strings.TrimPrefix(e, "## ")); e != "" {
 				out = append(out, e)
 			}
+		}
+	}
+	return out
+}
+
+var digits = regexp.MustCompile(`\d+`)
+
+// lessonKey reduces a lesson to its failure signature ("`go test ./x`
+// failed (--- FAIL: TestAdd)"), ignoring numbers such as line numbers.
+func lessonKey(l string) string {
+	k, _, _ := strings.Cut(l, ");")
+	return digits.ReplaceAllString(strings.ToLower(k), "#")
+}
+
+// Lessons files this turn's error→fix lessons. A lesson whose failure was
+// already seen in an earlier turn is promoted to MEMORY.md: like
+// long-term potentiation, what recurs is what gets consolidated, and a
+// one-off stays in the journal where recall can still find it. It
+// returns reports for the user.
+func (s *Store) Lessons(ls []string, trusted bool) []string {
+	if len(ls) == 0 {
+		return nil
+	}
+	past := strings.ToLower(digits.ReplaceAllString(strings.Join(s.JournalEntries(), "\n"), "#"))
+	var out []string
+	for _, l := range ls {
+		l = Redact(l)
+		if !trusted || suspicious.MatchString(l) || !strings.Contains(past, lessonKey(l)) {
+			continue
+		}
+		if upd, _, err := s.Remember("lesson: " + l); err == nil {
+			out = append(out, pick(upd, "lesson reinforced: ", "recurring lesson saved: ")+clip(l, 80))
 		}
 	}
 	return out

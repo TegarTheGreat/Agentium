@@ -135,7 +135,7 @@ func (m *memCtl) search(q string) string {
 // afterTurn applies memory directives from the replies and journals the
 // turn (deterministically, no LLM call), then refreshes the index. When
 // the turn read web or MCP content, directives are held for review.
-func (m *memCtl) afterTurn(prompt string, replies, files, errs []string, untrusted bool, report func(string)) {
+func (m *memCtl) afterTurn(prompt string, replies, files, errs, lessons []string, untrusted bool, report func(string)) {
 	ds := memory.Parse(strings.Join(replies, "\n"))
 	var reps []string
 	if untrusted {
@@ -143,6 +143,9 @@ func (m *memCtl) afterTurn(prompt string, replies, files, errs []string, untrust
 	} else {
 		reps = m.store.Apply(ds)
 	}
+	// Promote before journaling this turn, so "seen before" means an
+	// earlier turn.
+	reps = append(reps, m.store.Lessons(lessons, !untrusted)...)
 	for _, r := range reps {
 		report("· " + r)
 	}
@@ -157,6 +160,9 @@ func (m *memCtl) afterTurn(prompt string, replies, files, errs []string, untrust
 	if len(errs) > 0 {
 		// Errors and what fixed them are the lessons worth recalling.
 		entry += "\nerrors: " + memory.Redact(strings.Join(limitList(errs, 4), " | "))
+	}
+	if len(lessons) > 0 {
+		entry += "\nlessons: " + memory.Redact(strings.Join(limitList(lessons, 4), " | "))
 	}
 	if last != "" {
 		entry += "\nresult: " + oneLine(memory.Redact(last), 320)

@@ -590,3 +590,14 @@ func TestImagesStrippedForTextOnlyModel(t *testing.T) {
 		t.Fatal("history must keep the image for a later vision model")
 	}
 }
+
+func TestLessonFromErrorToFix(t *testing.T) {
+	var l Ledger
+	l.record("bash", json.RawMessage(`{"cmd":"go test ./calc"}`), "--- FAIL: TestAdd\ncalc_test.go:9: got -1 want 3\nFAIL\n[exit 1]", nil)
+	l.record("edit", json.RawMessage(`{"path":"calc/add.go"}`), "ok", nil)
+	l.record("bash", json.RawMessage(`{"cmd":"go test ./calc"}`), "ok", nil)
+	ls := l.Lessons()
+	if len(ls) != 1 || !strings.Contains(ls[0], "`go test ./calc` failed (--- FAIL: TestAdd)") || !strings.Contains(ls[0], "after changing calc/add.go") {
+		t.Fatalf("lessons: %v", ls)
+	}
+}
