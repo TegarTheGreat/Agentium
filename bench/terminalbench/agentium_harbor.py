@@ -1,7 +1,7 @@
 """Run Agentium on Terminal-Bench 2.x through Harbor.
 
     harbor run -d terminal-bench@2.0 \
-        -a bench.terminal-bench.agentium_harbor:Agentium \
+        -a bench.terminalbench.agentium_harbor:Agentium \
         -m anthropic/claude-sonnet-5 \
         --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 
