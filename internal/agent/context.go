@@ -95,6 +95,13 @@ func (a *Agent) elide(keep int) {
 				first = i
 			}
 			m.Text += note
+		case provider.RoleUser:
+			// Old screenshots cost ~1.6k tokens on every request.
+			if seen > keep && len(m.Images) > 0 {
+				m.Text += fmt.Sprintf("\n[%d old image(s) elided]", len(m.Images))
+				m.Images = nil
+				first = i
+			}
 		case provider.RoleAssistant:
 			if seen <= keep {
 				continue

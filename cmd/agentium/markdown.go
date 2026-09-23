@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -15,12 +16,15 @@ type mdStream struct {
 	w         io.Writer
 	head      strings.Builder // held start of the current line
 	lineStart bool
-	fence     bool // inside ``` code block
+	fence     bool   // inside a fenced code block
+	fenceMark string // the fence that opened it (``` or ````, ~~~)
 	bold      bool
 	code      bool
 	heading   bool
 	quote     bool
-	star      bool // a single '*' held to see if it starts "**"
+	stars     int  // '*' held until the next rune shows what they are
+	before    rune // the rune before the held stars
+	prev      rune // the last rune of the current line
 	styled    bool // an SGR is active
 }
 
@@ -36,6 +40,9 @@ const (
 func (m *mdStream) Write(d string) {
 	var out strings.Builder
 	for _, r := range d {
+		if r == '\r' {
+			continue // CRLF text renders like LF text
+		}
 		if m.lineStart {
 			m.head.WriteRune(r)
 			if r == '\n' || m.decidable() {
@@ -49,7 +56,7 @@ func (m *mdStream) Write(d string) {
 }
 
 // Pending reports whether part of a line is held back.
-func (m *mdStream) Pending() bool { return m.head.Len() > 0 || m.star || !m.lineStart }
+func (m *mdStream) Pending() bool { return m.head.Len() > 0 || m.stars > 0 || !m.lineStart }
 
 // Flush writes anything held back and ends the line.
 func (m *mdStream) Flush() {
@@ -63,6 +70,18 @@ func (m *mdStream) Flush() {
 	io.WriteString(m.w, out.String())
 }
 
+// End finishes a reply: whatever is held is written and block state (an
+// unclosed code fence from a cut-off reply) does not leak into the next.
+func (m *mdStream) End() {
+	if m.Pending() {
+		m.Flush()
+	}
+	if m.styled {
+		io.WriteString(m.w, sgrReset)
+	}
+	*m = mdStream{w: m.w, lineStart: true}
+}
+
 // decidable reports whether the held line start is enough to tell which
 // block it begins.
 func (m *mdStream) decidable() bool {
@@ -71,7 +90,7 @@ func (m *mdStream) decidable() bool {
 	if t == "" {
 		return false
 	}
-	if strings.HasPrefix(t, "`") {
+	if strings.HasPrefix(t, "`") || strings.HasPrefix(t, "~~~") {
 		return false // maybe a fence: wait for the whole line
 	}
 	if m.fence {
@@ -93,8 +112,14 @@ func (m *mdStream) block(out *strings.Builder) {
 	body := strings.TrimRight(t, "\n")
 	full := strings.HasSuffix(h, "\n")
 
-	if strings.HasPrefix(body, "```") {
-		m.fence = !m.fence
+	if mark := fenceMark(body); mark != "" && (!m.fence || strings.HasPrefix(mark, m.fenceMark) && strings.TrimSpace(body) == mark) {
+		// A fence closes only with the same character, at least as long,
+		// and nothing after it (so ```` can contain ```).
+		if m.fence {
+			m.fence, m.fenceMark = false, ""
+		} else {
+			m.fence, m.fenceMark = true, mark
+		}
 		out.WriteString(indent + sgrDim + body + sgrReset)
 		m.endLine(out, full)
 		return
@@ -148,9 +173,8 @@ func (m *mdStream) inline(out *strings.Builder, r rune) {
 		}
 		return
 	}
-	if r != '*' && m.star {
-		m.star = false
-		out.WriteByte('*')
+	if r != '*' && m.stars > 0 {
+		m.resolveStars(out, r)
 	}
 	switch {
 	case r == '\n':
@@ -158,6 +182,8 @@ func (m *mdStream) inline(out *strings.Builder, r rune) {
 		m.style(out)
 		out.WriteByte('\n')
 		m.lineStart = true
+		m.prev = 0
+		return
 	case m.code:
 		if r == '`' {
 			m.code = false
@@ -169,16 +195,34 @@ func (m *mdStream) inline(out *strings.Builder, r rune) {
 		m.code = true
 		m.style(out)
 	case r == '*':
-		if m.star {
-			m.star = false
-			m.bold = !m.bold
-			m.style(out)
-		} else {
-			m.star = true
+		if m.stars == 0 {
+			m.before = m.prev
 		}
+		m.stars++
 	default:
 		out.WriteRune(r)
 	}
+	m.prev = r
+}
+
+// resolveStars decides what held '*'s were once the next rune is known.
+// "**" opens bold only at a word start (after a space or opening
+// bracket, before a letter, digit or `) and closes only after a
+// non-space; anything else — a ** b, src/**/*.go — stays literal.
+func (m *mdStream) resolveStars(out *strings.Builder, next rune) {
+	n := m.stars
+	m.stars = 0
+	if n == 2 {
+		opens := !m.bold && (m.before == 0 || strings.ContainsRune(" \t([{\"'", m.before)) &&
+			(unicode.IsLetter(next) || unicode.IsDigit(next) || next == '`')
+		closes := m.bold && m.before != 0 && !unicode.IsSpace(m.before)
+		if opens || closes {
+			m.bold = !m.bold
+			m.style(out)
+			return
+		}
+	}
+	out.WriteString(strings.Repeat("*", n))
 }
 
 // style emits the SGR sequence for the current inline state.
@@ -198,6 +242,21 @@ func (m *mdStream) style(out *strings.Builder) {
 	}
 	out.WriteString(sgrReset + s)
 	m.styled = s != ""
+}
+
+// fenceMark returns the fence at the start of a line (``` / ~~~ and
+// longer), or "".
+func fenceMark(line string) string {
+	for _, c := range []byte{'`', '~'} {
+		n := 0
+		for n < len(line) && line[n] == c {
+			n++
+		}
+		if n >= 3 {
+			return line[:n]
+		}
+	}
+	return ""
 }
 
 func headingLevel(t string) int {

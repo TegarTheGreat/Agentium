@@ -657,3 +657,22 @@ func TestGitGuardAndEnvScrub(t *testing.T) {
 		t.Fatalf("fetch exfil: %v", err)
 	}
 }
+
+func TestReadNonRegularAndLarge(t *testing.T) {
+	e := env(t)
+	if _, err := call(t, readTool, e, `{"path":"/dev/zero"}`); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("/dev/zero: %v", err)
+	}
+	big := filepath.Join(e.Root, "big.log")
+	f, _ := os.Create(big)
+	line := strings.Repeat("x", 99) + "\n"
+	for i := 0; i < 90000; i++ { // ~9 MB
+		f.WriteString(line)
+	}
+	f.WriteString("THE END\n")
+	f.Close()
+	out, err := call(t, readTool, e, `{"path":"big.log","offset":90001,"limit":5}`)
+	if err != nil || !strings.Contains(out, "lines 90001-90001 shown") || !strings.Contains(out, "THE END") {
+		t.Fatalf("large read: %q %v", out[:min(len(out), 200)], err)
+	}
+}

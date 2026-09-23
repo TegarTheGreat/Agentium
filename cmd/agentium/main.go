@@ -196,8 +196,8 @@ func (u *ui) text(d string) {
 }
 
 func (u *ui) endLine() {
-	if u.md != nil && u.md.Pending() {
-		u.md.Flush()
+	if u.md != nil {
+		u.md.End()
 		u.midLine = false
 		return
 	}

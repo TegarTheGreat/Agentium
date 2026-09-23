@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,6 +16,7 @@ var userHome = os.UserHomeDir
 const (
 	readMaxLines = 2000
 	readMaxBytes = 60 * 1024
+	readWholeMax = 8 << 20 // larger files are streamed, never loaded whole
 )
 
 var readTool = Tool{
@@ -59,6 +61,13 @@ var readTool = Tool{
 					return out, err
 				}
 			}
+		}
+		if !st.Mode().IsRegular() {
+			return "", fmt.Errorf("%s is not a regular file (device, pipe or socket); use bash if you really need it", a.Path)
+		}
+		if st.Size() > readWholeMax {
+			// Never load a multi-GB log to show 60 KB of it.
+			return readLarge(p, st.Size(), a.Offset, a.Limit)
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -148,4 +157,42 @@ func sliceLines(s string, offset, limit int) string {
 		out += fmt.Sprintf("\n[lines %d-%d of %d; use offset to read more]", start+1, end, total)
 	}
 	return out
+}
+
+// readLarge streams the requested lines of a big file.
+func readLarge(p string, size int64, offset, limit int) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if offset < 1 {
+		offset = 1
+	}
+	if limit <= 0 || limit > readMaxLines {
+		limit = readMaxLines
+	}
+	r := bufio.NewReaderSize(f, 64*1024)
+	var sb strings.Builder
+	line, shown := 0, 0
+	for shown < limit && sb.Len() < readMaxBytes {
+		l, err := r.ReadString('\n')
+		if len(l) > 0 {
+			line++
+			if line >= offset {
+				if len(l) > 2000 {
+					l = strings.ToValidUTF8(l[:2000], "") + "…[line truncated]\n"
+				}
+				sb.WriteString(l)
+				shown++
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if shown == 0 {
+		return fmt.Sprintf("(offset %d is past the end of this %d MB file)", offset, size>>20), nil
+	}
+	return fmt.Sprintf("(%d MB file; lines %d-%d shown; use offset/limit, or bash grep/tail, for other parts)\n%s", size>>20, offset, offset+shown-1, sb.String()), nil
 }
