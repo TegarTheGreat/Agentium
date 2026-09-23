@@ -254,3 +254,9 @@ func Clip(s string, max int) string {
 	}
 	return fmt.Sprintf("%s\n[... %d bytes omitted; narrow the output (grep, head, tail, sed -n) to see them ...]\n%s", h, cut, t)
 }
+
+// ShellName is the shell bash commands run in ("bash", "sh",
+// "powershell", "cmd"), for the system prompt.
+func ShellName() string {
+	return strings.TrimSuffix(strings.ToLower(filepath.Base(shellPath())), ".exe")
+}

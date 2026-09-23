@@ -17,6 +17,17 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: make build && ./agentium bench -runs 10
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go build ./cmd/agentium
+      # Packages without shell/sandbox assumptions run their tests here.
+      - run: go test ./internal/policy ./internal/memory ./internal/codemap ./internal/provider ./internal/models ./internal/lsp
   cross:
     runs-on: ubuntu-latest
     steps:

@@ -98,3 +98,16 @@ func TestInstallFromGitPinnedAndRemove(t *testing.T) {
 		t.Fatal("remove must reject path names")
 	}
 }
+
+func TestShadowed(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	os.Mkdir(filepath.Join(repo, ".git"), 0o755)
+	write(t, filepath.Join(home, "skills", "deploy", "SKILL.md"), "---\nname: deploy\n---\nmine")
+	write(t, filepath.Join(repo, ".agentium", "skills", "deploy", "SKILL.md"), "---\nname: deploy\n---\ntheirs")
+	write(t, filepath.Join(repo, ".agentium", "skills", "lint", "SKILL.md"), "---\nname: lint\n---\nx")
+	sh := Shadowed(home, repo)
+	if len(sh) != 1 || !strings.Contains(sh[0], "/deploy") {
+		t.Fatalf("shadowed: %v", sh)
+	}
+}

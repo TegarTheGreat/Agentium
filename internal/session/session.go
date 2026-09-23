@@ -4,6 +4,7 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -116,14 +117,24 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 	quotedCwd, _ := json.Marshal(cwd)
 	var out []*Session
 	for _, n := range names {
-		b, err := os.ReadFile(filepath.Join(dir(), n))
+		// Read only the head first: cwd is near the start, and sessions
+		// with screenshots can be megabytes.
+		f, err := os.Open(filepath.Join(dir(), n))
 		if err != nil {
 			continue
 		}
-		// Cheap pre-check before a full decode of a large file.
-		if !bytes.Contains(b[:min(len(b), 4096)], quotedCwd) {
+		head := make([]byte, 4096)
+		k, _ := io.ReadFull(f, head)
+		if !bytes.Contains(head[:k], quotedCwd) {
+			f.Close()
 			continue
 		}
+		rest, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			continue
+		}
+		b := append(head[:k], rest...)
 		var s Session
 		if json.Unmarshal(b, &s) == nil && s.Cwd == cwd {
 			out = append(out, &s)

@@ -15,6 +15,9 @@ func shellPath() string {
 	return "/bin/sh"
 }
 
+// shellArgs builds the argument list that runs cmdline in shell.
+func shellArgs(_ string, cmdline string) []string { return []string{"-c", cmdline} }
+
 func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
