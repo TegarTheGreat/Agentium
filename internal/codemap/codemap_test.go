@@ -162,3 +162,23 @@ class After:
 		}
 	}
 }
+
+func TestRank(t *testing.T) {
+	ix := &Index{Files: map[string]*FileEntry{}}
+	add := func(rel, src string) {
+		b := []byte(src)
+		ix.Files[rel] = &FileEntry{Syms: Outline(rel, b), Idents: Identifiers(b)}
+	}
+	add("core.go", "package a\nfunc ParseConfig() {}\nfunc helperX() {}\n")
+	add("a.go", "package a\nfunc Alpha() { ParseConfig() }\n")
+	add("b.go", "package a\nfunc Beta() { ParseConfig(); Alpha() }\n")
+	add("c.go", "package a\nfunc Gamma() {}\n")
+	r := ix.Rank("", nil)
+	if r[0].Rel != "core.go" || r[0].Syms[0].Name != "ParseConfig" {
+		t.Fatalf("most depended-on file first: %+v", r[0])
+	}
+	r = ix.Rank("", map[string]bool{"c.go": true})
+	if r[0].Rel != "c.go" {
+		t.Fatalf("focus file should lead: %s", r[0].Rel)
+	}
+}
