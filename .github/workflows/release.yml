@@ -2,6 +2,12 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # Manual release: creates the tag on the chosen branch, then releases it.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to create and release (e.g. v0.11.0)"
+        required: true
 permissions:
   contents: write
 jobs:
@@ -11,6 +17,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Create tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          case "$TAG" in v[0-9]*) ;; *) echo "tag must look like v1.2.3" >&2; exit 1 ;; esac
+          git config user.name "Tegar Prayuda"
+          git config user.email "268683956+TegarTheGreat@users.noreply.github.com"
+          git tag -a "$TAG" -m "Agentium $TAG"
+          git push origin "$TAG"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
