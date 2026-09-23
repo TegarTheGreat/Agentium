@@ -1,0 +1,288 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/memory"
+	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/session"
+)
+
+// memCtl ties the memory store to a CLI session.
+type memCtl struct {
+	store *memory.Store
+	ix    atomic.Pointer[memory.Index]
+	cwd   string
+	skip  string // current session id: its content is already in context
+	ready chan struct{}
+	once  sync.Once
+}
+
+func memoryWanted(cfg config.Config) bool { return cfg.Memory == nil || *cfg.Memory }
+
+func openMemory(cfg config.Config, cwd string) *memCtl {
+	if !memoryWanted(cfg) {
+		return nil
+	}
+	s, err := memory.Open(config.Home(), cwd)
+	if err != nil {
+		return nil
+	}
+	return &memCtl{store: s, cwd: cwd, ready: make(chan struct{})}
+}
+
+// buildIndex indexes decisions, journal and past sessions of this
+// directory. It runs in the background; recall is skipped until ready.
+func (m *memCtl) buildIndex() {
+	docs := m.store.Docs()
+	sessions, _ := session.ForCwd(m.cwd, 50)
+	for _, s := range sessions {
+		if s.ID == m.skip {
+			continue
+		}
+		date := s.Updated.Format("2006-01-02")
+		for _, msg := range s.Messages {
+			if msg.Text == "" || msg.Role == provider.RoleTool || strings.HasPrefix(msg.Text, "[agentium]") {
+				continue
+			}
+			text := msg.Text
+			// Strip injected recall blocks so old recalls don't echo forever.
+			if i := strings.Index(text, "</recall>"); i >= 0 {
+				text = strings.TrimSpace(text[i+len("</recall>"):])
+			}
+			for len(text) > 0 {
+				chunk := text
+				if len(chunk) > 800 {
+					chunk = chunk[:800]
+				}
+				text = text[len(chunk):]
+				docs = append(docs, memory.Doc{Source: "session " + date + " " + string(msg.Role), Text: chunk})
+			}
+		}
+	}
+	m.ix.Store(memory.NewIndex(docs))
+	m.once.Do(func() { close(m.ready) })
+}
+
+// recall returns a <recall> block for input and the number of hits.
+func (m *memCtl) recall(input string) (string, int) {
+	// The first index build runs in the background from startup; give it
+	// a brief moment rather than skipping recall on the first turn.
+	select {
+	case <-m.ready:
+	case <-time.After(150 * time.Millisecond):
+	}
+	ix := m.ix.Load()
+	if ix == nil {
+		return "", 0
+	}
+	var hits []memory.Hit
+	for _, h := range ix.Search(input, 4) {
+		if h.Score >= 1.5 {
+			hits = append(hits, h)
+		}
+	}
+	return memory.Format(hits, 1500), len(hits)
+}
+
+// afterTurn applies memory directives from the replies and journals the
+// turn (deterministically, no LLM call), then refreshes the index.
+func (m *memCtl) afterTurn(prompt string, replies, files []string, report func(string)) {
+	for _, r := range m.store.Apply(memory.Parse(strings.Join(replies, "\n"))) {
+		report("· " + r)
+	}
+	last := ""
+	if len(replies) > 0 {
+		last = replies[len(replies)-1]
+	}
+	entry := "user: " + oneLine(memory.Redact(prompt), 240)
+	if len(files) > 0 {
+		entry += "\nfiles: " + strings.Join(limitList(files, 12), ", ")
+	}
+	if last != "" {
+		entry += "\nresult: " + oneLine(memory.Redact(last), 320)
+	}
+	_ = m.store.Journal(entry)
+	go m.buildIndex()
+}
+
+func oneLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > n {
+		s = strings.ToValidUTF8(s[:n], "") + "…"
+	}
+	return s
+}
+
+const tidyPrompt = `You maintain an AI coding agent's long-term memory. Rewrite it to be accurate, deduplicated and compact.
+
+Rules:
+- Merge duplicates and near-duplicates; drop facts that are obsolete, contradicted by newer entries or decisions, or trivial.
+- Promote durable facts from the journal (conventions, commands, lessons from mistakes, "@pending" entries) when worth keeping.
+- USER.md holds user-wide preferences only; MEMORY.md holds facts about this project.
+- One fact per line, starting with "- ". USER.md at most 1100 characters, MEMORY.md at most 2300.
+- Never include secrets.
+
+Reply with exactly this format and nothing else:
+=== USER.md
+- ...
+=== MEMORY.md
+- ...`
+
+func cmdTidy(args []string) error {
+	fs := flag.NewFlagSet("tidy", flag.ContinueOnError)
+	modelRef := fs.String("m", "", "model to use (default: fast_model, then model)")
+	yes := fs.Bool("yes", false, "write without asking")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	auth, err := config.LoadAuth()
+	if err != nil {
+		return err
+	}
+	cwd, _ := os.Getwd()
+	if r, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = r
+	}
+	st, err := memory.Open(config.Home(), cwd)
+	if err != nil {
+		return err
+	}
+	ref := firstNonEmpty(*modelRef, cfg.FastModel, os.Getenv("AGENTIUM_MODEL"), cfg.Model)
+	res, err := provider.Resolve(ref, cfg, auth)
+	if err != nil {
+		return err
+	}
+	user, mem := readFile(st.UserPath), readFile(st.MemoryPath)
+	var in strings.Builder
+	fmt.Fprintf(&in, "=== USER.md (current)\n%s\n=== MEMORY.md (current)\n%s\n=== DECISIONS\n", user, mem)
+	for _, d := range st.Decisions() {
+		fmt.Fprintf(&in, "%s %s [%s] %s\n", d.ID, d.Date, d.Status, d.Text)
+	}
+	in.WriteString("=== JOURNAL (recent)\n")
+	entries := st.JournalEntries()
+	if len(entries) > 60 {
+		entries = entries[len(entries)-60:]
+	}
+	for _, e := range entries {
+		in.WriteString(e + "\n\n")
+	}
+	fmt.Fprintf(os.Stderr, "tidying memory with %s/%s …\n", res.Provider, res.Model)
+	resp, err := res.Client.Stream(context.Background(), provider.Request{
+		Model: res.Model, System: "You curate concise, accurate memory files.",
+		Messages:  []provider.Message{{Role: provider.RoleUser, Text: in.String() + "\n---\n" + tidyPrompt}},
+		MaxTokens: 3000,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	newUser, newMem, err := parseTidy(resp.Text)
+	if err != nil {
+		return err
+	}
+	newUser, newMem = memory.Redact(newUser), memory.Redact(newMem)
+	if len(newUser) > memory.UserLimit || len(newMem) > memory.MemoryLimit {
+		return fmt.Errorf("model output exceeds the size caps (%d/%d, %d/%d chars); try again", len(newUser), memory.UserLimit, len(newMem), memory.MemoryLimit)
+	}
+	changed := printDiff("USER.md", user, newUser) + printDiff("MEMORY.md", mem, newMem)
+	if changed == 0 {
+		fmt.Fprintln(os.Stderr, "memory is already tidy")
+		return nil
+	}
+	if !*yes {
+		if !isTTY(os.Stdin) {
+			return errors.New("not a terminal: pass --yes to write")
+		}
+		fmt.Fprint(os.Stderr, "write these changes? [y/N] ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			fmt.Fprintln(os.Stderr, "unchanged")
+			return nil
+		}
+	}
+	for _, f := range [][2]string{{st.UserPath, newUser}, {st.MemoryPath, newMem}} {
+		if old := readFile(f[0]); old != "" {
+			_ = os.WriteFile(f[0]+".bak", []byte(old), 0o600)
+		}
+		if err := os.WriteFile(f[0], []byte(f[1]), 0o600); err != nil {
+			return err
+		}
+	}
+	_ = st.Journal("tidy: memory consolidated")
+	fmt.Fprintln(os.Stderr, "memory updated (backups: *.bak)")
+	return nil
+}
+
+func readFile(p string) string {
+	b, _ := os.ReadFile(p)
+	return strings.TrimSpace(string(b))
+}
+
+func parseTidy(s string) (user, mem string, err error) {
+	_, rest, ok := strings.Cut(s, "=== USER.md")
+	if !ok {
+		return "", "", errors.New("unexpected tidy output (no USER.md section)")
+	}
+	user, mem, ok = strings.Cut(rest, "=== MEMORY.md")
+	if !ok {
+		return "", "", errors.New("unexpected tidy output (no MEMORY.md section)")
+	}
+	clean := func(x string) string {
+		var lines []string
+		for _, l := range strings.Split(x, "\n") {
+			l = strings.TrimSpace(l)
+			if strings.HasPrefix(l, "- ") && len(l) > 2 {
+				lines = append(lines, l)
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	return clean(user), clean(mem), nil
+}
+
+// printDiff shows removed/added lines and returns how many changed.
+func printDiff(name, old, new string) int {
+	oldSet, newSet := map[string]bool{}, map[string]bool{}
+	for _, l := range strings.Split(old, "\n") {
+		oldSet[strings.TrimSpace(l)] = true
+	}
+	for _, l := range strings.Split(new, "\n") {
+		newSet[strings.TrimSpace(l)] = true
+	}
+	n := 0
+	header := func() {
+		if n == 0 {
+			fmt.Fprintf(os.Stderr, "\n%s\n", name)
+		}
+	}
+	for _, l := range strings.Split(old, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !newSet[l] {
+			header()
+			fmt.Fprintln(os.Stderr, "  - "+l)
+			n++
+		}
+	}
+	for _, l := range strings.Split(new, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !oldSet[l] {
+			header()
+			fmt.Fprintln(os.Stderr, "  + "+l)
+			n++
+		}
+	}
+	return n
+}

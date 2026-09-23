@@ -2,6 +2,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -19,6 +20,42 @@ type Session struct {
 	Model    string             `json:"model"`
 	Updated  time.Time          `json:"updated"`
 	Messages []provider.Message `json:"messages"`
+	// Checkpoints are workspace snapshots taken before each turn that
+	// changed something, newest last.
+	Checkpoints []Checkpoint `json:"checkpoints,omitempty"`
+	// Note is delivered to the model with the next input (see agent.Note).
+	Note string `json:"note,omitempty"`
+	// SystemHash identifies the system prompt the messages were produced
+	// under; signed thinking blocks are only valid under the same one.
+	SystemHash string `json:"system_hash,omitempty"`
+}
+
+// Checkpoint is a restorable workspace snapshot.
+type Checkpoint struct {
+	ID     string    `json:"id"`
+	Prompt string    `json:"prompt"`
+	Time   time.Time `json:"time"`
+}
+
+const maxCheckpoints = 50
+
+// AddCheckpoint appends a snapshot, keeping the newest maxCheckpoints.
+func (s *Session) AddCheckpoint(id, prompt string) {
+	s.Checkpoints = append(s.Checkpoints, Checkpoint{ID: id, Prompt: prompt, Time: time.Now()})
+	if n := len(s.Checkpoints); n > maxCheckpoints {
+		s.Checkpoints = append([]Checkpoint(nil), s.Checkpoints[n-maxCheckpoints:]...)
+	}
+}
+
+// PopCheckpoint removes and returns the newest snapshot.
+func (s *Session) PopCheckpoint() (Checkpoint, bool) {
+	n := len(s.Checkpoints)
+	if n == 0 {
+		return Checkpoint{}, false
+	}
+	cp := s.Checkpoints[n-1]
+	s.Checkpoints = s.Checkpoints[:n-1]
+	return cp, true
 }
 
 func dir() string { return filepath.Join(config.Home(), "sessions") }
@@ -30,7 +67,7 @@ func New(cwd, model string) *Session {
 
 // Save writes the session atomically.
 func (s *Session) Save() error {
-	if len(s.Messages) == 0 {
+	if len(s.Messages) == 0 && len(s.Checkpoints) == 0 {
 		return nil
 	}
 	if err := os.MkdirAll(dir(), 0o700); err != nil {
@@ -51,6 +88,15 @@ func (s *Session) Save() error {
 
 // Latest returns the most recent session for cwd, or nil.
 func Latest(cwd string) (*Session, error) {
+	ss, err := ForCwd(cwd, 1)
+	if err != nil || len(ss) == 0 {
+		return nil, err
+	}
+	return ss[0], nil
+}
+
+// ForCwd returns up to max sessions for cwd, newest first.
+func ForCwd(cwd string, max int) ([]*Session, error) {
 	ents, err := os.ReadDir(dir())
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -66,15 +112,49 @@ func Latest(cwd string) (*Session, error) {
 	}
 	// IDs are timestamps, so name order is time order.
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	// Same encoding as the saved file (json escapes &, <, >).
+	quotedCwd, _ := json.Marshal(cwd)
+	var out []*Session
 	for _, n := range names {
 		b, err := os.ReadFile(filepath.Join(dir(), n))
 		if err != nil {
 			continue
 		}
+		// Cheap pre-check before a full decode of a large file.
+		if !bytes.Contains(b[:min(len(b), 4096)], quotedCwd) {
+			continue
+		}
 		var s Session
 		if json.Unmarshal(b, &s) == nil && s.Cwd == cwd {
-			return &s, nil
+			out = append(out, &s)
+			if len(out) >= max {
+				break
+			}
 		}
 	}
-	return nil, nil
+	return out, nil
+}
+
+// Prune deletes sessions beyond the newest keep that are older than maxAge.
+func Prune(keep int, maxAge time.Duration) {
+	ents, err := os.ReadDir(dir())
+	if err != nil {
+		return
+	}
+	var names []string
+	for _, e := range ents {
+		if filepath.Ext(e.Name()) == ".json" {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	if len(names) <= keep {
+		return
+	}
+	for _, n := range names[keep:] {
+		p := filepath.Join(dir(), n)
+		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > maxAge {
+			_ = os.Remove(p)
+		}
+	}
 }

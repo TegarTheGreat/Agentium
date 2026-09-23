@@ -4,9 +4,16 @@ package provider
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"strings"
+	"syscall"
+	"time"
 )
 
 // Role of a message in the conversation.
@@ -23,6 +30,9 @@ type ToolCall struct {
 	ID   string          `json:"id"`
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args"`
+	// Extra is provider data that must be sent back with the call
+	// (e.g. Gemini's thought signature in extra_content).
+	Extra json.RawMessage `json:"extra,omitempty"`
 }
 
 // Message is one provider-neutral conversation entry.
@@ -33,6 +43,17 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	IsError    bool       `json:"is_error,omitempty"`
+
+	// Raw is the provider-native content of an assistant message (for
+	// Anthropic: the content blocks, including signed thinking blocks,
+	// which must be replayed unchanged). RawModel is the model that
+	// produced it; Raw is only replayed to that same model. Code that
+	// edits history must clear Raw on the affected messages.
+	Raw      json.RawMessage `json:"raw,omitempty"`
+	RawModel string          `json:"raw_model,omitempty"`
+	// Reasoning is visible reasoning text some OpenAI-compatible models
+	// return (reasoning_content) and need back on later turns.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // ToolDef describes a tool to the model. Schema is a JSON Schema object.
@@ -58,6 +79,15 @@ func (u *Usage) Add(u2 Usage) {
 	u.CacheWrite += u2.CacheWrite
 }
 
+// Reasoning configures thinking for one request. Capabilities come from
+// the model registry; zero values mean "provider default".
+type Reasoning struct {
+	Effort      string   // low | medium | high | xhigh | max (or minimal) — "" = model default
+	Efforts     []string // efforts the model accepts; non-empty means adaptive-capable
+	Budget      bool     // model only supports budget_tokens thinking
+	Interleaved string   // assistant field that carries reasoning back (e.g. reasoning_content)
+}
+
 // Request is one model call.
 type Request struct {
 	Model     string
@@ -65,6 +95,9 @@ type Request struct {
 	Messages  []Message
 	Tools     []ToolDef
 	MaxTokens int
+	Reasoning Reasoning
+	// Fast asks for the provider's fast output mode when available.
+	Fast bool
 }
 
 // Response is the assembled result of a streamed model call.
@@ -73,6 +106,42 @@ type Response struct {
 	ToolCalls  []ToolCall
 	Usage      Usage
 	StopReason string
+	Raw        json.RawMessage // provider-native assistant content, see Message.Raw
+	Reasoning  string
+	// Model is the model that actually served the reply when it differs
+	// from the request (fallback); "" means the requested model.
+	Model string
+}
+
+// ClosestEffort maps want onto the values a model supports.
+func ClosestEffort(want string, supported []string) string {
+	if want == "" || len(supported) == 0 {
+		return want
+	}
+	order := []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+	rank := func(v string) int {
+		for i, o := range order {
+			if o == v {
+				return i
+			}
+		}
+		return -1
+	}
+	best, bestD := supported[0], 99
+	w := rank(want)
+	for _, s := range supported {
+		if s == want {
+			return s
+		}
+		d := rank(s) - w
+		if d < 0 {
+			d = -d
+		}
+		if rank(s) >= 0 && d < bestD {
+			best, bestD = s, d
+		}
+	}
+	return best
 }
 
 // Client streams one model call. onText receives text deltas as they arrive
@@ -85,17 +154,62 @@ type Client interface {
 type HTTPError struct {
 	Status int
 	Body   string
+	// RetryAfter is the server's requested wait, if it sent one.
+	RetryAfter time.Duration
 }
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("api error %d: %s", e.Status, e.Body)
 }
 
-// Retryable reports whether err is worth retrying (rate limit / overload / 5xx).
+// ErrStalled means the stream sent nothing for too long.
+var ErrStalled = errors.New("stream stalled")
+
+// ErrIncomplete means the stream ended before the model finished.
+var ErrIncomplete = errors.New("stream ended early")
+
+// Retryable reports whether err is worth retrying: rate limits, overload,
+// 5xx, and broken or stalled connections. Client errors (4xx) are not.
 func Retryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
 	var he *HTTPError
 	if errors.As(err, &he) {
 		return he.Status == 429 || he.Status == 408 || he.Status == 529 || he.Status >= 500
 	}
-	return false
+	if errors.Is(err, ErrStalled) || errors.Is(err, ErrIncomplete) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	// Permanent network failures: bad certificates, unknown hosts.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
+	}
+	var certErr *tls.CertificateVerificationError
+	var authErr x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	if errors.As(err, &certErr) || errors.As(err, &authErr) || errors.As(err, &hostErr) {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	if errors.Is(err, io.EOF) { // server closed the connection before replying
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection reset") || strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "stream error") && strings.Contains(msg, "INTERNAL_ERROR")
+}
+
+// RetryAfter returns the server-requested delay carried by err, if any.
+func RetryAfter(err error) time.Duration {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.RetryAfter
+	}
+	return 0
 }

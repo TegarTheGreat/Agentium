@@ -20,12 +20,57 @@ type ProviderConf struct {
 
 // Config is ~/.agentium/config.json.
 type Config struct {
-	Model     string                  `json:"model,omitempty"`      // "provider/model"
-	FastModel string                  `json:"fast_model,omitempty"` // reserved for background work
-	Mode      string                  `json:"mode,omitempty"`       // ask | auto | yolo
-	MaxTokens int                     `json:"max_tokens,omitempty"`
-	MaxTurns  int                     `json:"max_turns,omitempty"`
-	Providers map[string]ProviderConf `json:"providers,omitempty"`
+	Model     string `json:"model,omitempty"`      // "provider/model"
+	FastModel string `json:"fast_model,omitempty"` // reserved for background work
+	Mode      string `json:"mode,omitempty"`       // ask | auto | yolo
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	MaxTurns  int    `json:"max_turns,omitempty"`
+	// FetchPrivate lets the fetch tool reach localhost/private networks.
+	FetchPrivate bool `json:"fetch_private,omitempty"`
+	// Checkpoints snapshot the workspace before each changing turn so it
+	// can be undone (default on; needs git).
+	Checkpoints *bool        `json:"checkpoints,omitempty"`
+	Sandbox     *SandboxConf `json:"sandbox,omitempty"`
+	// Verify reminds the model to run a check after changing code
+	// (default on).
+	Verify *bool `json:"verify,omitempty"`
+	// Memory enables cross-session memory and recall (default on).
+	Memory *bool `json:"memory,omitempty"`
+	// Effort sets reasoning effort: minimal|low|medium|high|xhigh|max.
+	Effort string `json:"effort,omitempty"`
+	// Fast requests the provider's fast output mode where available.
+	Fast bool `json:"fast,omitempty"`
+	// Fallback lists models to switch to when the main one is rate
+	// limited or down, e.g. ["openrouter/anthropic/claude-sonnet-5"].
+	Fallback []string `json:"fallback,omitempty"`
+	Hooks    *Hooks   `json:"hooks,omitempty"`
+	// MCP servers, by name.
+	MCP map[string]MCPServer `json:"mcp,omitempty"`
+	// ContextTokens overrides the model's context window.
+	ContextTokens int                     `json:"context_tokens,omitempty"`
+	Providers     map[string]ProviderConf `json:"providers,omitempty"`
+}
+
+// Hooks are user commands run at fixed points.
+type Hooks struct {
+	// PostEdit runs after each successful edit; {path} is the file.
+	PostEdit []string `json:"post_edit,omitempty"`
+	// Stop runs after each finished turn (e.g. a desktop notification).
+	Stop []string `json:"stop,omitempty"`
+}
+
+// MCPServer is a stdio MCP server to start.
+type MCPServer struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+// SandboxConf configures confinement of shell commands.
+type SandboxConf struct {
+	Enabled *bool    `json:"enabled,omitempty"` // default true
+	Network string   `json:"network,omitempty"` // ask (default) | allow | deny
+	Write   []string `json:"write,omitempty"`   // extra writable directories
 }
 
 // Home returns the Agentium state directory.
@@ -73,9 +118,23 @@ func Load() (Config, error) {
 	return c, err
 }
 
-// Credential is a stored secret for one provider.
+// Credential is a stored secret for one provider. With Keychain set the
+// secret lives in the OS keychain and APIKey is empty.
 type Credential struct {
-	APIKey string `json:"api_key,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+	Keychain bool   `json:"keychain,omitempty"`
+}
+
+// Secret returns the credential's key, reading the keychain if needed.
+func (c Credential) Secret(provider string) string {
+	if c.APIKey != "" {
+		return c.APIKey
+	}
+	if c.Keychain {
+		k, _ := KeychainGet(provider)
+		return k
+	}
+	return ""
 }
 
 // Auth maps provider id to credential.

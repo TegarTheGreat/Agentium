@@ -7,8 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sync"
 	"time"
+
+	"github.com/tegarthegreat/agentium/internal/policy"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 )
 
 const (
@@ -19,12 +23,13 @@ const (
 
 var bashTool = Tool{
 	Def: providerDef("bash",
-		"Run a shell command in the workspace. Output is clipped to head+tail. Use for builds, tests, git, and anything else.",
-		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"}},"required":["cmd"]}`),
+		"Run a shell command in the workspace. Output is clipped to head+tail. Writes outside the workspace and network are blocked unless net=true (for installs, downloads, git push).",
+		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"},"net":{"type":"boolean"}},"required":["cmd"]}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
 			Cmd     string `json:"cmd"`
 			Timeout int    `json:"timeout"`
+			Net     bool   `json:"net"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
@@ -32,10 +37,44 @@ var bashTool = Tool{
 		if a.Cmd == "" {
 			return "", errors.New("cmd is required")
 		}
-		if env.Gate != nil {
+		plan := env.Gate != nil && env.Gate.GetMode() == policy.Plan
+		switch {
+		case plan && env.Sandbox != nil:
+			// The sandbox makes the workspace read-only below, so any
+			// non-destructive command may run.
+			if why := policy.RiskyCommand(a.Cmd); why != "" {
+				return "", fmt.Errorf("denied (%s; plan mode is read-only)", why)
+			}
+		case env.Gate != nil:
 			if ok, why := env.Gate.Bash(a.Cmd); !ok {
+				if plan {
+					return "", fmt.Errorf("denied (%s); only read-only commands run in plan mode", why)
+				}
 				return "", fmt.Errorf("denied (%s); choose another approach or ask the user", why)
 			}
+		}
+		var box *sandbox.Config
+		if env.Sandbox != nil {
+			cfg := *env.Sandbox
+			if plan {
+				cfg.Write = sandbox.ReadOnly(cfg.Write, env.Root)
+			}
+			if a.Net {
+				ok, why := true, ""
+				if env.Gate != nil {
+					ok, why = env.Gate.Net(a.Cmd, env.Net)
+				} else {
+					ok = env.Net == policy.NetAllow
+				}
+				if !ok {
+					return "", fmt.Errorf("network denied (%s); do it without network or ask the user", why)
+				}
+				cfg.Network = true
+			}
+			box = &cfg
+		}
+		if !plan {
+			env.mutate()
 		}
 		t := a.Timeout
 		if t <= 0 {
@@ -44,9 +83,19 @@ var bashTool = Tool{
 		if t > bashMaxTimeout {
 			t = bashMaxTimeout
 		}
-		return runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second)
+		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box)
+		if box != nil && err == nil && sandboxHint.MatchString(out) {
+			if box.Network {
+				out += "\n[sandbox: writes outside the workspace are blocked]"
+			} else {
+				out += "\n[sandbox: writes outside the workspace and network are blocked; retry with net=true if network is needed]"
+			}
+		}
+		return out, err
 	},
 }
+
+var sandboxHint = regexp.MustCompile(`(?i)permission denied|operation not permitted|read-only file system|network is unreachable|could not resolve|connection refused|EACCES|EPERM`)
 
 // lockedBuffer lets stdout and stderr share one buffer safely.
 type lockedBuffer struct {
@@ -77,10 +126,17 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration) (string, error) {
+func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.Command(shellPath(), "-c", cmdline)
+	if box != nil {
+		c, _, err := sandbox.Command(shellPath(), cmdline, *box)
+		if err != nil {
+			return "", err
+		}
+		cmd = c
+	}
 	cmd.Dir = dir
 	setProcessGroup(cmd)
 	// Background children (e.g. `server &`) may keep the pipe open; don't

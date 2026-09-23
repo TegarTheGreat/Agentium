@@ -36,7 +36,12 @@ var searchTool = Tool{
 		}
 		dir := env.Root
 		if a.Path != "" {
-			dir = env.abs(a.Path)
+			dir = real(env.abs(a.Path))
+		}
+		if env.Gate != nil {
+			if ok, why := env.Gate.Read(dir); !ok {
+				return "", fmt.Errorf("denied (%s)", why)
+			}
 		}
 		if rg := ripgrep(); rg != "" {
 			return runRipgrep(ctx, rg, env.Root, dir, a.Pattern, a.Glob, a.IgnoreCase)
@@ -51,7 +56,11 @@ var ripgrep = sync.OnceValue(func() string {
 })
 
 func runRipgrep(ctx context.Context, rg, root, dir, pattern, glob string, icase bool) (string, error) {
-	args := []string{"--color=never", "--no-messages", "--max-columns=300", "--max-columns-preview"}
+	// --hidden: dotfiles such as .github/ or .env.example matter in code work.
+	args := []string{"--color=never", "--no-messages", "--max-columns=300", "--max-columns-preview", "--hidden", "-g", "!.git/"}
+	for _, s := range secretGlobs {
+		args = append(args, "-g", "!"+s)
+	}
 	if pattern == "" {
 		args = append(args, "--files")
 	} else {
@@ -100,7 +109,12 @@ func capLines(s string, n int) string {
 	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n[... %d more; narrow the search]", len(lines)-n)
 }
 
-var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, ".venv": true, "dist": true, "build": true, "target": true, "__pycache__": true}
+// secretGlobs keep credential stores out of search results even when a
+// search covers the home directory.
+var secretGlobs = []string{".ssh/", ".aws/", ".gnupg/", ".kube/", ".docker/", ".netrc", ".npmrc", ".pypirc",
+	".git-credentials", ".config/gcloud/", ".config/gh/", ".agentium/"}
+
+var skipDirs = map[string]bool{".ssh": true, ".aws": true, ".gnupg": true, ".kube": true, ".docker": true, ".agentium": true, ".git": true, ".hg": true, ".svn": true, "node_modules": true, "vendor": true, ".venv": true, "venv": true, "dist": true, "build": true, "target": true, "__pycache__": true, ".next": true, ".cache": true}
 
 // walkSearch is the fallback when ripgrep is not installed.
 func walkSearch(ctx context.Context, root, dir, pattern, glob string, icase bool) (string, error) {
@@ -123,12 +137,16 @@ func walkSearch(ctx context.Context, root, dir, pattern, glob string, icase bool
 			return ctx.Err()
 		}
 		if d.IsDir() {
-			if p != dir && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
+			if p != dir && skipDirs[d.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
+		switch d.Name() {
+		case ".netrc", ".npmrc", ".pypirc", ".git-credentials":
+			return nil
+		}
 		if glob != "" && !globMatch(glob, rel) {
 			return nil
 		}

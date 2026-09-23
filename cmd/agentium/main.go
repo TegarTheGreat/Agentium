@@ -4,6 +4,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,23 +20,30 @@ import (
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/agent"
+	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/memory"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"github.com/tegarthegreat/agentium/internal/session"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.1.0"
+var version = "0.6.0"
 
 const usage = `agentium — fast, minimal coding agent
 
 Usage:
   agentium                      interactive session
   agentium "fix the tests"      one-shot task (also: -p "...", or pipe stdin)
-  agentium login <provider>     store an API key (~/.agentium/auth.json, 0600)
+  agentium login <provider>     store an API key (OS keychain, else ~/.agentium/auth.json 0600)
+  agentium login --oauth openrouter   log in through the browser
   agentium logout <provider>
   agentium providers            list providers and credential status
+  agentium models [provider]    list models with context size and price (models.dev)
+  agentium undo                 revert the file changes of the last turn here
+  agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
 
@@ -41,15 +51,24 @@ Flags:
   -m provider/model   model to use (env AGENTIUM_MODEL, config "model")
   -p prompt           one-shot prompt
   -c                  continue the latest session in this directory
-  --mode ask|auto|yolo  approvals: every action | risky only (default) | never
+  --mode ask|auto|yolo|plan  approvals: every action | risky only (default) | never
   --yolo              same as --mode yolo
+  --plan              plan mode: read-only investigation that ends in a plan (same as --mode plan)
+  --no-sandbox        run shell commands unconfined
+  --effort LEVEL      reasoning effort: low|medium|high|xhigh|max (model default if unset)
+  --fast              provider fast mode where available (Claude Opus: up to 2.5x output speed)
   -q                  quiet: no tool lines or stats
+  --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
+  --max-cost USD      stop once the session has cost this much (needs a known price)
+  --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
 
-In a session: /clear  /model <ref>  /mode <m>  /usage  /exit
+In a session: /plan  /go  /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
+Keys: ↑/↓ history · Ctrl-A/E/U/K/W · paste keeps newlines · end a line with \ for a newline
 `
 
 func main() {
+	sandbox.MaybeRunHelper()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -67,6 +86,15 @@ func main() {
 		case "providers":
 			exit(cmdProviders())
 			return
+		case "undo":
+			exit(cmdUndo())
+			return
+		case "tidy":
+			exit(cmdTidy(os.Args[2:]))
+			return
+		case "models":
+			exit(cmdModels(os.Args[2:]))
+			return
 		case "bench":
 			exit(cmdBench(os.Args[2:]))
 			return
@@ -79,16 +107,57 @@ func exit(err error) {
 	if err == nil {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "agentium:", err)
-	if errors.Is(err, context.Canceled) {
-		os.Exit(130)
+	var js *jsonOut
+	if errors.As(err, &js) {
+		os.Exit(js.code)
 	}
-	os.Exit(1)
+	fmt.Fprintln(os.Stderr, "agentium:", err)
+	os.Exit(exitCode(err))
+}
+
+// exitCode: 0 ok, 1 error, 2 stopped by a limit or safeguard, 130 interrupted.
+func exitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, context.Canceled):
+		return 130
+	case errors.Is(err, agent.ErrMaxTurns), errors.Is(err, agent.ErrStuck), errors.Is(err, agent.ErrTruncated),
+		errors.Is(err, agent.ErrRefused), errors.Is(err, agent.ErrBudget):
+		return 2
+	}
+	return 1
 }
 
 func isTTY(f *os.File) bool {
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+// jsonOut carries an exit code for --json runs, whose result was already
+// reported on stdout.
+type jsonOut struct{ code int }
+
+func (j *jsonOut) Error() string { return fmt.Sprintf("exit %d", j.code) }
+
+type jsonWriter struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+}
+
+func newJSONWriter(w io.Writer) *jsonWriter { return &jsonWriter{enc: json.NewEncoder(w)} }
+
+func (j *jsonWriter) emit(v any) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	_ = j.enc.Encode(v)
+}
+
+func clipText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "") + "…"
 }
 
 // ui renders agent events tersely.
@@ -155,6 +224,9 @@ func summarizeCall(c provider.ToolCall) string {
 }
 
 func fmtK(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	}
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
@@ -218,8 +290,16 @@ func run(args []string) error {
 	cont := fs.Bool("c", false, "")
 	mode := fs.String("mode", "", "")
 	yolo := fs.Bool("yolo", false, "")
+	plan := fs.Bool("plan", false, "")
 	quiet := fs.Bool("q", false, "")
 	maxTurns := fs.Int("max-turns", 0, "")
+	noSandbox := fs.Bool("no-sandbox", false, "")
+	effort := fs.String("effort", "", "")
+	asJSON := fs.Bool("json", false, "")
+	maxCost := fs.Float64("max-cost", 0, "")
+	bestOf := fs.Int("best-of", 0, "")
+	check := fs.String("check", "", "")
+	fast := fs.Bool("fast", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -266,24 +346,137 @@ func run(args []string) error {
 	if *yolo {
 		m = policy.Yolo
 	}
+	if *plan {
+		m = policy.Plan
+	}
+	if *asJSON && *prompt == "" {
+		return errors.New("--json needs a prompt (argument, -p, or stdin)")
+	}
+	if *asJSON {
+		*quiet = true
+	}
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
-	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY}
+	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}
 	gate.Approve = ap.ask
 
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
-	a := &agent.Agent{
-		Client: res.Client, Model: res.Model, System: agent.SystemPrompt(cwd),
-		Tools: tool.All(), Env: &tool.Env{Root: cwd, Gate: gate},
-		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
-		ContextChars: 400_000,
+	go session.Prune(200, 90*24*time.Hour)
+	mem := openMemory(cfg, cwd)
+	snapshot := ""
+	if mem != nil {
+		snapshot = mem.store.Snapshot()
 	}
+	var client provider.Client = res.Client
+	var fb *provider.Fallback
+	if len(cfg.Fallback) > 0 {
+		chain := []provider.Resolved{res}
+		for _, ref := range cfg.Fallback {
+			if r, err := provider.Resolve(ref, cfg, auth); err == nil {
+				chain = append(chain, r)
+			} else if !*quiet {
+				fmt.Fprintln(os.Stderr, u.dim("· fallback "+ref+" ignored: "+firstLine(err.Error())))
+			}
+		}
+		if len(chain) > 1 {
+			fb = &provider.Fallback{Chain: chain, OnSwap: func(from, to provider.Resolved, err error) {
+				u.line(fmt.Sprintf("· %s/%s unavailable (%s); switching to %s/%s", from.Provider, from.Model, firstLine(err.Error()), to.Provider, to.Model))
+			}}
+			client = fb
+		}
+	}
+	tools := tool.All()
+	if len(cfg.MCP) > 0 {
+		clients := startMCP(cfg.MCP, cwd, func(msg string) {
+			if !*quiet {
+				fmt.Fprintln(os.Stderr, u.dim("· "+msg))
+			}
+		})
+		defer func() {
+			for _, c := range clients {
+				c.Close()
+			}
+		}()
+		tools = append(tools, tool.MCPTools(clients)...)
+	}
+	system := agent.SystemPrompt(cwd, mem != nil, snapshot)
+	a := &agent.Agent{
+		Client: client, Model: res.Model, System: system,
+		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
+		MaxCost: *maxCost,
+		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
+		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
+		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
+		Verify:        cfg.Verify == nil || *cfg.Verify,
+	}
+	if cfg.FastModel != "" {
+		if fr, err := provider.Resolve(cfg.FastModel, cfg, auth); err == nil {
+			a.Fast, a.FastModel = fr.Client, fr.Model
+		} else if !*quiet {
+			fmt.Fprintln(os.Stderr, u.dim("· fast_model ignored: "+firstLine(err.Error())))
+		}
+	}
+	sess.SystemHash = hashString(system)
 	if *cont {
 		if prev, err := session.Latest(cwd); err == nil && prev != nil {
 			sess = prev
 			a.Messages = prev.Messages
+			a.Note, sess.Note = prev.Note, ""
+			if prev.SystemHash != hashString(system) {
+				// Memory or instructions changed since: signed thinking
+				// blocks from the old prompt would no longer verify.
+				for i := range a.Messages {
+					a.Messages[i].Raw = nil
+				}
+			}
+			sess.SystemHash = hashString(system)
 		}
+	}
+	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
+	if !boxStatus.Available && !*quiet && !*noSandbox && sandboxWanted(cfg) {
+		fmt.Fprintln(os.Stderr, u.dim("· "+boxStatus.Detail))
+	}
+	if mem != nil {
+		mem.skip = sess.ID
+		go mem.buildIndex()
+		a.OnRemember = func(fact string) {
+			for _, r := range mem.store.Apply([]memory.Directive{{Kind: "remember", Text: fact}}) {
+				u.line("· " + r)
+			}
+		}
+	}
+	var replies, edited []string
+	var stopHooks []string
+	if cfg.Hooks != nil {
+		a.Env.PostEdit = cfg.Hooks.PostEdit
+		stopHooks = cfg.Hooks.Stop
+	}
+	store := openCheckpoints(cfg, cwd)
+	var curPrompt string
+	if store != nil {
+		a.Env.BeforeMutate = func() {
+			id, err := store.Snapshot(context.Background(), "before: "+firstLine(curPrompt))
+			if err != nil {
+				u.line("  checkpoint failed: " + firstLine(err.Error()))
+				return
+			}
+			sess.AddCheckpoint(id, curPrompt)
+		}
+	}
+	a.Cost = func(us provider.Usage) float64 {
+		info, known := res.Info, res.Known
+		if fb != nil {
+			act := fb.Active()
+			info, known = act.Info, act.Known
+		}
+		if !known {
+			return 0
+		}
+		return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
+	}
+	if *maxCost > 0 && !res.Known && !*quiet {
+		fmt.Fprintln(os.Stderr, u.dim("· --max-cost: no price known for this model; the limit cannot be enforced"))
 	}
 	a.Events = agent.Events{
 		Text:      u.text,
@@ -295,6 +488,22 @@ func run(args []string) error {
 		},
 		Retry: func(err error, wait time.Duration) {
 			u.line(fmt.Sprintf("  retrying in %s: %s", wait, firstLine(err.Error())))
+		},
+		Notice: func(msg string) { u.line("· " + msg) },
+		TurnFinish: func(r provider.Response) {
+			if r.Text != "" {
+				replies = append(replies, r.Text)
+			}
+			for _, c := range r.ToolCalls {
+				if c.Name == "edit" {
+					var m map[string]any
+					if jsonUnmarshal(c.Args, &m) == nil {
+						if p, ok := m["path"].(string); ok {
+							edited = appendUnique(edited, p)
+						}
+					}
+				}
+			}
 		},
 	}
 
@@ -315,9 +524,22 @@ func run(args []string) error {
 	}()
 
 	turn := func(input string) error {
+		curPrompt = input
+		replies, edited = nil, nil
+		send := input
+		if mem != nil {
+			if block, n := mem.recall(input); n > 0 {
+				send = block + "\n\n" + input
+				u.line(fmt.Sprintf("· recalled %d item%s from memory", n, plural(n)))
+			}
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		active.Store(&cancel)
-		st, err := a.Run(ctx, input)
+		st, err := a.Run(ctx, send)
+		if mem != nil {
+			mem.afterTurn(input, replies, edited, u.line)
+		}
+		runStopHooks(stopHooks, cwd)
 		active.Store(nil)
 		cancel()
 		sess.Messages = a.Messages
@@ -326,7 +548,18 @@ func run(args []string) error {
 		u.endLine()
 		u.mu.Unlock()
 		if !*quiet {
-			fmt.Fprintln(os.Stderr, u.dim(statsLine(st)))
+			line := statsLine(st)
+			info, known := res.Info, res.Known
+			if fb != nil {
+				act := fb.Active()
+				info, known = act.Info, act.Known
+			}
+			if known {
+				if c := info.Price(st.Usage.Input, st.Usage.Output, st.Usage.CacheRead, st.Usage.CacheWrite); c > 0 {
+					line += fmt.Sprintf(" · $%.4f", c)
+				}
+			}
+			fmt.Fprintln(os.Stderr, u.dim(line))
 		}
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
@@ -334,24 +567,130 @@ func run(args []string) error {
 		return err
 	}
 
+	if *bestOf > 1 {
+		if *prompt == "" {
+			return errors.New("--best-of needs a prompt")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		active.Store(&cancel)
+		defer cancel()
+		if store != nil {
+			if id, err := store.Snapshot(ctx, "before best-of"); err == nil {
+				sess.AddCheckpoint(id, *prompt)
+				_ = sess.Save()
+			}
+		}
+		return bestOfN(ctx, *bestOf, *check, *prompt, cwd, res, a, u)
+	}
+	if *prompt != "" && *asJSON {
+		jw := newJSONWriter(os.Stdout)
+		jw.emit(map[string]any{"type": "session", "id": sess.ID, "model": res.Provider + "/" + res.Model, "sandbox": a.Env.Sandbox != nil, "mode": string(gate.GetMode())})
+		a.Events.Text = func(d string) { jw.emit(map[string]any{"type": "text", "text": d}) }
+		a.Events.ToolStart = func(c provider.ToolCall) {
+			jw.emit(map[string]any{"type": "tool_call", "id": c.ID, "name": c.Name, "args": c.Args})
+		}
+		a.Events.ToolDone = func(c provider.ToolCall, out string, err error, d time.Duration) {
+			ev := map[string]any{"type": "tool_result", "id": c.ID, "name": c.Name, "ok": err == nil, "ms": d.Milliseconds(), "output": clipText(out, 2000)}
+			if err != nil {
+				ev["error"] = err.Error()
+			}
+			jw.emit(ev)
+		}
+		a.Events.Notice = func(msg string) { jw.emit(map[string]any{"type": "notice", "message": msg}) }
+		a.Events.Retry = func(err error, wait time.Duration) {
+			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds()})
+		}
+		t0 := time.Now()
+		err := turn(*prompt)
+		final := ""
+		if len(replies) > 0 {
+			final = replies[len(replies)-1]
+		}
+		result := map[string]any{"type": "result", "ok": err == nil, "text": final, "turns": a.Turns,
+			"usage": a.Usage, "cost_usd": a.Spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": edited}
+		if err != nil {
+			result["error"] = err.Error()
+		}
+		jw.emit(result)
+		if err != nil {
+			return &jsonOut{code: exitCode(err)}
+		}
+		return nil
+	}
 	if *prompt != "" {
 		return turn(*prompt)
 	}
 
-	fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · /exit to quit", version, res.Provider, res.Model, gate.GetMode())))
+	box := "sandbox off"
+	if a.Env.Sandbox != nil {
+		box = "sandboxed"
+	}
+	fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
+	var ed *editor
+	if lineEditing && isTTY(os.Stderr) {
+		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
+	}
+	// afterPlan is the mode /go switches to.
+	afterPlan := policy.Auto
+	if m := gate.GetMode(); m != policy.Plan {
+		afterPlan = m
+	}
 	for {
-		fmt.Fprint(os.Stderr, "\n› ")
-		line, err := in.ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(os.Stderr)
-			return nil
+		var line string
+		var err error
+		ps := "› "
+		if gate.GetMode() == policy.Plan {
+			ps = "plan› "
+		}
+		if ed != nil {
+			ed.prompt = ps
+			fmt.Fprint(os.Stderr, "\n")
+			line, err = ed.readLine()
+			if errors.Is(err, errInterrupt) || errors.Is(err, errEOF) {
+				return nil
+			}
+			if err != nil { // no raw mode available: fall back to plain input
+				ed = nil
+				continue
+			}
+		} else {
+			fmt.Fprint(os.Stderr, "\n"+ps)
+			line, err = in.ReadString('\n')
+			if err != nil && line == "" {
+				fmt.Fprintln(os.Stderr)
+				return nil
+			}
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
+		switch f := strings.Fields(line); f[0] {
+		case "/plan":
+			if m := gate.GetMode(); m != policy.Plan {
+				afterPlan = m
+			}
+			gate.SetMode(policy.Plan)
+			fmt.Fprintln(os.Stderr, u.dim("· plan mode: read-only; the agent investigates and proposes a plan. /go to carry it out"))
+			if len(f) == 1 {
+				continue
+			}
+			line = strings.TrimSpace(strings.TrimPrefix(line, "/plan"))
+		case "/go":
+			if gate.GetMode() != policy.Plan {
+				fmt.Fprintln(os.Stderr, u.dim("· not in plan mode"))
+				continue
+			}
+			gate.SetMode(afterPlan)
+			fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("· %s mode: carrying out the plan", afterPlan)))
+			extra := strings.TrimSpace(strings.TrimPrefix(line, "/go"))
+			line = "Carry out the plan above, then verify it."
+			if extra != "" {
+				line += "\n\n" + extra
+			}
+		}
 		if strings.HasPrefix(line, "/") {
-			if done := slash(line, a, gate, cfg, auth, sess); done {
+			if done := slash(line, a, gate, cfg, auth, sess, store); done {
 				return nil
 			}
 			continue
@@ -366,7 +705,7 @@ func run(args []string) error {
 	}
 }
 
-func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, auth config.Auth, sess *session.Session) (exit bool) {
+func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, auth config.Auth, sess *session.Session, store *checkpoint.Store) (exit bool) {
 	f := strings.Fields(line)
 	switch f[0] {
 	case "/exit", "/quit", "/q":
@@ -393,13 +732,79 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 			gate.SetMode(policy.ParseMode(f[1]))
 		}
 		fmt.Fprintln(os.Stderr, "· mode:", gate.GetMode())
+	case "/sessions":
+		list, _ := session.ForCwd(sess.Cwd, 10)
+		if len(list) == 0 {
+			fmt.Fprintln(os.Stderr, "· no saved sessions here")
+		}
+		for i, ss := range list {
+			first := ""
+			for _, m := range ss.Messages {
+				if m.Role == provider.RoleUser && m.Text != "" {
+					first = m.Text
+					if j := strings.Index(first, "</recall>"); j >= 0 {
+						first = strings.TrimSpace(first[j+9:])
+					}
+					break
+				}
+			}
+			mark := " "
+			if ss.ID == sess.ID {
+				mark = "*"
+			}
+			fmt.Fprintf(os.Stderr, "%s%2d. %s · %d msgs · %s\n", mark, i+1, ss.Updated.Format("2006-01-02 15:04"), len(ss.Messages), oneLine(first, 60))
+		}
+		fmt.Fprintln(os.Stderr, "· /resume <n> to continue one")
+	case "/resume":
+		list, _ := session.ForCwd(sess.Cwd, 10)
+		n := 1
+		if len(f) > 1 {
+			fmt.Sscanf(f[1], "%d", &n)
+		}
+		if n < 1 || n > len(list) {
+			fmt.Fprintln(os.Stderr, "· no such session (see /sessions)")
+			return false
+		}
+		chosen := list[n-1]
+		hash := sess.SystemHash
+		*sess = *chosen
+		a.Messages = chosen.Messages
+		if chosen.SystemHash != hash {
+			for i := range a.Messages {
+				a.Messages[i].Raw = nil
+			}
+		}
+		sess.SystemHash = hash
+		fmt.Fprintf(os.Stderr, "· resumed session from %s (%d messages)\n", chosen.Updated.Format("2006-01-02 15:04"), len(chosen.Messages))
+	case "/undo":
+		note, err := undoLast(store, sess)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "·", err)
+			return false
+		}
+		a.Note = note
+		_ = sess.Save()
 	case "/usage":
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
 	default:
-		fmt.Fprintln(os.Stderr, "· commands: /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
+		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo|plan> /plan /go /usage /exit")
 	}
 	return false
+}
+
+func hashString(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
+}
+
+func appendUnique(xs []string, x string) []string {
+	for _, y := range xs {
+		if y == x {
+			return xs
+		}
+	}
+	return append(xs, x)
 }
 
 func firstNonEmpty(ss ...string) string {

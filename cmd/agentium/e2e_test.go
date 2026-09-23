@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,7 +112,7 @@ func runBin(t *testing.T, home, dir, stdin string, args ...string) (string, stri
 	t.Helper()
 	cmd := exec.Command(buildBinary(t), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "FAKE_KEY=k", "NO_COLOR=1")
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "FAKE_KEY=k", "NO_COLOR=1", "AGENTIUM_OFFLINE=1")
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -199,5 +202,318 @@ func TestCLIBasics(t *testing.T) {
 	out, _, err = runBin(t, home, t.TempDir(), "", "bench", "-runs", "3")
 	if err != nil || !strings.Contains(out, "startup") || !strings.Contains(out, "tokens overhead") {
 		t.Fatalf("bench: %q %v", out, err)
+	}
+}
+
+func TestUndo(t *testing.T) {
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("original"), 0o644)
+
+	if _, stderr, err := runBin(t, home, dir, "", "-q", "-m", "fakeoai/m", "create hello.txt"); err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hello.txt")); err != nil {
+		t.Fatal("agent should have created hello.txt")
+	}
+	_, stderr, err := runBin(t, home, dir, "", "undo")
+	if err != nil || !strings.Contains(stderr, "reverted 1 file") {
+		t.Fatalf("undo: %v %q", err, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hello.txt")); !os.IsNotExist(err) {
+		t.Fatal("undo should remove the created file")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "keep.txt")); string(b) != "original" {
+		t.Fatal("undo must not touch unrelated files")
+	}
+	if _, stderr, _ = runBin(t, home, dir, "", "undo"); !strings.Contains(stderr, "nothing to undo") {
+		t.Fatalf("second undo: %q", stderr)
+	}
+	// The model is told about the undo on the next continued turn.
+	before := len(rec.all())
+	if _, stderr, err = runBin(t, home, dir, "", "-q", "-c", "-m", "fakeoai/m", "next"); err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	b, _ := json.Marshal(rec.all()[before])
+	if !strings.Contains(string(b), "undid the file changes") {
+		t.Fatalf("undo note not delivered: %s", b)
+	}
+}
+
+func TestMemoryAcrossSessions(t *testing.T) {
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		json.Unmarshal(b, &body)
+		rec.add(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		reply := "Noted.\n@remember deploys run scripts/ship.sh from the repo root\n@decide indent with tabs — matches gofmt"
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", reply)
+	}))
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+
+	_, stderr, err := runBin(t, home, dir, "", "-m", "fakeoai/m", "remember how we deploy the ship script")
+	if err != nil || !strings.Contains(stderr, "remembered: deploys run scripts/ship.sh") || !strings.Contains(stderr, "decision D-001") {
+		t.Fatalf("first session: %v\n%s", err, stderr)
+	}
+	// A brand-new session (no -c) sees the memory snapshot in its system
+	// prompt and gets the earlier exchange recalled for a related question.
+	before := len(rec.all())
+	_, stderr, err = runBin(t, home, dir, "", "-m", "fakeoai/m", "which ship script deploys?")
+	if err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	b, _ := json.Marshal(rec.all()[before])
+	req := string(b)
+	for _, want := range []string{"scripts/ship.sh", "D-001", "@remember", "\\u003crecall"} {
+		if !strings.Contains(req, want) {
+			t.Errorf("second session request missing %q", want)
+		}
+	}
+	if !strings.Contains(stderr, "recalled") {
+		t.Errorf("recall notice missing: %s", stderr)
+	}
+	// Memory can be switched off.
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(fmt.Sprintf(`{"memory":false,"providers":{"fakeoai":{"base_url":%q,"api_key_env":"FAKE_KEY"}}}`, srv.URL+"/v1")), 0o600)
+	before = len(rec.all())
+	runBin(t, home, dir, "", "-m", "fakeoai/m", "which ship script deploys?")
+	b, _ = json.Marshal(rec.all()[before])
+	if strings.Contains(string(b), "scripts/ship.sh") {
+		t.Error("memory disabled but still injected")
+	}
+}
+
+func TestTidy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		out := "=== USER.md\n- prefers short answers\n=== MEMORY.md\n- deploy with scripts/ship.sh\n- tests: make test"
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", out)
+	}))
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	_, stderr, err := runBin(t, home, dir, "", "tidy", "--yes", "-m", "fakeoai/m")
+	if err != nil || !strings.Contains(stderr, "+ - deploy with scripts/ship.sh") || !strings.Contains(stderr, "memory updated") {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "USER.md")); !strings.Contains(string(b), "short answers") {
+		t.Fatalf("USER.md = %q", b)
+	}
+	_, stderr, _ = runBin(t, home, dir, "", "tidy", "--yes", "-m", "fakeoai/m")
+	if !strings.Contains(stderr, "already tidy") {
+		t.Fatalf("second tidy: %s", stderr)
+	}
+}
+
+func TestModelsRegistryAndCost(t *testing.T) {
+	fixture, err := os.ReadFile("../../internal/models/testdata/api.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(fixture) }))
+	defer reg.Close()
+	home := t.TempDir()
+	cmd := exec.Command(buildBinary(t), "models", "--refresh", "anthropic")
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "AGENTIUM_MODELS_URL="+reg.URL)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "claude-opus-5-5") || !strings.Contains(string(out), "$4/$20") {
+		t.Fatalf("models: %v\n%s", err, out)
+	}
+	// Registry providers (tokengo) become usable by setting their key env.
+	cmd = exec.Command(buildBinary(t), "providers")
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "AGENTIUM_OFFLINE=1", "TOKENGO_API_KEY=x")
+	out, _ = cmd.CombinedOutput()
+	if !strings.Contains(string(out), "tokengo     ready") {
+		t.Fatalf("providers:\n%s", out)
+	}
+	// A known model gets its price in the stats line.
+	var gotEffort string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		json.Unmarshal(b, &body)
+		if oc, ok := body["output_config"].(map[string]any); ok {
+			gotEffort, _ = oc["effort"].(string)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1000000}}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"ok\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(fmt.Sprintf(`{"effort":"xhigh","providers":{"anthropic":{"base_url":%q}}}`, srv.URL)), 0o600)
+	cmd = exec.Command(buildBinary(t), "-m", "anthropic/claude-opus-5-5", "hi")
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "AGENTIUM_OFFLINE=1", "ANTHROPIC_API_KEY=k", "NO_COLOR=1")
+	out, err = cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "$4.0000") || gotEffort != "xhigh" {
+		t.Fatalf("cost/effort: %v effort=%q\n%s", err, gotEffort, out)
+	}
+}
+
+func TestOpenRouterOAuth(t *testing.T) {
+	var gotVerifier string
+	keySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["code"] != "the-code" || body["code_challenge_method"] != "S256" {
+			http.Error(w, "bad", 400)
+			return
+		}
+		gotVerifier = body["code_verifier"]
+		fmt.Fprint(w, `{"key":"sk-or-test"}`)
+	}))
+	defer keySrv.Close()
+	oldAuth, oldKey, oldOpen := openRouterAuthURL, openRouterKeyURL, openBrowser
+	defer func() { openRouterAuthURL, openRouterKeyURL, openBrowser = oldAuth, oldKey, oldOpen }()
+	openRouterKeyURL = keySrv.URL
+	openRouterAuthURL = "https://openrouter.example/auth"
+	// The "browser" follows the auth URL straight to the callback.
+	openBrowser = func(u string) {
+		pu, _ := url.Parse(u)
+		cb := pu.Query().Get("callback_url")
+		if pu.Query().Get("code_challenge") == "" {
+			return
+		}
+		go http.Get(cb + "?code=the-code")
+	}
+	key, err := openRouterOAuth(context.Background())
+	if err != nil || key != "sk-or-test" || len(gotVerifier) < 43 {
+		t.Fatalf("key=%q err=%v verifier=%q", key, err, gotVerifier)
+	}
+}
+
+func TestJSONMode(t *testing.T) {
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir := t.TempDir()
+	stdout, stderr, err := runBin(t, home, dir, "", "--json", "-m", "fakeoai/m", "create hello.txt")
+	if err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	var types []string
+	var result map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("not JSON: %q", line)
+		}
+		types = append(types, ev["type"].(string))
+		if ev["type"] == "result" {
+			result = ev
+		}
+	}
+	got := strings.Join(types, ",")
+	if !strings.HasPrefix(got, "session,tool_call,tool_result,") || !strings.HasSuffix(got, "result") {
+		t.Fatalf("events = %s", got)
+	}
+	if result["ok"] != true || result["text"] != "Created hello.txt." || result["files_changed"].([]any)[0] != "hello.txt" {
+		t.Fatalf("result = %v", result)
+	}
+	// Exit code 2 when a limit stops the run.
+	_, _, err = runBin(t, home, t.TempDir(), "", "--json", "--max-turns", "1", "-m", "fakeoai/m", "create hello.txt")
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("max-turns exit: %v", err)
+	}
+}
+
+func TestMCPEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 needed for the fake MCP server")
+	}
+	script, _ := filepath.Abs("testdata/fake_mcp.py")
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		json.Unmarshal(b, &body)
+		rec.add(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if !strings.Contains(string(b), `"role":"tool"`) {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"m1","function":{"name":"mcp__fake__echo","arguments":"{\"text\":\"ping\"}"}}]}}]}`+"\n\n")
+		} else {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"}}]}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	home := t.TempDir()
+	cfg := fmt.Sprintf(`{"providers":{"fakeoai":{"base_url":%q,"api_key_env":"FAKE_KEY"}},"mcp":{"fake":{"command":"python3","args":[%q]}}}`, srv.URL+"/v1", script)
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(cfg), 0o600)
+	_, stderr, err := runBin(t, home, t.TempDir(), "", "-m", "fakeoai/m", "use the echo tool")
+	if err != nil || !strings.Contains(stderr, "mcp: fake ready (1 tools)") {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	reqs := rec.all()
+	first, _ := json.Marshal(reqs[0]["tools"])
+	if !strings.Contains(string(first), "mcp__fake__echo") {
+		t.Fatalf("MCP tool not offered: %s", first)
+	}
+	second, _ := json.Marshal(reqs[1]["messages"])
+	if !strings.Contains(string(second), "echoed ping") {
+		t.Fatalf("MCP result missing: %s", second)
+	}
+}
+
+func TestBestOf(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if !strings.Contains(string(b), `"role":"tool"`) {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"e1","function":{"name":"edit","arguments":"{\"path\":\"calc.sh\",\"old\":\"$1 - $2\",\"new\":\"$1 + $2\"}"}}]}}]}`+"\n\n")
+		} else if !strings.Contains(string(b), "sh test.sh") && strings.Contains(string(b), "have not run a build") {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b1","function":{"name":"bash","arguments":"{\"cmd\":\"sh test.sh\"}"}}]}}]}`+"\n\n")
+		} else {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"fixed"}}]}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	gitc := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	gitc("init", "-q")
+	os.WriteFile(filepath.Join(dir, "calc.sh"), []byte("echo $(( $1 - $2 ))\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "test.sh"), []byte("[ \"$(sh calc.sh 2 3)\" = 5 ]\n"), 0o644)
+	gitc("add", "-A")
+	gitc("commit", "-q", "-m", "init")
+
+	stdout, stderr, err := runBin(t, home, dir, "", "--best-of", "3", "--check", "sh test.sh", "-m", "fakeoai/m", "fix calc")
+	if err != nil || !strings.Contains(stdout, "Applied attempt") {
+		t.Fatalf("%v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "calc.sh")); !strings.Contains(string(b), "$1 + $2") {
+		t.Fatalf("winner not applied: %s", b)
+	}
+	if strings.Count(stderr, "pass ·") != 3 {
+		t.Fatalf("expected 3 passing attempts:\n%s", stderr)
+	}
+	if out, _ := exec.Command("git", "-C", dir, "worktree", "list").Output(); strings.Count(string(out), "\n") != 1 {
+		t.Fatalf("worktrees not cleaned up:\n%s", out)
+	}
+	// A check that never passes applies nothing and exits 2.
+	os.WriteFile(filepath.Join(dir, "calc.sh"), []byte("echo $(( $1 - $2 ))\n"), 0o644)
+	_, _, err = runBin(t, home, dir, "", "--best-of", "2", "--check", "false", "-m", "fakeoai/m", "fix calc")
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("failing check: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "calc.sh")); !strings.Contains(string(b), "$1 - $2") {
+		t.Fatal("nothing should be applied when no attempt passes")
 	}
 }

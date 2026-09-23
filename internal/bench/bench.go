@@ -16,6 +16,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
@@ -61,7 +62,7 @@ func MeasureOffline(runs int) (Offline, error) {
 		return o, err
 	}
 	defer os.RemoveAll(dir)
-	o.PromptChars = len(agent.SystemPrompt(dir))
+	o.PromptChars = len(agent.SystemPrompt(dir, true, ""))
 	defs, _ := json.Marshal(tool.Defs(tool.All()))
 	o.ToolChars = len(defs)
 	// ~4 characters per token is the usual estimate for English + JSON.
@@ -180,10 +181,14 @@ func RunLive(ctx context.Context, client provider.Client, model string, tasks []
 			}
 		}
 		var reply strings.Builder
+		env := &tool.Env{Root: dir, Gate: &policy.Gate{Mode: policy.Auto, Root: dir}, Net: policy.NetDeny}
+		if sandbox.Probe().Available {
+			env.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(dir)}
+		}
 		a := &agent.Agent{
-			Client: client, Model: model, System: agent.SystemPrompt(dir),
-			Tools: tool.All(), Env: &tool.Env{Root: dir, Gate: &policy.Gate{Mode: policy.Auto, Root: dir}},
-			MaxTurns: 20, ContextChars: 200_000,
+			Client: client, Model: model, System: agent.SystemPrompt(dir, false, ""),
+			Tools: tool.All(), Env: env,
+			MaxTurns: 20, ContextTokens: provider.ContextWindow(model), Verify: true,
 			Events: agent.Events{TurnFinish: func(r provider.Response) {
 				reply.Reset()
 				reply.WriteString(r.Text)
