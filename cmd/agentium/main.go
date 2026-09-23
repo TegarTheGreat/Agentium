@@ -376,12 +376,26 @@ func run(args []string) error {
 			client = fb
 		}
 	}
+	tools := tool.All()
+	if len(cfg.MCP) > 0 {
+		clients := startMCP(cfg.MCP, cwd, func(msg string) {
+			if !*quiet {
+				fmt.Fprintln(os.Stderr, u.dim("· "+msg))
+			}
+		})
+		defer func() {
+			for _, c := range clients {
+				c.Close()
+			}
+		}()
+		tools = append(tools, tool.MCPTools(clients)...)
+	}
 	system := agent.SystemPrompt(cwd, mem != nil, snapshot)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
 		MaxCost: *maxCost,
-		Tools:   tool.All(), Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
+		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
@@ -423,6 +437,11 @@ func run(args []string) error {
 		}
 	}
 	var replies, edited []string
+	var stopHooks []string
+	if cfg.Hooks != nil {
+		a.Env.PostEdit = cfg.Hooks.PostEdit
+		stopHooks = cfg.Hooks.Stop
+	}
 	store := openCheckpoints(cfg, cwd)
 	var curPrompt string
 	if store != nil {
@@ -510,6 +529,7 @@ func run(args []string) error {
 		if mem != nil {
 			mem.afterTurn(input, replies, edited, u.line)
 		}
+		runStopHooks(stopHooks, cwd)
 		active.Store(nil)
 		cancel()
 		sess.Messages = a.Messages

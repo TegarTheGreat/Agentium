@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tegarthegreat/agentium/internal/lint"
 )
@@ -106,6 +107,7 @@ func runEdit(_ context.Context, env *Env, raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	env.markSeen(p)
+	warn += runPostEdit(env, p)
 
 	add, del := diffStat(string(before), after)
 	switch {
@@ -296,4 +298,32 @@ func diffStat(a, b string) (add, del int) {
 		q++
 	}
 	return len(bl) - p - q, len(al) - p - q
+}
+
+// runPostEdit runs the configured post-edit hooks (formatters, linters).
+// A hook that changes the file is fine: the new version counts as seen.
+// Failing hooks report their output so the model can react.
+func runPostEdit(env *Env, path string) string {
+	if len(env.PostEdit) == 0 {
+		return ""
+	}
+	var notes []string
+	for _, h := range env.PostEdit {
+		cmd := strings.ReplaceAll(h, "{path}", shellQuote(path))
+		out, err := runShell(context.Background(), env.Root, cmd, 30*time.Second, env.Sandbox)
+		if err != nil || strings.Contains(out, "[exit ") {
+			notes = append(notes, fmt.Sprintf("hook %q: %s", h, Clip(strings.TrimSpace(out), 1500)))
+		}
+	}
+	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+		env.markSeen(path)
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(notes, "\n")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

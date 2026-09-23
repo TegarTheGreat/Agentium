@@ -425,3 +425,41 @@ func TestJSONMode(t *testing.T) {
 		t.Fatalf("max-turns exit: %v", err)
 	}
 }
+
+func TestMCPEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 needed for the fake MCP server")
+	}
+	script, _ := filepath.Abs("testdata/fake_mcp.py")
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		json.Unmarshal(b, &body)
+		rec.add(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if !strings.Contains(string(b), `"role":"tool"`) {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"m1","function":{"name":"mcp__fake__echo","arguments":"{\"text\":\"ping\"}"}}]}}]}`+"\n\n")
+		} else {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"}}]}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	home := t.TempDir()
+	cfg := fmt.Sprintf(`{"providers":{"fakeoai":{"base_url":%q,"api_key_env":"FAKE_KEY"}},"mcp":{"fake":{"command":"python3","args":[%q]}}}`, srv.URL+"/v1", script)
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(cfg), 0o600)
+	_, stderr, err := runBin(t, home, t.TempDir(), "", "-m", "fakeoai/m", "use the echo tool")
+	if err != nil || !strings.Contains(stderr, "mcp: fake ready (1 tools)") {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	reqs := rec.all()
+	first, _ := json.Marshal(reqs[0]["tools"])
+	if !strings.Contains(string(first), "mcp__fake__echo") {
+		t.Fatalf("MCP tool not offered: %s", first)
+	}
+	second, _ := json.Marshal(reqs[1]["messages"])
+	if !strings.Contains(string(second), "echoed ping") {
+		t.Fatalf("MCP result missing: %s", second)
+	}
+}

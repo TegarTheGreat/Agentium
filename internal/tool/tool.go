@@ -26,6 +26,9 @@ type Env struct {
 	Sandbox *sandbox.Config
 	// Net decides whether a sandboxed command may use the network.
 	Net policy.NetPolicy
+	// PostEdit are shell commands run after each successful edit, with
+	// {path} replaced by the edited file (e.g. "gofmt -w {path}").
+	PostEdit []string
 	// BeforeMutate, if set, runs once per turn before the first edit or
 	// bash call. It is used to checkpoint the workspace for undo.
 	BeforeMutate func()

@@ -397,3 +397,24 @@ func TestDiffStat(t *testing.T) {
 		}
 	}
 }
+
+func TestPostEditHook(t *testing.T) {
+	e := env(t)
+	e.PostEdit = []string{"sed -i 's/TODO/DONE/' {path}", "grep -q forbidden {path} && echo 'lint: forbidden word' && exit 1 || true"}
+	out, err := call(t, editTool, e, `{"path":"n.txt","new":"TODO item\n"}`)
+	if err != nil || strings.Contains(out, "hook") {
+		t.Fatalf("clean hook run: %q %v", out, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(e.Root, "n.txt"))
+	if string(b) != "DONE item\n" {
+		t.Fatalf("formatter hook not applied: %q", b)
+	}
+	// The hook's own change must not make the next edit look stale.
+	if _, err := call(t, editTool, e, `{"path":"n.txt","old":"DONE item","new":"forbidden item"}`); err != nil {
+		t.Fatalf("edit after hook: %v", err)
+	}
+	out, _ = call(t, editTool, e, `{"path":"n.txt","old":"forbidden item","new":"forbidden thing"}`)
+	if !strings.Contains(out, "lint: forbidden word") {
+		t.Fatalf("failing hook output should reach the model: %q", out)
+	}
+}

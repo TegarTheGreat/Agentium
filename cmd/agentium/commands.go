@@ -11,12 +11,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/bench"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/mcp"
 	"github.com/tegarthegreat/agentium/internal/models"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
@@ -392,4 +394,44 @@ func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) 
 	}
 	env.Sandbox = &sc
 	return st
+}
+
+// startMCP starts the configured MCP servers concurrently (10s budget) and
+// returns those that came up. Only users who configure MCP pay this cost.
+func startMCP(servers map[string]config.MCPServer, dir string, report func(string)) []*mcp.Client {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	type res struct {
+		c   *mcp.Client
+		err error
+	}
+	ch := make(chan res, len(servers))
+	for name, sc := range servers {
+		go func(name string, sc config.MCPServer) {
+			c, err := mcp.Start(ctx, name, mcp.Config{Command: sc.Command, Args: sc.Args, Env: sc.Env}, dir)
+			ch <- res{c, err}
+		}(name, sc)
+	}
+	var out []*mcp.Client
+	for range servers {
+		r := <-ch
+		if r.err != nil {
+			report("mcp: " + r.err.Error())
+			continue
+		}
+		report(fmt.Sprintf("mcp: %s ready (%d tools)", r.c.Name, len(r.c.Tools)))
+		out = append(out, r.c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name }) // stable tool order = cacheable prefix
+	return out
+}
+
+// runStopHooks runs the user's post-turn commands in the background.
+func runStopHooks(hooks []string, dir string) {
+	for _, h := range hooks {
+		cmd := exec.Command("sh", "-c", h)
+		cmd.Dir = dir
+		_ = cmd.Start()
+		go func() { _ = cmd.Wait() }()
+	}
 }
