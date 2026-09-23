@@ -20,6 +20,8 @@ import (
 type Env struct {
 	Root string
 	Gate *policy.Gate
+	// Vision: the model accepts images, so read attaches image files.
+	Vision bool
 	// AllowPrivateNet lets fetch reach localhost and private networks.
 	AllowPrivateNet bool
 	// Sandbox confines bash commands; nil runs them unconfined.

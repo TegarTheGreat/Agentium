@@ -13,6 +13,9 @@ import (
 // than prose, so this errs on the side of acting early.
 const charsPerToken = 3
 
+// imageChars is the budget charge for one image (~1.6k tokens).
+const imageChars = 1600 * charsPerToken
+
 const (
 	keepRecentTools = 6
 	elidedKeep      = 300
@@ -39,7 +42,7 @@ func (a *Agent) budgets() (int, int) {
 func (a *Agent) size() int {
 	n := len(a.System)
 	for _, m := range a.Messages {
-		n += len(m.Text)
+		n += len(m.Text) + len(m.Images)*imageChars
 		for _, c := range m.ToolCalls {
 			n += len(c.Args) + len(c.Name)
 		}
@@ -77,12 +80,21 @@ func (a *Agent) elide(keep int) {
 		switch m.Role {
 		case provider.RoleTool:
 			seen++
-			if seen <= keep || len(m.Text) <= elidedKeep+100 {
+			if seen <= keep {
 				continue
 			}
-			cut := len(m.Text) - elidedKeep
-			m.Text = strings.ToValidUTF8(m.Text[:elidedKeep], "") + fmt.Sprintf("\n[elided %d chars of old output; rerun the tool if needed]", cut)
-			first = i
+			note := ""
+			if len(m.Images) > 0 {
+				note = fmt.Sprintf("\n[%d old image(s) elided; read again if needed]", len(m.Images))
+				m.Images = nil
+				first = i
+			}
+			if len(m.Text) > elidedKeep+100 {
+				cut := len(m.Text) - elidedKeep
+				m.Text = strings.ToValidUTF8(m.Text[:elidedKeep], "") + fmt.Sprintf("\n[elided %d chars of old output; rerun the tool if needed]", cut)
+				first = i
+			}
+			m.Text += note
 		case provider.RoleAssistant:
 			if seen <= keep {
 				continue
@@ -188,6 +200,9 @@ func (a *Agent) compact(ctx context.Context) error {
 		switch m.Role {
 		case provider.RoleUser:
 			fmt.Fprintf(&tr, "\nUSER: %s\n", m.Text)
+			if len(m.Images) > 0 {
+				fmt.Fprintf(&tr, "[user attached %d image(s)]\n", len(m.Images))
+			}
 		case provider.RoleAssistant:
 			if m.Text != "" {
 				fmt.Fprintf(&tr, "\nASSISTANT: %s\n", m.Text)

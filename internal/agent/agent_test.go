@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -483,5 +486,35 @@ func TestPlanModeNote(t *testing.T) {
 	}
 	if strings.Contains(s.reqs[0].System, "plan mode") {
 		t.Fatal("plan note must stay out of the cached system prompt")
+	}
+}
+
+func TestImagesFlowAndElide(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){calls(tc("1", "read", `{"path":"p.png"}`))}}
+	a := newAgent(t, s)
+	a.Env.Vision = true
+	var buf bytes.Buffer
+	png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1)))
+	os.WriteFile(filepath.Join(a.Env.Root, "p.png"), buf.Bytes(), 0o644)
+	a.Attach = []provider.Image{{MediaType: "image/png", Data: buf.Bytes()}}
+	if _, err := a.Run(context.Background(), "look"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Attach) != 0 || len(a.Messages[0].Images) != 1 {
+		t.Fatal("user attachment not moved into the message")
+	}
+	var toolMsg *provider.Message
+	for i := range a.Messages {
+		if a.Messages[i].Role == provider.RoleTool {
+			toolMsg = &a.Messages[i]
+		}
+	}
+	if toolMsg == nil || len(toolMsg.Images) != 1 {
+		t.Fatalf("tool image missing: %+v", a.Messages)
+	}
+	before := a.size()
+	a.elide(0)
+	if len(toolMsg.Images) != 0 || !strings.Contains(toolMsg.Text, "image(s) elided") || a.size() >= before {
+		t.Fatalf("image not elided: %q", toolMsg.Text)
 	}
 }

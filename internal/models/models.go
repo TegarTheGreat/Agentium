@@ -48,6 +48,9 @@ type Model struct {
 	// model's reasoning back on later turns (e.g. "reasoning_content").
 	Interleaved string `json:"interleaved,omitempty"`
 	Released    string `json:"released,omitempty"`
+	// Input lists accepted input kinds ("text", "image", ...); nil when
+	// the registry did not say (or the cache predates this field).
+	Input []string `json:"input,omitempty"`
 }
 
 // Provider is one registry provider.
@@ -88,7 +91,10 @@ func Reduce(raw []byte) (*Registry, error) {
 				Context int `json:"context"`
 				Output  int `json:"output"`
 			} `json:"limit"`
-			Cost Cost `json:"cost"`
+			Cost       Cost `json:"cost"`
+			Modalities struct {
+				Input []string `json:"input"`
+			} `json:"modalities"`
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -106,6 +112,7 @@ func Reduce(raw []byte) (*Registry, error) {
 		for mid, m := range p.Models {
 			mm := Model{ID: mid, Context: m.Limit.Context, Output: m.Limit.Output, Cost: m.Cost,
 				Reasoning: m.Reasoning, Tools: m.ToolCall, Released: m.ReleaseDate}
+			mm.Input = m.Modalities.Input
 			for _, o := range m.ReasoningOptions {
 				switch o.Type {
 				case "effort":
@@ -138,7 +145,11 @@ func dir(home string) string { return filepath.Join(home, "models") }
 type index struct {
 	Fetched   time.Time            `json:"fetched"`
 	Providers map[string]*Provider `json:"providers"`
+	Schema    int                  `json:"schema,omitempty"`
 }
+
+// schema is bumped when the cached fields change, forcing a refresh.
+const schema = 2
 
 var (
 	mu      sync.Mutex
@@ -161,7 +172,7 @@ func loadIndex(h string) *index {
 		}
 	}
 	idx, idxHome, perProv = ix, h, map[string]map[string]Model{}
-	if time.Since(ix.Fetched) > maxAge && os.Getenv("AGENTIUM_OFFLINE") == "" {
+	if (time.Since(ix.Fetched) > maxAge || ix.Schema < schema) && os.Getenv("AGENTIUM_OFFLINE") == "" {
 		go func() { _, _ = Refresh(context.Background(), h) }()
 	}
 	return ix
@@ -243,7 +254,7 @@ func (r *Registry) save(h string) error {
 	if err := os.MkdirAll(filepath.Join(dir(h), "p"), 0o700); err != nil {
 		return err
 	}
-	ix := index{Fetched: r.Fetched, Providers: map[string]*Provider{}}
+	ix := index{Fetched: r.Fetched, Providers: map[string]*Provider{}, Schema: schema}
 	for id, p := range r.Providers {
 		cp := *p
 		cp.Models = nil

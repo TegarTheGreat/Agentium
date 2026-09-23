@@ -23,12 +23,26 @@ type OpenAI struct {
 
 type oaMsg struct {
 	Role       string       `json:"role"`
-	Content    *string      `json:"content"`
+	Content    any          `json:"content"` // *string, or []oaPart with images
 	ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string       `json:"tool_call_id,omitempty"`
 	// Reasoning replay for models that need it (DeepSeek, Kimi, ...).
 	ReasoningContent *string `json:"reasoning_content,omitempty"`
 	Reasoning        *string `json:"reasoning,omitempty"`
+}
+
+type oaPart struct {
+	Type     string            `json:"type"`
+	Text     string            `json:"text,omitempty"`
+	ImageURL map[string]string `json:"image_url,omitempty"`
+}
+
+func oaParts(text string, images []Image) []oaPart {
+	parts := []oaPart{{Type: "text", Text: text}}
+	for _, im := range images {
+		parts = append(parts, oaPart{Type: "image_url", ImageURL: map[string]string{"url": im.DataURL()}})
+	}
+	return parts
 }
 
 type oaToolCall struct {
@@ -73,9 +87,14 @@ func (c *OpenAI) body(req Request) map[string]any {
 	if req.System != "" {
 		msgs = append(msgs, oaMsg{Role: "system", Content: strp(req.System)})
 	}
-	for _, m := range req.Messages {
+	var toolImages []Image
+	for i, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:
+			if len(m.Images) > 0 {
+				msgs = append(msgs, oaMsg{Role: "user", Content: oaParts(m.Text, m.Images)})
+				continue
+			}
 			msgs = append(msgs, oaMsg{Role: "user", Content: strp(m.Text)})
 		case RoleAssistant:
 			om := oaMsg{Role: "assistant"}
@@ -101,6 +120,13 @@ func (c *OpenAI) body(req Request) map[string]any {
 			msgs = append(msgs, om)
 		case RoleTool:
 			msgs = append(msgs, oaMsg{Role: "tool", Content: strp(m.Text), ToolCallID: m.ToolCallID})
+			// Tool messages carry text only; images follow in a user
+			// message once the run of tool results ends.
+			toolImages = append(toolImages, m.Images...)
+			if len(toolImages) > 0 && (i+1 == len(req.Messages) || req.Messages[i+1].Role != RoleTool) {
+				msgs = append(msgs, oaMsg{Role: "user", Content: oaParts("(images returned by the tool calls above)", toolImages)})
+				toolImages = nil
+			}
 		}
 	}
 	b := map[string]any{

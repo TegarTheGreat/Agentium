@@ -564,3 +564,33 @@ func TestSkillsAndPlanEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestImageMention(t *testing.T) {
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "shot.png"), []byte("\x89PNG\r\n\x1a\n0000IHDR"), 0o644)
+	_, stderr, err := runBin(t, home, dir, "", "-m", "fakeant/claude-test", "what is in @shot.png? also @remember nothing")
+	if err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	if !strings.Contains(stderr, "attached shot.png") {
+		t.Fatalf("stderr: %s", stderr)
+	}
+	js, _ := json.Marshal(rec.all()[0]["messages"])
+	if !strings.Contains(string(js), `"media_type":"image/png"`) {
+		t.Fatalf("image not sent: %s", js)
+	}
+	// A model without vision gets no image and the user is told.
+	rec2 := &recorder{}
+	srv2 := fakeModel(t, rec2)
+	defer srv2.Close()
+	home2 := setupHome(t, srv2.URL)
+	_, stderr, _ = runBin(t, home2, dir, "", "-m", "fakeant/textonly", "what is in @shot.png")
+	js, _ = json.Marshal(rec2.all()[0]["messages"])
+	if strings.Contains(string(js), "image/png") || !strings.Contains(stderr, "cannot view images") {
+		t.Fatalf("text-only model: %s / %s", js, stderr)
+	}
+}

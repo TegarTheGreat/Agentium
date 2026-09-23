@@ -1,9 +1,12 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -550,5 +553,31 @@ func TestOutlineAndSymbol(t *testing.T) {
 	}
 	if _, err := call(t, readTool, e, `{"path":"notes.md","outline":true}`); err == nil {
 		t.Fatal("unsupported outline should error")
+	}
+}
+
+func TestReadImage(t *testing.T) {
+	e := env(t)
+	var buf bytes.Buffer
+	png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 3, 2)))
+	os.WriteFile(filepath.Join(e.Root, "shot.png"), buf.Bytes(), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "fake.png"), []byte("not an image at all"), 0o644)
+
+	out, err := call(t, readTool, e, `{"path":"shot.png"}`)
+	if err != nil || !strings.Contains(out, "cannot view images") {
+		t.Fatalf("no vision: %q %v", out, err)
+	}
+	e.Vision = true
+	ctx, imgs := WithImageSink(context.Background())
+	out, err = readTool.Run(ctx, e, json.RawMessage(`{"path":"shot.png"}`))
+	if err != nil || !strings.Contains(out, "image/png") || !strings.Contains(out, "3x2") {
+		t.Fatalf("vision read: %q %v", out, err)
+	}
+	if got := imgs(); len(got) != 1 || got[0].MediaType != "image/png" || !bytes.Equal(got[0].Data, buf.Bytes()) {
+		t.Fatalf("attached: %+v", got)
+	}
+	// A .png that is not an image is read as a file.
+	if out, _ := readTool.Run(ctx, e, json.RawMessage(`{"path":"fake.png"}`)); !strings.Contains(out, "not an image") {
+		t.Fatalf("fake png: %q", out)
 	}
 }
