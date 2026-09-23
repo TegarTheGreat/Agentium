@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -385,5 +386,42 @@ func TestOpenRouterOAuth(t *testing.T) {
 	key, err := openRouterOAuth(context.Background())
 	if err != nil || key != "sk-or-test" || len(gotVerifier) < 43 {
 		t.Fatalf("key=%q err=%v verifier=%q", key, err, gotVerifier)
+	}
+}
+
+func TestJSONMode(t *testing.T) {
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir := t.TempDir()
+	stdout, stderr, err := runBin(t, home, dir, "", "--json", "-m", "fakeoai/m", "create hello.txt")
+	if err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	var types []string
+	var result map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("not JSON: %q", line)
+		}
+		types = append(types, ev["type"].(string))
+		if ev["type"] == "result" {
+			result = ev
+		}
+	}
+	got := strings.Join(types, ",")
+	if !strings.HasPrefix(got, "session,tool_call,tool_result,") || !strings.HasSuffix(got, "result") {
+		t.Fatalf("events = %s", got)
+	}
+	if result["ok"] != true || result["text"] != "Created hello.txt." || result["files_changed"].([]any)[0] != "hello.txt" {
+		t.Fatalf("result = %v", result)
+	}
+	// Exit code 2 when a limit stops the run.
+	_, _, err = runBin(t, home, t.TempDir(), "", "--json", "--max-turns", "1", "-m", "fakeoai/m", "create hello.txt")
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("max-turns exit: %v", err)
 	}
 }

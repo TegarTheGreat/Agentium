@@ -51,6 +51,11 @@ type Agent struct {
 	Reasoning provider.Reasoning
 	// FastMode requests the provider's fast output mode.
 	FastMode bool
+	// Cost prices a model call's usage in USD (nil = unknown); with
+	// MaxCost > 0 the run stops once the session total passes it.
+	Cost    func(provider.Usage) float64
+	MaxCost float64
+	Spent   float64
 	// OnRemember receives durable facts surfaced during compaction.
 	OnRemember func(fact string)
 	Events     Events
@@ -79,6 +84,8 @@ var (
 	ErrStuck = errors.New("stopped: the same action kept giving the same result")
 	// ErrRefused is returned when the provider's safety system declined.
 	ErrRefused = errors.New("stopped: the model declined the request")
+	// ErrBudget is returned when MaxCost is reached.
+	ErrBudget = errors.New("stopped: cost limit reached")
 	// ErrTruncated is returned when replies keep hitting the output limit.
 	ErrTruncated = errors.New("stopped: replies keep hitting the output token limit")
 )
@@ -130,6 +137,9 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		a.Turns++
 		st.Usage.Add(resp.Usage)
 		a.Usage.Add(resp.Usage)
+		if a.Cost != nil {
+			a.Spent += a.Cost(resp.Usage)
+		}
 		if err != nil {
 			// Keep whatever text streamed so the conversation stays coherent.
 			if resp.Text != "" {
@@ -153,6 +163,14 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		}
 		if a.Events.TurnFinish != nil {
 			a.Events.TurnFinish(resp)
+		}
+		if a.MaxCost > 0 && a.Spent >= a.MaxCost && (len(resp.ToolCalls) > 0 || truncated) {
+			a.notice(fmt.Sprintf("cost limit $%.2f reached ($%.4f spent)", a.MaxCost, a.Spent))
+			// Leave the history well-formed: answer the pending calls.
+			for _, c := range resp.ToolCalls {
+				a.Messages = append(a.Messages, provider.Message{Role: provider.RoleTool, ToolCallID: c.ID, IsError: true, Text: "not run: cost limit reached"})
+			}
+			return done(ErrBudget)
 		}
 		if len(resp.ToolCalls) > 0 {
 			st.ToolCalls += len(resp.ToolCalls)
