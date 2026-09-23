@@ -24,6 +24,8 @@ type Events struct {
 	// Notice reports harness actions the user may want to know about
 	// (verification reminder, compaction, stuck detection, truncation).
 	Notice func(msg string)
+	// SubToolStart observes tool calls made by sub-agents.
+	SubToolStart func(call provider.ToolCall)
 }
 
 // Agent holds one conversation.
@@ -72,6 +74,9 @@ type Agent struct {
 	// Ledger is the harness-kept working state (files, commands, errors,
 	// todos) that survives compaction.
 	Ledger Ledger
+
+	depth int        // 0 for the main agent, 1 for sub-agents
+	mu    sync.Mutex // guards Usage/Spent updates from parallel sub-agents
 }
 
 // Stats summarizes one Run.
@@ -314,7 +319,7 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			case len(c.Args) > 0 && !json.Valid(c.Args):
 				err = errors.New("arguments are not valid JSON")
 			default:
-				tctx, images := tool.WithImageSink(ctx)
+				tctx, images := tool.WithImageSink(context.WithValue(ctx, agentKey{}, a))
 				res, err = safeRun(tctx, t, a.Env, c.Args)
 				imgs = images()
 				a.Ledger.record(c.Name, c.Args, res, err)
@@ -374,4 +379,15 @@ func withoutImages(ms []provider.Message) []provider.Message {
 		return ms
 	}
 	return out
+}
+
+type agentKey struct{}
+
+// running returns the agent whose tool call this is (a sub-agent shares
+// its parent's tool list, so tools bound to an agent look it up here).
+func running(ctx context.Context, fallback *Agent) *Agent {
+	if ag, ok := ctx.Value(agentKey{}).(*Agent); ok {
+		return ag
+	}
+	return fallback
 }

@@ -21,7 +21,7 @@ func (a *Agent) TodoTool() tool.Tool {
 			Description: "Task list for work with 3+ steps (skip for small tasks). Send the whole list each time; mark one item in_progress, then done.",
 			Schema:      json.RawMessage(`{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["text","status"],"properties":{"text":{"type":"string"},"status":{"enum":["pending","in_progress","done"]}}}}}}`),
 		},
-		Run: func(_ context.Context, _ *tool.Env, raw json.RawMessage) (string, error) {
+		Run: func(ctx context.Context, _ *tool.Env, raw json.RawMessage) (string, error) {
 			var in struct {
 				Items []Todo `json:"items"`
 			}
@@ -42,7 +42,7 @@ func (a *Agent) TodoTool() tool.Tool {
 				}
 				in.Items[i].Text = oneLine(t.Text, 160)
 			}
-			a.Ledger.SetTodos(in.Items)
+			running(ctx, a).Ledger.SetTodos(in.Items)
 			if len(in.Items) == 0 {
 				return "(todo list cleared)", nil
 			}

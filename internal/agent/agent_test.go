@@ -634,3 +634,70 @@ func TestEffortEscalatesOnFailureAndResets(t *testing.T) {
 		t.Fatal("no level above max / no levels at all")
 	}
 }
+
+func TestSubAgents(t *testing.T) {
+	// The fake model: the main agent delegates two tasks in one turn; each
+	// sub-agent reads a file and reports; then the main agent answers.
+	var mu sync.Mutex
+	subCalls := 0
+	client := clientFunc(func(req provider.Request) (provider.Response, error) {
+		first := req.Messages[0].Text
+		last := req.Messages[len(req.Messages)-1]
+		if strings.HasPrefix(first, "[sub-agent]") {
+			mu.Lock()
+			subCalls++
+			mu.Unlock()
+			n := "2"
+			if strings.Contains(first, "look 1") {
+				n = "1"
+				if !strings.Contains(first, "plan mode") {
+					t.Error("explore sub-agent should run in plan mode")
+				}
+			}
+			if last.Role == provider.RoleUser {
+				return provider.Response{ToolCalls: []provider.ToolCall{tc("r"+n, "read", `{"path":"a.txt"}`)}}, nil
+			}
+			return provider.Response{Text: "report: a.txt says hi (" + n + ")"}, nil
+		}
+		if last.Role == provider.RoleUser {
+			return provider.Response{ToolCalls: []provider.ToolCall{
+				tc("t1", "task", `{"prompt":"look 1","explore":true}`), tc("t2", "task", `{"prompt":"look 2"}`)}}, nil
+		}
+		return provider.Response{Text: "done"}, nil
+	})
+	a := newAgent(t, &script{})
+	a.Client = client
+	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
+	os.WriteFile(filepath.Join(a.Env.Root, "a.txt"), []byte("hi"), 0o644)
+	var subTools []string
+	a.Events.SubToolStart = func(c provider.ToolCall) { mu.Lock(); subTools = append(subTools, c.Name); mu.Unlock() }
+	if _, err := a.Run(context.Background(), "investigate"); err != nil {
+		t.Fatal(err)
+	}
+	var results []string
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleTool {
+			results = append(results, m.Text)
+		}
+	}
+	joined := strings.Join(results, "\n")
+	if len(results) != 2 || !strings.Contains(joined, "report: a.txt says hi (1)") || !strings.Contains(joined, "report: a.txt says hi (2)") ||
+		!strings.Contains(joined, "read-only") || !strings.Contains(joined, "read-write") {
+		t.Fatalf("task results: %v", results)
+	}
+	if subCalls != 4 || len(subTools) != 2 {
+		t.Fatalf("sub calls %d, sub tools %v", subCalls, subTools)
+	}
+	// The parent's context holds only the reports, not the file contents.
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleTool && strings.HasPrefix(m.Text, "hi") {
+			t.Fatal("sub-agent tool output leaked into the parent context")
+		}
+	}
+}
+
+type clientFunc func(provider.Request) (provider.Response, error)
+
+func (f clientFunc) Stream(_ context.Context, req provider.Request, _ func(string)) (provider.Response, error) {
+	return f(req)
+}

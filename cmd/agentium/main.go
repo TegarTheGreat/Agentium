@@ -230,7 +230,18 @@ func summarizeCall(c provider.ToolCall) string {
 		}
 		return ""
 	}
-	s := pick("cmd", "path", "pattern", "url", "glob")
+	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "prompt")
+	if j, ok := m["job"].(float64); ok {
+		s = fmt.Sprintf("job %d", int(j))
+		if pick("stdin") != "" {
+			s += " ← " + pick("stdin")
+		} else if m["kill"] == true {
+			s += " (stop)"
+		}
+	}
+	if m["background"] == true {
+		s += " &"
+	}
 	if c.Name == "search" && m["glob"] != nil && m["pattern"] != nil {
 		s = fmt.Sprintf("%v in %v", m["pattern"], m["glob"])
 	}
@@ -432,7 +443,7 @@ func run(args []string) error {
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
-	a.Tools = append(a.Tools, a.TodoTool())
+	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
 	defer a.Env.KillJobs() // background servers do not outlive the session
 	if mem != nil {
 		a.Env.Recall = mem.search
@@ -510,8 +521,9 @@ func run(args []string) error {
 		fmt.Fprintln(os.Stderr, u.dim("· --max-cost: no price known for this model; the limit cannot be enforced"))
 	}
 	a.Events = agent.Events{
-		Text:      u.text,
-		ToolStart: func(c provider.ToolCall) { u.line("› " + summarizeCall(c)) },
+		Text:         u.text,
+		ToolStart:    func(c provider.ToolCall) { u.line("› " + summarizeCall(c)) },
+		SubToolStart: func(c provider.ToolCall) { u.line("  ↳ " + summarizeCall(c)) },
 		ToolDone: func(c provider.ToolCall, out string, err error, d time.Duration) {
 			if err != nil {
 				u.line(fmt.Sprintf("  ✗ %s: %s", c.Name, firstLine(err.Error())))
@@ -637,6 +649,9 @@ func run(args []string) error {
 		a.Events.Text = func(d string) { jw.emit(map[string]any{"type": "text", "text": d}) }
 		a.Events.ToolStart = func(c provider.ToolCall) {
 			jw.emit(map[string]any{"type": "tool_call", "id": c.ID, "name": c.Name, "args": c.Args})
+		}
+		a.Events.SubToolStart = func(c provider.ToolCall) {
+			jw.emit(map[string]any{"type": "tool_call", "id": c.ID, "name": c.Name, "args": c.Args, "subagent": true})
 		}
 		a.Events.ToolDone = func(c provider.ToolCall, out string, err error, d time.Duration) {
 			ev := map[string]any{"type": "tool_result", "id": c.ID, "name": c.Name, "ok": err == nil, "ms": d.Milliseconds(), "output": clipText(out, 2000)}
