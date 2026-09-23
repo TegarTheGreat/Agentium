@@ -67,6 +67,8 @@ type Agent struct {
 	// Note is prepended to the next user input once (e.g. "the user undid
 	// your last changes"), so the model's picture of the files stays true.
 	Note string
+	// Attach holds images for the next Run's user message.
+	Attach []provider.Image
 }
 
 // Stats summarizes one Run.
@@ -121,7 +123,8 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 			input += "\n\n" + policy.PlanNote
 		}
 	}
-	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input})
+	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input, Images: a.Attach})
+	a.Attach = nil
 	maxTurns := a.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 100
@@ -290,6 +293,7 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			t0 := time.Now()
 			var res string
 			var err error
+			var imgs []provider.Image
 			t, ok := byName[c.Name]
 			switch {
 			case !ok:
@@ -297,12 +301,14 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			case len(c.Args) > 0 && !json.Valid(c.Args):
 				err = errors.New("arguments are not valid JSON")
 			default:
-				res, err = safeRun(ctx, t, a.Env, c.Args)
+				tctx, images := tool.WithImageSink(ctx)
+				res, err = safeRun(tctx, t, a.Env, c.Args)
+				imgs = images()
 			}
 			if a.Events.ToolDone != nil {
 				a.Events.ToolDone(c, res, err, time.Since(t0))
 			}
-			msg := provider.Message{Role: provider.RoleTool, ToolCallID: c.ID, Text: res}
+			msg := provider.Message{Role: provider.RoleTool, ToolCallID: c.ID, Text: res, Images: imgs}
 			if err != nil {
 				msg.IsError = true
 				if res != "" {

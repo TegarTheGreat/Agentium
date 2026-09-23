@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,11 @@ type anBlock struct {
 type anMsg struct {
 	Role    string            `json:"role"`
 	Content []json.RawMessage `json:"content"`
+}
+
+func anImage(im Image) json.RawMessage {
+	return mustJSON(map[string]any{"type": "image", "source": map[string]string{
+		"type": "base64", "media_type": im.MediaType, "data": base64.StdEncoding.EncodeToString(im.Data)}})
 }
 
 func validArgs(a json.RawMessage) json.RawMessage {
@@ -100,6 +106,9 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:
+			for _, im := range m.Images {
+				push("user", anImage(im))
+			}
 			if m.Text != "" {
 				push("user", mustJSON(anBlock{Type: "text", Text: m.Text}))
 			}
@@ -123,6 +132,14 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 			content := m.Text
 			if content == "" {
 				content = "(empty)"
+			}
+			if len(m.Images) > 0 {
+				parts := []json.RawMessage{mustJSON(anBlock{Type: "text", Text: content})}
+				for _, im := range m.Images {
+					parts = append(parts, anImage(im))
+				}
+				push("user", mustJSON(map[string]any{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": parts, "is_error": m.IsError}))
+				continue
 			}
 			push("user", mustJSON(anBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: content, IsError: m.IsError}))
 		}

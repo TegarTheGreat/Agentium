@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/models"
 )
 
 func sseServer(t *testing.T, events []string, gotBody *map[string]any, gotHeader *http.Header) *httptest.Server {
@@ -485,6 +487,58 @@ func TestRetryableClassification(t *testing.T) {
 	for err, want := range cases {
 		if got := Retryable(err); got != want {
 			t.Errorf("Retryable(%T %v) = %v, want %v", err, err, got, want)
+		}
+	}
+}
+
+func TestImagesInRequests(t *testing.T) {
+	png := Image{MediaType: "image/png", Data: []byte("PNGDATA")}
+	hist := []Message{
+		{Role: RoleUser, Text: "what is in this?", Images: []Image{png}},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "a", Name: "read", Args: json.RawMessage(`{}`)}, {ID: "b", Name: "read", Args: json.RawMessage(`{}`)}}},
+		{Role: RoleTool, ToolCallID: "a", Text: "(image a.png — attached)", Images: []Image{png}},
+		{Role: RoleTool, ToolCallID: "b", Text: "text only"},
+	}
+	ab, _ := (&Anthropic{}).body(Request{Model: "claude-x", Messages: hist})
+	js, _ := json.Marshal(ab["messages"])
+	s := string(js)
+	b64 := base64.StdEncoding.EncodeToString(png.Data)
+	if !strings.Contains(s, `{"source":{"data":"`+b64+`","media_type":"image/png","type":"base64"},"type":"image"}`) {
+		t.Fatalf("anthropic user image missing: %s", s)
+	}
+	if !strings.Contains(s, `"content":[{"type":"text","text":"(image a.png — attached)"}`) || !strings.Contains(s, `"tool_use_id":"a"`) {
+		t.Fatalf("anthropic tool_result image missing: %s", s)
+	}
+
+	ob := (&OpenAI{}).body(Request{Model: "gpt-5", Messages: hist})
+	msgs := ob["messages"].([]oaMsg)
+	roles := []string{}
+	for _, m := range msgs {
+		roles = append(roles, m.Role)
+	}
+	if strings.Join(roles, ",") != "user,assistant,tool,tool,user" {
+		t.Fatalf("openai roles: %v", roles)
+	}
+	js, _ = json.Marshal(msgs)
+	if n := strings.Count(string(js), `"url":"data:image/png;base64,`+b64+`"`); n != 2 {
+		t.Fatalf("openai images = %d: %s", n, js)
+	}
+}
+
+func TestVision(t *testing.T) {
+	cases := []struct {
+		r    Resolved
+		want bool
+	}{
+		{Resolved{Model: "claude-sonnet-5"}, true},
+		{Resolved{Model: "deepseek-chat"}, false},
+		{Resolved{Model: "o3-mini"}, false},
+		{Resolved{Model: "custom", Known: true, Info: models.Model{Input: []string{"text", "image"}}}, true},
+		{Resolved{Model: "gpt-5", Known: true, Info: models.Model{Input: []string{"text"}}}, false},
+	}
+	for _, c := range cases {
+		if got := c.r.Vision(); got != c.want {
+			t.Errorf("%s: Vision()=%v", c.r.Model, got)
 		}
 	}
 }

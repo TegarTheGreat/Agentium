@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +55,19 @@ type Message struct {
 	// Reasoning is visible reasoning text some OpenAI-compatible models
 	// return (reasoning_content) and need back on later turns.
 	Reasoning string `json:"reasoning,omitempty"`
+	// Images attached to a user message or a tool result.
+	Images []Image `json:"images,omitempty"`
+}
+
+// Image is an inline image (PNG, JPEG, GIF or WebP).
+type Image struct {
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
+// DataURL returns the image as a data: URL.
+func (im Image) DataURL() string {
+	return "data:" + im.MediaType + ";base64," + base64.StdEncoding.EncodeToString(im.Data)
 }
 
 // ToolDef describes a tool to the model. Schema is a JSON Schema object.

@@ -19,7 +19,7 @@ const (
 
 var readTool = Tool{
 	Def: providerDef("read",
-		"Read a text file (or list a directory). Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
+		"Read a text file or an image (or list a directory). Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
 		`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based start line"},"limit":{"type":"integer"},"outline":{"type":"boolean"}},"required":["path"]}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
@@ -53,6 +53,13 @@ var readTool = Tool{
 		if st.IsDir() {
 			return listDir(p)
 		}
+		if st.Size() <= MaxImageBytes*4 {
+			if head := fileHead(p); len(head) > 0 {
+				if out, ok, err := readImage(ctx, env, p, head); ok {
+					return out, err
+				}
+			}
+		}
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return "", err
@@ -63,6 +70,17 @@ var readTool = Tool{
 		}
 		return sliceLines(string(b), a.Offset, a.Limit), nil
 	},
+}
+
+func fileHead(p string) []byte {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	b := make([]byte, 512)
+	n, _ := f.Read(b)
+	return b[:n]
 }
 
 func listDir(p string) (string, error) {

@@ -411,7 +411,7 @@ func run(args []string) error {
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
 		MaxCost: *maxCost,
-		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
+		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate, Vision: res.Vision()},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
@@ -533,6 +533,12 @@ func run(args []string) error {
 		curPrompt = input
 		replies, edited = nil, nil
 		send := input
+		if imgs, notes := mentionedImages(input, cwd, a.Env.Vision); len(imgs)+len(notes) > 0 {
+			a.Attach = imgs
+			for _, n := range notes {
+				u.line("· " + n)
+			}
+		}
 		if msg, ok, err := skill.Invoke(skills, input); ok {
 			if err != nil {
 				return err
@@ -741,6 +747,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 			return false
 		}
 		a.Client, a.Model = res.Client, res.Model
+		a.Env.Vision = res.Vision()
 		sess.Model = res.Provider + "/" + res.Model
 		fmt.Fprintln(os.Stderr, "· model:", sess.Model)
 	case "/mode":
