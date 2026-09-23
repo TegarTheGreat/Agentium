@@ -19,13 +19,14 @@ const (
 
 var readTool = Tool{
 	Def: providerDef("read",
-		"Read a text file (or list a directory). Call several in parallel for several files.",
-		`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based start line"},"limit":{"type":"integer"}},"required":["path"]}`),
-	Run: func(_ context.Context, env *Env, raw json.RawMessage) (string, error) {
+		"Read a text file (or list a directory). Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
+		`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based start line"},"limit":{"type":"integer"},"outline":{"type":"boolean"}},"required":["path"]}`),
+	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
-			Path   string `json:"path"`
-			Offset int    `json:"offset"`
-			Limit  int    `json:"limit"`
+			Path    string `json:"path"`
+			Offset  int    `json:"offset"`
+			Limit   int    `json:"limit"`
+			Outline bool   `json:"outline"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
@@ -42,6 +43,12 @@ var readTool = Tool{
 		st, err := os.Stat(p)
 		if err != nil {
 			return "", err
+		}
+		if a.Outline {
+			if st.IsDir() {
+				return outlineDir(ctx, env.Root, p), nil
+			}
+			return outlineFile(p)
 		}
 		if st.IsDir() {
 			return listDir(p)
