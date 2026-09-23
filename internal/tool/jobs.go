@@ -96,11 +96,23 @@ func (j *job) running() bool {
 	}
 }
 
+// kill stops the job and everything it started.
+func (j *job) kill() {
+	if j.tty {
+		killSession(j.c)
+	} else {
+		killProcessGroup(j.c)
+	}
+}
+
 func (j *job) status() string {
 	if j.running() {
 		return "running"
 	}
 	if ee, ok := j.err.(*exec.ExitError); ok {
+		if ee.ExitCode() < 0 { // ended by a signal (Ctrl-C, kill)
+			return "exited (" + ee.Error() + ")"
+		}
 		return fmt.Sprintf("exited %d", ee.ExitCode())
 	}
 	if j.err != nil {
@@ -254,7 +266,7 @@ func (e *Env) jobAction(ctx context.Context, id int, stdin string, kill bool, wa
 	}
 	if kill {
 		if j.running() {
-			killProcessGroup(j.c)
+			j.kill()
 			select {
 			case <-j.done:
 			case <-time.After(3 * time.Second):
@@ -314,7 +326,7 @@ func (e *Env) KillJobs() {
 	defer t.mu.Unlock()
 	for _, j := range t.jobs {
 		if j.running() {
-			killProcessGroup(j.c)
+			j.kill()
 		}
 	}
 }

@@ -13,3 +13,23 @@ import (
 func ttyAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 }
+
+// killSession stops a tty job: every process in its session. An
+// interactive shell puts each of its jobs in a process group of its own,
+// so killing the job's group alone would leave those running.
+func killSession(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	sid := cmd.Process.Pid // the job is a session leader (ttyAttr)
+	_ = syscall.Kill(-sid, syscall.SIGKILL)
+	for range 3 { // again, for anything forked meanwhile
+		pids := sessionPIDs(sid)
+		if len(pids) == 0 {
+			return
+		}
+		for _, pid := range pids {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+}
