@@ -21,6 +21,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"github.com/tegarthegreat/agentium/internal/session"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
@@ -45,6 +46,7 @@ Flags:
   -c                  continue the latest session in this directory
   --mode ask|auto|yolo  approvals: every action | risky only (default) | never
   --yolo              same as --mode yolo
+  --no-sandbox        run shell commands unconfined
   -q                  quiet: no tool lines or stats
   --max-turns N       stop after N model turns (default 100)
 
@@ -52,6 +54,7 @@ In a session: /undo  /clear  /model <ref>  /mode <m>  /usage  /exit
 `
 
 func main() {
+	sandbox.MaybeRunHelper()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -225,6 +228,7 @@ func run(args []string) error {
 	yolo := fs.Bool("yolo", false, "")
 	quiet := fs.Bool("q", false, "")
 	maxTurns := fs.Int("max-turns", 0, "")
+	noSandbox := fs.Bool("no-sandbox", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -290,6 +294,10 @@ func run(args []string) error {
 			a.Messages = prev.Messages
 			a.Note, sess.Note = prev.Note, ""
 		}
+	}
+	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
+	if !boxStatus.Available && !*quiet && !*noSandbox && sandboxWanted(cfg) {
+		fmt.Fprintln(os.Stderr, u.dim("· "+boxStatus.Detail))
 	}
 	store := openCheckpoints(cfg, cwd)
 	var curPrompt string
@@ -357,7 +365,11 @@ func run(args []string) error {
 		return turn(*prompt)
 	}
 
-	fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · /exit to quit", version, res.Provider, res.Model, gate.GetMode())))
+	box := "sandbox off"
+	if a.Env.Sandbox != nil {
+		box = "sandboxed"
+	}
+	fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
 	for {
 		fmt.Fprint(os.Stderr, "\n› ")
 		line, err := in.ReadString('\n')

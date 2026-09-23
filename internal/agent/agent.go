@@ -111,23 +111,24 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 	return st, ErrMaxTurns
 }
 
-// call streams one model call, retrying transient failures that happen
-// before any text reached the user.
+// call streams one model call, retrying rate limits, overloads and broken
+// or stalled connections. Text already streamed to the user may repeat
+// after a mid-stream retry; the Retry event lets the UI say so.
 func (a *Agent) call(ctx context.Context, req provider.Request) (provider.Response, error) {
 	var resp provider.Response
 	var err error
-	for attempt := 0; attempt < 4; attempt++ {
-		streamed := false
-		resp, err = a.Client.Stream(ctx, req, func(d string) {
-			streamed = true
-			if a.Events.Text != nil {
-				a.Events.Text(d)
-			}
-		})
-		if err == nil || streamed || !provider.Retryable(err) || ctx.Err() != nil {
+	for attempt := 0; ; attempt++ {
+		resp, err = a.Client.Stream(ctx, req, a.Events.Text)
+		if err == nil || !provider.Retryable(err) || ctx.Err() != nil || attempt >= maxRetries {
 			return resp, err
 		}
 		wait := time.Duration(1<<attempt) * time.Second
+		if ra := provider.RetryAfter(err); ra > wait {
+			wait = ra
+		}
+		if wait > maxRetryWait {
+			wait = maxRetryWait
+		}
 		if a.Events.Retry != nil {
 			a.Events.Retry(err, wait)
 		}
@@ -137,8 +138,12 @@ func (a *Agent) call(ctx context.Context, req provider.Request) (provider.Respon
 			return resp, ctx.Err()
 		}
 	}
-	return resp, err
 }
+
+const (
+	maxRetries   = 4
+	maxRetryWait = 60 * time.Second
+)
 
 // runTools executes calls in parallel and returns results in call order.
 func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provider.Message {

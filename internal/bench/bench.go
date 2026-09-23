@@ -16,6 +16,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
@@ -180,9 +181,13 @@ func RunLive(ctx context.Context, client provider.Client, model string, tasks []
 			}
 		}
 		var reply strings.Builder
+		env := &tool.Env{Root: dir, Gate: &policy.Gate{Mode: policy.Auto, Root: dir}, Net: policy.NetDeny}
+		if sandbox.Probe().Available {
+			env.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(dir)}
+		}
 		a := &agent.Agent{
 			Client: client, Model: model, System: agent.SystemPrompt(dir),
-			Tools: tool.All(), Env: &tool.Env{Root: dir, Gate: &policy.Gate{Mode: policy.Auto, Root: dir}},
+			Tools: tool.All(), Env: env,
 			MaxTurns: 20, ContextChars: 200_000,
 			Events: agent.Events{TurnFinish: func(r provider.Response) {
 				reply.Reset()

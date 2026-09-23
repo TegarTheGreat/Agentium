@@ -3,12 +3,14 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tegarthegreat/agentium/internal/config"
 )
@@ -249,5 +251,58 @@ func TestOpenAIStreamOptionsFallback(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("calls = %d, want 3 (one rejected, then remembered)", calls)
+	}
+}
+
+func TestStreamStallAndIncomplete(t *testing.T) {
+	old := StreamIdleTimeout
+	StreamIdleTimeout = 200 * time.Millisecond
+	defer func() { StreamIdleTimeout = old }()
+
+	stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer stall.Close()
+	t0 := time.Now()
+	_, err := (&OpenAI{BaseURL: stall.URL}).Stream(context.Background(), Request{Model: "m"}, nil)
+	if !errors.Is(err, ErrStalled) || !Retryable(err) || time.Since(t0) > 2*time.Second {
+		t.Fatalf("stall: %v after %s", err, time.Since(t0))
+	}
+
+	cut := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n")
+	}))
+	defer cut.Close()
+	_, err = (&Anthropic{BaseURL: cut.URL}).Stream(context.Background(), Request{Model: "m"}, nil)
+	if !errors.Is(err, ErrIncomplete) || !Retryable(err) {
+		t.Fatalf("incomplete: %v", err)
+	}
+
+	// A user cancel is reported as such, never as retryable.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	_, err = (&OpenAI{BaseURL: stall.URL}).Stream(ctx, Request{Model: "m"}, nil)
+	if !errors.Is(err, context.Canceled) || Retryable(err) {
+		t.Fatalf("cancel: %v", err)
+	}
+}
+
+func TestRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		http.Error(w, "slow down", 429)
+	}))
+	defer srv.Close()
+	_, err := (&OpenAI{BaseURL: srv.URL}).Stream(context.Background(), Request{Model: "m"}, nil)
+	if RetryAfter(err) != 7*time.Second {
+		t.Fatalf("retry-after = %v", RetryAfter(err))
+	}
+	if parseRetryAfter("garbage") != 0 || parseRetryAfter("1.5") != 1500*time.Millisecond {
+		t.Fatal("parseRetryAfter")
 	}
 }

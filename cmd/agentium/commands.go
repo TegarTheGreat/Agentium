@@ -17,8 +17,11 @@ import (
 	"github.com/tegarthegreat/agentium/internal/bench"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"github.com/tegarthegreat/agentium/internal/session"
+	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
@@ -288,4 +291,30 @@ func cmdUndo() error {
 		sess.Note = note
 	}
 	return sess.Save()
+}
+
+func sandboxWanted(cfg config.Config) bool {
+	return cfg.Sandbox == nil || cfg.Sandbox.Enabled == nil || *cfg.Sandbox.Enabled
+}
+
+// setupSandbox confines env's shell commands when possible.
+func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) sandbox.Status {
+	st := sandbox.Probe()
+	if disabled || !sandboxWanted(cfg) || !st.Available {
+		return st
+	}
+	sc := sandbox.Config{Write: sandbox.DefaultWrite(root)}
+	if cfg.Sandbox != nil {
+		for _, p := range cfg.Sandbox.Write {
+			if strings.HasPrefix(p, "~/") {
+				if h, err := os.UserHomeDir(); err == nil {
+					p = filepath.Join(h, p[2:])
+				}
+			}
+			sc.Write = append(sc.Write, p)
+		}
+		env.Net = policy.ParseNet(cfg.Sandbox.Network)
+	}
+	env.Sandbox = &sc
+	return st
 }

@@ -137,3 +137,34 @@ func (g *Gate) Write(path string) (bool, string) {
 	}
 	return g.ask("write: "+path, reason), reason
 }
+
+// NetPolicy controls network access for sandboxed shell commands.
+type NetPolicy string
+
+const (
+	NetAsk   NetPolicy = "ask"   // approve each command that asks for network (default)
+	NetAllow NetPolicy = "allow" // always allow
+	NetDeny  NetPolicy = "deny"  // never allow
+)
+
+// ParseNet maps a string to a NetPolicy, defaulting to NetAsk.
+func ParseNet(s string) NetPolicy {
+	switch NetPolicy(strings.ToLower(s)) {
+	case NetAllow:
+		return NetAllow
+	case NetDeny:
+		return NetDeny
+	}
+	return NetAsk
+}
+
+// Net reports whether cmd may run with network access.
+func (g *Gate) Net(cmd string, p NetPolicy) (bool, string) {
+	switch {
+	case p == NetDeny:
+		return false, "network disabled by config"
+	case p == NetAllow || g.GetMode() == Yolo:
+		return true, ""
+	}
+	return g.ask("network: "+cmd, "needs network access"), "needs network access"
+}

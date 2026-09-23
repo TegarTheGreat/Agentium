@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -161,6 +162,7 @@ func (c *Anthropic) Stream(ctx context.Context, req Request, onText func(string)
 	blocks := map[int]*block{}
 	var order []int
 	var streamErr error
+	done := false
 	err = readSSE(resp.Body, func(_, data string) bool {
 		var ev anEvent
 		if json.Unmarshal([]byte(data), &ev) != nil {
@@ -198,6 +200,7 @@ func (c *Anthropic) Stream(ctx context.Context, req Request, onText func(string)
 				out.Usage.Output = ev.Usage.OutputTokens
 			}
 		case "message_stop":
+			done = true
 			return false
 		case "error":
 			streamErr = fmt.Errorf("stream error: %s: %s", ev.Error.Type, ev.Error.Message)
@@ -210,6 +213,12 @@ func (c *Anthropic) Stream(ctx context.Context, req Request, onText func(string)
 	})
 	if err == nil {
 		err = streamErr
+	}
+	if err == nil && !done && out.StopReason == "" {
+		err = ErrIncomplete
+	}
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrStalled) {
+		err = ctx.Err()
 	}
 	out.Text = text.String()
 	for _, i := range order {

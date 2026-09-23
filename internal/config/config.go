@@ -30,7 +30,15 @@ type Config struct {
 	// Checkpoints snapshot the workspace before each changing turn so it
 	// can be undone (default on; needs git).
 	Checkpoints *bool                   `json:"checkpoints,omitempty"`
+	Sandbox     *SandboxConf            `json:"sandbox,omitempty"`
 	Providers   map[string]ProviderConf `json:"providers,omitempty"`
+}
+
+// SandboxConf configures confinement of shell commands.
+type SandboxConf struct {
+	Enabled *bool    `json:"enabled,omitempty"` // default true
+	Network string   `json:"network,omitempty"` // ask (default) | allow | deny
+	Write   []string `json:"write,omitempty"`   // extra writable directories
 }
 
 // Home returns the Agentium state directory.

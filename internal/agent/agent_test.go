@@ -136,6 +136,22 @@ func TestRetryOnlyBeforeStreaming(t *testing.T) {
 		t.Fatalf("retries = %d", retries)
 	}
 
+	// A connection drop after text started streaming is retried too.
+	s3 := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "partial"}, provider.ErrIncomplete
+		},
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "full answer"}, nil },
+	}}
+	a3 := newAgent(t, s3)
+	a3.Events.Retry = func(error, time.Duration) {}
+	if _, err := a3.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if last := a3.Messages[len(a3.Messages)-1]; last.Text != "full answer" {
+		t.Fatalf("kept %q", last.Text)
+	}
+
 	s2 := &script{steps: []func(provider.Request) (provider.Response, error){
 		func(provider.Request) (provider.Response, error) {
 			return provider.Response{}, &provider.HTTPError{Status: 401, Body: "bad key"}
