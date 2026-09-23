@@ -3,6 +3,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -71,6 +73,9 @@ type SandboxConf struct {
 	Enabled *bool    `json:"enabled,omitempty"` // default true
 	Network string   `json:"network,omitempty"` // ask (default) | allow | deny
 	Write   []string `json:"write,omitempty"`   // extra writable directories
+	// PassEnv lists credential-looking environment variables commands
+	// may still see (e.g. "GITHUB_TOKEN"); all others are removed.
+	PassEnv []string `json:"pass_env,omitempty"`
 }
 
 // Home returns the Agentium state directory.
@@ -152,4 +157,26 @@ func LoadAuth() (Auth, error) {
 // SaveAuth writes auth.json with owner-only permissions.
 func SaveAuth(a Auth) error {
 	return writeJSON(authPath(), a, 0o600)
+}
+
+// ProjectRoot is the top of the git repository containing dir, or dir
+// itself outside a repository. Project state (memory, code index) is
+// keyed by it, so every subdirectory of a repo shares one memory.
+func ProjectRoot(dir string) string {
+	for d := dir; ; {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		p := filepath.Dir(d)
+		if p == d {
+			return dir
+		}
+		d = p
+	}
+}
+
+// ProjectDir is the state directory for a project root.
+func ProjectDir(root string) string {
+	h := sha256.Sum256([]byte(root))
+	return filepath.Join(Home(), "projects", hex.EncodeToString(h[:8]))
 }

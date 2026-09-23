@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"sync"
@@ -23,19 +24,32 @@ const (
 
 var bashTool = Tool{
 	Def: providerDef("bash",
-		"Run a shell command in the workspace. Output is clipped to head+tail. Writes outside the workspace and network are blocked unless net=true (for installs, downloads, git push).",
-		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"},"net":{"type":"boolean"}},"required":["cmd"]}`),
+		"Run a shell command in the workspace. Output is clipped to head+tail. Writes outside the workspace and network are blocked unless net=true (for installs, downloads, git push). background=true keeps it running (servers, watchers, REPLs) and returns a job id; then {job} reads new output (waiting up to timeout s), {job,stdin} sends input, {job,kill} stops it; no cmd and no job lists jobs.",
+		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"},"net":{"type":"boolean"},"background":{"type":"boolean"},"job":{"type":"integer"},"stdin":{"type":"string"},"kill":{"type":"boolean"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
-			Cmd     string `json:"cmd"`
-			Timeout int    `json:"timeout"`
-			Net     bool   `json:"net"`
+			Cmd        string `json:"cmd"`
+			Timeout    int    `json:"timeout"`
+			Net        bool   `json:"net"`
+			Background bool   `json:"background"`
+			Job        int    `json:"job"`
+			Stdin      string `json:"stdin"`
+			Kill       bool   `json:"kill"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
 		}
+		if a.Job > 0 {
+			if a.Cmd != "" {
+				return "", errors.New("give either cmd or job, not both")
+			}
+			return env.jobAction(ctx, a.Job, a.Stdin, a.Kill, a.Timeout)
+		}
 		if a.Cmd == "" {
-			return "", errors.New("cmd is required")
+			if a.Stdin != "" || a.Kill {
+				return "", errors.New("stdin and kill need a job id")
+			}
+			return env.listJobs(), nil
 		}
 		plan := env.Gate != nil && env.Gate.GetMode() == policy.Plan
 		switch {
@@ -76,6 +90,9 @@ var bashTool = Tool{
 		if !plan {
 			env.mutate()
 		}
+		if a.Background {
+			return env.startJob(a.Cmd, box)
+		}
 		t := a.Timeout
 		if t <= 0 {
 			t = bashDefaultTimeout
@@ -83,9 +100,27 @@ var bashTool = Tool{
 		if t > bashMaxTimeout {
 			t = bashMaxTimeout
 		}
-		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box)
+		guarded := env.Gate == nil || env.Gate.GetMode() != policy.Yolo
+		var late string
+		if guarded {
+			env.mu.Lock()
+			prev := env.gitg
+			env.mu.Unlock()
+			late = prev.check() // a background process may have changed git since
+		}
+		var guard *gitGuard
+		if guarded {
+			guard = snapGit(env.Root)
+		}
+		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box, env.PassEnv)
+		out += late + guard.check()
+		if guarded {
+			env.mu.Lock()
+			env.gitg = snapGit(env.Root)
+			env.mu.Unlock()
+		}
 		if box != nil && err == nil && sandboxHint.MatchString(out) {
-			if box.Network {
+			if box.Network || box.NetworkUnenforced {
 				out += "\n[sandbox: writes outside the workspace are blocked]"
 			} else {
 				out += "\n[sandbox: writes outside the workspace and network are blocked; retry with net=true if network is needed]"
@@ -126,7 +161,7 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config) (string, error) {
+func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config, passEnv []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.Command(shellPath(), "-c", cmdline)
@@ -137,6 +172,10 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 		}
 		cmd = c
 	}
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = policy.ScrubEnv(cmd.Env, passEnv)
 	cmd.Dir = dir
 	setProcessGroup(cmd)
 	// Background children (e.g. `server &`) may keep the pipe open; don't

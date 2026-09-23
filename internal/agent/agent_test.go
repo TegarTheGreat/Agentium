@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -483,5 +486,151 @@ func TestPlanModeNote(t *testing.T) {
 	}
 	if strings.Contains(s.reqs[0].System, "plan mode") {
 		t.Fatal("plan note must stay out of the cached system prompt")
+	}
+}
+
+func TestImagesFlowAndElide(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){calls(tc("1", "read", `{"path":"p.png"}`))}}
+	a := newAgent(t, s)
+	a.Env.Vision = true
+	var buf bytes.Buffer
+	png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1)))
+	os.WriteFile(filepath.Join(a.Env.Root, "p.png"), buf.Bytes(), 0o644)
+	a.Attach = []provider.Image{{MediaType: "image/png", Data: buf.Bytes()}}
+	if _, err := a.Run(context.Background(), "look"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Attach) != 0 || len(a.Messages[0].Images) != 1 {
+		t.Fatal("user attachment not moved into the message")
+	}
+	var toolMsg *provider.Message
+	for i := range a.Messages {
+		if a.Messages[i].Role == provider.RoleTool {
+			toolMsg = &a.Messages[i]
+		}
+	}
+	if toolMsg == nil || len(toolMsg.Images) != 1 {
+		t.Fatalf("tool image missing: %+v", a.Messages)
+	}
+	before := a.size()
+	a.elide(0)
+	if len(toolMsg.Images) != 0 || !strings.Contains(toolMsg.Text, "image(s) elided") || a.size() >= before {
+		t.Fatalf("image not elided: %q", toolMsg.Text)
+	}
+}
+
+func TestLedgerTodoAndCompactionState(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "todo", `{"items":[{"text":"fix parser","status":"in_progress"},{"text":"add test","status":"pending"}]}`)),
+		calls(tc("2", "bash", `{"cmd":"echo boom >&2; exit 3"}`), tc("3", "read", `{"path":"a.txt"}`)),
+	}}
+	a := newAgent(t, s)
+	a.Tools = append(a.Tools, a.TodoTool())
+	os.WriteFile(filepath.Join(a.Env.Root, "a.txt"), []byte("hi"), 0o644)
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	st := a.Ledger.Render()
+	for _, want := range []string{"1. [~] fix parser", "2. [ ] add test", "Files read: a.txt", "echo boom >&2; exit 3 (exit 3)", "Latest unresolved error:\nbash echo boom", "boom"} {
+		if !strings.Contains(st, want) {
+			t.Errorf("ledger missing %q:\n%s", want, st)
+		}
+	}
+	if errs := a.Ledger.TurnErrors(); len(errs) != 1 || !strings.Contains(errs[0], "boom") {
+		t.Fatalf("turn errors: %v", errs)
+	}
+	// The same command passing clears the unresolved error.
+	a.Ledger.record("bash", json.RawMessage(`{"cmd":"echo boom >&2; exit 3"}`), "ok", nil)
+	if strings.Contains(a.Ledger.Render(), "unresolved") {
+		t.Fatal("error should clear once the command passes")
+	}
+	// Fetch marks the turn untrusted; a new turn resets it.
+	a.Ledger.record("fetch", json.RawMessage(`{"url":"https://x"}`), "page", nil)
+	if !a.Ledger.Untrusted() {
+		t.Fatal("fetch should mark the turn untrusted")
+	}
+	a.Ledger.startTurn()
+	if a.Ledger.Untrusted() || len(a.Ledger.TurnErrors()) != 0 {
+		t.Fatal("per-turn state not reset")
+	}
+
+	// Compaction carries the ledger verbatim.
+	fast := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "Goal: fix parser."}, nil
+		},
+	}}
+	a.ContextTokens, a.MaxTokens = 20000, 1000
+	a.Fast, a.FastModel = fast, "fast"
+	big := strings.Repeat("y", 9000)
+	for i := 0; i < 8; i++ {
+		a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: big}, provider.Message{Role: provider.RoleAssistant, Text: big})
+	}
+	if _, err := a.Run(context.Background(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	if first := a.Messages[0].Text; !strings.Contains(first, "Goal: fix parser.") || !strings.Contains(first, "<session-state") || !strings.Contains(first, "1. [~] fix parser") {
+		t.Fatalf("compacted state: %q", first)
+	}
+}
+
+func TestImagesStrippedForTextOnlyModel(t *testing.T) {
+	s := &script{}
+	a := newAgent(t, s)
+	a.Attach = []provider.Image{{MediaType: "image/png", Data: []byte("x")}}
+	a.Env.Vision = false // e.g. /model switched to a text-only model
+	if _, err := a.Run(context.Background(), "what is this"); err != nil {
+		t.Fatal(err)
+	}
+	sent := s.reqs[0].Messages[0]
+	if len(sent.Images) != 0 || !strings.Contains(sent.Text, "1 image(s) omitted") {
+		t.Fatalf("sent %+v", sent)
+	}
+	if len(a.Messages[0].Images) != 1 {
+		t.Fatal("history must keep the image for a later vision model")
+	}
+}
+
+func TestLessonFromErrorToFix(t *testing.T) {
+	var l Ledger
+	l.record("bash", json.RawMessage(`{"cmd":"go test ./calc"}`), "--- FAIL: TestAdd\ncalc_test.go:9: got -1 want 3\nFAIL\n[exit 1]", nil)
+	l.record("edit", json.RawMessage(`{"path":"calc/add.go"}`), "ok", nil)
+	l.record("bash", json.RawMessage(`{"cmd":"go test ./calc"}`), "ok", nil)
+	ls := l.Lessons()
+	if len(ls) != 1 || !strings.Contains(ls[0], "`go test ./calc` failed (--- FAIL: TestAdd)") || !strings.Contains(ls[0], "after changing calc/add.go") {
+		t.Fatalf("lessons: %v", ls)
+	}
+}
+
+func TestEffortEscalatesOnFailureAndResets(t *testing.T) {
+	fail := calls(tc("x", "bash", `{"cmd":"exit 1"}`))
+	var efforts []string
+	step := func(req provider.Request) (provider.Response, error) {
+		efforts = append(efforts, req.Reasoning.Effort)
+		return fail(req)
+	}
+	s := &script{steps: []func(provider.Request) (provider.Response, error){step, step, step, step, func(req provider.Request) (provider.Response, error) {
+		efforts = append(efforts, req.Reasoning.Effort)
+		return provider.Response{Text: "done"}, nil
+	}}}
+	a := newAgent(t, s)
+	a.Reasoning = provider.Reasoning{Effort: "medium", Efforts: []string{"low", "medium", "high", "max"}}
+	var notes []string
+	a.Events.Notice = func(m string) { notes = append(notes, m) }
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	// Three failures in a row, then the stuck warning on the 4th identical call.
+	if strings.Join(efforts, ",") != "medium,medium,medium,high,max" {
+		t.Fatalf("efforts per call: %v", efforts)
+	}
+	if a.Reasoning.Effort != "medium" {
+		t.Fatalf("effort not reset after the turn: %s", a.Reasoning.Effort)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.Join(notes, "|"), "thinking harder (effort high)") {
+		t.Fatalf("notice: %v", notes)
+	}
+	if (provider.Reasoning{Effort: "max", Efforts: []string{"max"}}).NextEffort() != "" || (provider.Reasoning{}).NextEffort() != "" {
+		t.Fatal("no level above max / no levels at all")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +55,19 @@ type Message struct {
 	// Reasoning is visible reasoning text some OpenAI-compatible models
 	// return (reasoning_content) and need back on later turns.
 	Reasoning string `json:"reasoning,omitempty"`
+	// Images attached to a user message or a tool result.
+	Images []Image `json:"images,omitempty"`
+}
+
+// Image is an inline image (PNG, JPEG, GIF or WebP).
+type Image struct {
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
+// DataURL returns the image as a data: URL.
+func (im Image) DataURL() string {
+	return "data:" + im.MediaType + ";base64," + base64.StdEncoding.EncodeToString(im.Data)
 }
 
 // ToolDef describes a tool to the model. Schema is a JSON Schema object.
@@ -212,4 +226,38 @@ func RetryAfter(err error) time.Duration {
 		return he.RetryAfter
 	}
 	return 0
+}
+
+// NextEffort returns the next reasoning level above cur that the model
+// supports, or "" when there is none (or the model has no levels). An
+// empty cur counts as "high", the usual default.
+func (r Reasoning) NextEffort() string {
+	order := []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+	supported := r.Efforts
+	if len(supported) == 0 {
+		if !r.Budget || r.Effort == "" {
+			// No levels, or thinking is off on a budget_tokens model:
+			// switching it on mid tool-loop is not allowed by the API.
+			return ""
+		}
+		supported = order // budget_tokens models: any level maps to a budget
+	}
+	cur := r.Effort
+	if cur == "" {
+		cur = "high"
+	}
+	at := -1
+	for i, o := range order {
+		if o == cur {
+			at = i
+		}
+	}
+	for _, o := range order[at+1:] {
+		for _, s := range supported {
+			if s == o {
+				return o
+			}
+		}
+	}
+	return ""
 }

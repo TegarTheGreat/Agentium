@@ -112,6 +112,7 @@ Urutan berubah: **keamanan dan keandalan dulu, baru fitur.**
 | **v0.4 Ingat** | Memori berlapis + auto-recall FTS5 + decision log | P2 #15 |
 | **v0.5 Luas** | models.dev, reasoning/thinking, `max_completion_tokens`, Gemini native, OAuth ChatGPT/Copilot/OpenRouter, Bedrock/Vertex/Azure, fallback model, keychain | P1 #10, #12, P2 #16, #21 |
 | **v0.6 Terbukti** | Adaptor Terminal-Bench 2.1 + SWE-bench Pro dengan isolasi tes, `--best-of N`, `--json` headless, release binary | P2 #17, #19, #20, #23 |
+| **v0.7 Cerdas & Bisa Diperluas** | Plan mode read-only, skills `SKILL.md` + manager yang aman, code map (outline + cari simbol), input gambar, render markdown | Plan-first (Junie, Copilot, Cline), repo map (Aider), ekosistem skill bersama Claude Code/Codex |
 
 Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 
@@ -132,7 +133,7 @@ Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 
 ---
 
-## D. Status tiap item (v0.6.0)
+## D. Status tiap item (v0.7.0)
 
 | # | Item | Status |
 |---|---|---|
@@ -153,11 +154,129 @@ Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 | P2-15 | Memori | ✅ Snapshot USER/MEMORY, log keputusan, journal, recall BM25 otomatis, `tidy`, penyamaran secret, dan filter injeksi. |
 | P2-16 | Login luas | ✅ models.dev (180+ provider), OAuth OpenRouter, GitHub Models, Azure, Bedrock (SigV4), Vertex, keychain OS. ❌ OAuth ChatGPT/Copilot (butuh client ID resmi). Protokol Gemini native diganti endpoint kompatibel + thought signature. |
 | P2-17 | Headless | ✅ `--json` (JSON Lines), exit code 0/1/2/130, `--max-cost`. |
-| P2-18 | UX terminal | ✅ Line editor, riwayat, paste, `/sessions`, `/resume`, pembersihan sesi. ❌ Render markdown (sengaja tetap polos dulu). |
+| P2-18 | UX terminal | ✅ Line editor, riwayat, paste, `/sessions`, `/resume`, pembersihan sesi, render markdown saat streaming (hanya di terminal; pipe tetap mentah). |
 | P2-19 | Benchmark sungguhan | ✅ Adaptor Harbor untuk Terminal-Bench 2.x (isolasi jawaban ditangani Harbor). ❌ Belum dijalankan. |
 | P2-20 | Distribusi | ✅ goreleaser + workflow rilis + `install.sh` (dengan checksum). ❌ LICENSE (keputusan pemilik repo). |
 | P2-21 | Kredensial plaintext | ✅ Keychain OS kalau tersedia. |
 | P2-22 | Ekstensi | ✅ Hook `post_edit` / `stop`, MCP stdio (tool `mcp__server__tool`). |
 | P2-23 | Paralel untuk tugas besar | ✅ `--best-of N --check CMD` di git worktree. |
+| v0.7-a | Plan mode | ✅ `--plan`, `/plan`, `/go`. Edit ditolak; dengan sandbox workspace jadi read-only sehingga perintah apa pun yang tidak merusak tetap bisa jalan; tanpa sandbox hanya allowlist perintah baca. Catatan plan masuk ke pesan user supaya system prompt tetap ter-cache. |
+| v0.7-b | Skills / plugin | ✅ Format `SKILL.md` (sama dengan Claude Code dan Codex). Hanya indeks satu baris per skill di prompt; `/nama` menjalankan skill. `agentium skills add` mengambil tanpa menjalankan apa pun, mengunci commit, menampilkan script, dan baru memasang setelah dikonfirmasi. Tanpa marketplace. |
+| v0.7-c | Code map | ✅ `read {outline:true}` untuk file dan direktori, `search {symbol:…}`. Go lewat `go/parser`, bahasa lain lewat pola baris. |
+| v0.7-d | Input gambar | ✅ `read` pada gambar dan `@file.png` di prompt, untuk model yang mendukung gambar (models.dev, atau keluarga model multimodal yang dikenal). |
 
 **Langkah berikutnya yang paling berdampak:** uji nyata dengan API key (`agentium bench -m …`), lalu jalankan Terminal-Bench 2.x dan bandingkan dengan Codex CLI / Claude Code / Pi pada model yang sama.
+
+---
+
+## E. Analisis ulang v0.7.0 (23 Sep 2026)
+
+Dua sumber: riset lanskap agent terbaru (leaderboard Terminal-Bench, changelog resmi) dan audit kode adversarial. Setiap temuan audit dibuktikan dengan percobaan.
+
+### E1. Posisi pasar terbaru
+
+| Harness | Model | Skor | Sumber |
+|---|---|---|---|
+| Codex CLI | GPT-6 Astra | TB2.1 87,4% · TB4.0 58,2% | snorkel.ai/leaderboard |
+| Claude Code | Fable 5 / 5.1 | TB2.1 83,8% · TB4.0 57,9% | snorkel.ai/leaderboard |
+| Terminus 2 (harness generik) | Fable 5 | TB2.1 80,4% | snorkel.ai/leaderboard |
+| Cursor CLI | Grok 4.5 | TB2.1 79,3% | snorkel.ai/leaderboard |
+| mini-SWE-agent (hanya bash) | Muse Spark 1.1 | TB2.1 76,2% | snorkel.ai/leaderboard |
+
+Dengan model yang sama, harness vendor hanya unggul 3–5 poin atas harness generik. Artinya harness minimal bisa bersaing, **asal dibuktikan dengan run nyata**.
+
+### E2. Kelebihan Agentium (yang masuk akal, tapi sebagian belum terukur)
+
+| Kelebihan | Pembanding | Status bukti |
+|---|---|---|
+| Binary statis 8 MB, start ~4 ms, RAM ~8 MB | Claude Code, OpenCode, Kilo, Pi, dan Copilot pakai Bun/Node. OpenCode pernah bocor memori sampai 14 GB | Terukur di sisi kita saja |
+| Overhead prompt ~810 token | Hermes ~13,9k token per call (73% tiap call). Pi juga < 1k | Terukur |
+| Netral provider (models.dev 180+, Bedrock, Vertex, fallback) | Anthropic sempat melarang OAuth langganan untuk agent pihak ketiga; Gemini CLI ditutup untuk konsumen 18 Jun 2026 | Arsitektur |
+| Installer skill yang di-pin commit dan direview dulu | ClawHub (OpenClaw) berisi 341 s.d. 1.184+ skill berbahaya | Arsitektur (bug E3-10 harus ditutup dulu) |
+| Checkpoint + penjaga stale/overwrite + lint gate sekaligus | Jarang ada yang punya ketiganya | Belum diukur |
+| Memori yang bisa diaudit (DECISIONS.md + supersedes, recall BM25, redaksi) | Skill otomatis Hermes menumpuk fakta basi | Belum diukur |
+
+### E3. Bug dan celah dari audit (terverifikasi)
+
+| # | Tingkat | Masalah | Perbaikan |
+|---|---|---|---|
+| 1 | Tinggi | Allowlist read-only plan mode bisa ditembus: `git grep -Orm …` menghapus file, `sort -uo`, `sort --compress-program`, `uniq in out`, `find -fprint0`, `rg --hostname-bin`, `git remote -v add` | Allowlist per flag, bukan cek prefix |
+| 2 | Tinggi | Dari dalam sandbox, `.git/config` (fsmonitor/hooks) dan folder bin di PATH (`~/go/bin`, pnpm) bisa ditulisi, lalu dijalankan di luar sandbox oleh `git status` berikutnya atau `--best-of` | `.git` read-only di sandbox, keluarkan folder bin, dan git internal dijalankan dengan `-c core.fsmonitor= -c core.hooksPath=/dev/null` |
+| 3 | Tinggi | Di kernel < 6.7 (Debian 12, RHEL 9, Ubuntu 22.04) jaringan **tidak** diblok, tapi banner dan model tetap diberi tahu "diblok" | Tampilkan peringatan; jujur ke model |
+| 4 | Tinggi | Eksfiltrasi kredensial: `env` / `printenv ANTHROPIC_API_KEY` tidak dianggap berisiko, bash mewarisi API key, dan `fetch` tidak pernah lewat gate | Buang `*_API_KEY` / `*_TOKEN` / `AWS_*` dari env bash dan MCP; gate `fetch` |
+| 5 | Tinggi | Lolos sandbox lewat IPC (`tmux run-shell`, `docker`, `systemd-run`) | Tandai berisiko; plan mode tetap pakai allowlist |
+| 6 | Sedang | `/skill` hilang kalau memori menemukan recall (`send = block + input` menimpa skill) | `block + send` |
+| 7 | Sedang | Gambar tetap di riwayat setelah pindah ke model tanpa vision, jadi 400 terus. Gambar user tidak pernah di-elide | Ganti dengan placeholder; elide gambar lama |
+| 8 | Sedang | Renderer markdown: state fence tidak di-reset antar balasan; `a ** b` dan `src/**/*.go` rusak; CRLF | Reset per balasan; aturan `**` yang ketat |
+| 9 | Sedang | `read` tanpa batas ukuran: `/dev/zero` bikin OOM, FIFO menggantung | Hanya file reguler, baca dengan batas |
+| 10 | Sedang | `skills add '--upload-pack=…://x'` menjalankan perintah sebelum review | Tolak argumen berawalan `-`, pakai `--` |
+| 11 | Sedang | Line editor salah hitung lebar karakter CJK/emoji | Tabel lebar East Asian |
+
+Temuan rendah: `impl<'a>` di Rust, `def` di dalam docstring Python, `ForCwd` membaca sesi penuh, `Attach` bocor ke giliran berikutnya kalau skill gagal, pemotongan UTF-8, stderr MCP dibuang.
+
+### E4. Yang dimiliki 3+ agent utama tapi belum ada di Agentium (urut dampak)
+
+1. **Subagent / delegasi paralel** (Claude Code, Codex, Gemini/Antigravity, OpenCode, Copilot `/fleet`, Cursor, Amp, Droid). `--best-of` hanya menutup kasus "coba N kali".
+2. **Bukti benchmark nyata**: TB2.1 dan TB4.0 lewat Harbor.
+3. **Diagnostik LSP** (Claude Code, OpenCode): error tipe lintas file dan find-references.
+4. **Proses latar + PTY interaktif** untuk dev server, REPL, dan perintah yang bertanya. Sering muncul di tugas Terminal-Bench.
+5. **Tool todo/plan**: murah, dan Warp mengaitkannya dengan kenaikan skor.
+6. **Web search.**
+7. **MCP HTTP/SSE + OAuth.**
+8. **ACP** (jalur termurah ke Zed/JetBrains).
+9. **Windows yang layak**: saat ini tanpa sandbox dan tanpa bash fallback yang benar.
+10. **LICENSE** (keputusan pemilik).
+
+### E5. Urutan kerja yang disarankan (v0.8 "Kokoh")
+
+1. Tutup E3 #1–#11 beserta tes regresi, dan koreksi klaim README.
+2. Todo tool + proses latar (`bash {background:true}`, lalu baca output dan hentikan).
+3. Subagent sederhana (tool `task`: konteks terpisah, hanya ringkasan yang kembali).
+4. Diagnostik LSP opsional (gopls / tsserver / pyright kalau terpasang).
+5. Run Terminal-Bench 2.1 nyata, dengan API key milik pemilik.
+
+---
+
+## F. Pemetaan kode dan memori: sebelum dan sesudah v0.8.0
+
+Riset ketiga (Sep 2026) menghasilkan tiga temuan pokok:
+1. Retrieval harus presisi, kalau tidak justru merugikan. CodeGrep (arxiv 2608.05886): suntikan BM25 **menurunkan** resolve rate; hanya retriever dengan presisi ~0,68 yang membantu.
+2. Konteks yang selalu disuntikkan menambah biaya. ETH Zurich 2026: file konteks buatan LLM −0,5% s.d. −2%, dan +20% biaya.
+3. Memori harus kecil, divalidasi, dan dibatasi. Copilot memvalidasi sitasi saat dipakai dan memberi kedaluwarsa: merge rate PR 83% → 90%. Di VibeMemBench, 11 dari 12 sistem memori otomatis kalah dari tanpa memori.
+
+### F1. Pemetaan file, folder, dan kode
+
+| Aspek | v0.7 (sebelum) | v0.8 (sekarang) | Pembanding |
+|---|---|---|---|
+| Folder | Daftar 1 level | Pohon rekursif, patuh .gitignore, level dalam diringkas jadi jumlah file | Claude Code: ls/glob |
+| Indeks | Scan ulang semua file tiap panggilan | Indeks per proyek di disk, hanya file berubah yang diparse ulang, paralel. Go stdlib ~13k file: 3,3 dtk pertama, 0,46 dtk berikutnya, cari simbol ~70 ms | Aider: cache tag per mtime |
+| Definisi | `search {symbol}` | Sama, tapi instan dari indeks | LSP go-to-definition |
+| Pemakaian | Tidak ada | `search {refs}` + fungsi pembungkus (`[in App.run]`); komentar dan definisi dikecualikan | LSP find-references (Claude Code, OpenCode) |
+| Peta repo | Semua file urut abjad (bisa ~12k token) | Peta berperingkat ala Aider: graf identifier + PageRank + fokus ke file yang disentuh, dibatasi ~2k token, **on-demand** | Aider (1k token, disuntik); kita on-demand sesuai temuan riset |
+| Akurasi parser | Salah pada lifetime Rust, docstring Python, template string, CRLF | Scanner berstatus: komentar blok, string multi-baris, char literal, docstring, CRLF | Tree-sitter (Aider) lebih akurat |
+
+**Masih kurang:** belum ada LSP (error tipe lintas file, rename aman); bahasa selain Go masih berbasis pola baris, bukan parser penuh; embedding sengaja tidak dipakai (bukti netral/negatif).
+
+### F2. Memori jangka panjang
+
+| Aspek | Sebelum | Sekarang |
+|---|---|---|
+| Kunci proyek | Direktori kerja (subfolder = memori terpisah) | Root git: satu memori per repo |
+| Fakta basi | Selamanya di prompt | Tanggal + sitasi file; disembunyikan kalau file hilang atau tidak dikonfirmasi 120 hari; `tidy` meninjaunya |
+| Duplikat | Hanya yang persis sama | Mirip ≥ 60% (Jaccard) → **update**, bukan ditumpuk |
+| Recall otomatis | Hingga 4 hit, 1.500 karakter, ambang skor absolut | Maks 2 hit, 700 karakter; minimal 2 kata kueri dan ≥ 50% kata kueri harus cocok |
+| Recall on-demand | Tidak ada | `search {memory}` |
+| Pelajaran dari error | Tidak dicatat | Jurnal mencatat error tiap giliran |
+| Keracunan memori | Filter injeksi | + tulisan dari giliran yang membaca web/MCP **ditahan** untuk ditinjau |
+| Ukuran snapshot | 3.700 karakter | 3.000 karakter |
+
+### F3. Memori jangka pendek (dalam sesi)
+
+| Aspek | Sebelum | Sekarang |
+|---|---|---|
+| State kerja | Hanya di ringkasan LLM | **Ledger** deterministik: file dibaca/diubah, 10 perintah terakhir + exit code, error terakhir yang belum beres (verbatim, hilang otomatis saat perintah yang sama lulus) |
+| Daftar tugas | Tidak ada | Tool `todo` (maks 12 item) |
+| Setelah compaction | Ringkasan LLM saja | Ringkasan + ledger + todo apa adanya (pola Claude Code/Codex/OpenCode) |
+| Masking output lama | Elision di 55% jendela | Sama (JetBrains 2025: masking ≈ ringkasan LLM dengan biaya ~½) |
+
+**Catatan jujur:** semua perbaikan ini didasarkan pada bukti eksternal dan tes unit/e2e. Belum ada pengukuran end-to-end dengan model asli (butuh API key). Celah keamanan E3 #1–#5 dan #7–#11 belum ditutup; #6 (skill + recall) sudah diperbaiki.

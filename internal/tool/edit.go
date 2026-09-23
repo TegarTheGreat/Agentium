@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -103,7 +104,7 @@ func runEdit(_ context.Context, env *Env, raw json.RawMessage) (string, error) {
 	} else if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(p, []byte(after), perm); err != nil {
+	if err := writeAtomic(p, []byte(after), perm); err != nil {
 		return "", err
 	}
 	env.markSeen(p)
@@ -310,7 +311,7 @@ func runPostEdit(env *Env, path string) string {
 	var notes []string
 	for _, h := range env.PostEdit {
 		cmd := strings.ReplaceAll(h, "{path}", shellQuote(path))
-		out, err := runShell(context.Background(), env.Root, cmd, 30*time.Second, env.Sandbox)
+		out, err := runShell(context.Background(), env.Root, cmd, 30*time.Second, env.Sandbox, env.PassEnv)
 		if err != nil || strings.Contains(out, "[exit ") {
 			notes = append(notes, fmt.Sprintf("hook %q: %s", h, Clip(strings.TrimSpace(out), 1500)))
 		}
@@ -326,4 +327,72 @@ func runPostEdit(env *Env, path string) string {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// writeAtomic replaces p so that it holds either the old or the new
+// content, never a mix — even if the process is killed or the disk fills
+// mid-write: the data goes to a temporary file in the same directory, is
+// synced, then renamed over p. It then reads the file back to confirm
+// what is on disk is what was meant (a conservation check).
+func writeAtomic(p string, data []byte, perm fs.FileMode) error {
+	dir := filepath.Dir(p)
+	// Keep hard links, ownership, setuid/setgid bits and very long names
+	// intact by writing in place for such files.
+	if st, err := os.Stat(p); err == nil && (sharedFile(st) || st.Mode()&(fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0) || len(filepath.Base(p)) > 200 {
+		return writeInPlace(p, data, perm)
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(p)+".agentium-*")
+	if err != nil {
+		if os.IsPermission(err) {
+			return writeInPlace(p, data, perm) // writable file in a read-only directory
+		}
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op after a successful rename
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		// e.g. Windows, where a file open in an editor cannot be replaced.
+		return writeInPlace(p, data, perm)
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync() // make the rename itself durable where supported
+		d.Close()
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, data) {
+		return fmt.Errorf("write verification failed for %s: the file on disk differs from what was written", p)
+	}
+	return nil
+}
+
+// writeInPlace is the fallback: write the file directly, then verify.
+func writeInPlace(p string, data []byte, perm fs.FileMode) error {
+	if err := os.WriteFile(p, data, perm); err != nil {
+		return err
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, data) {
+		return fmt.Errorf("write verification failed for %s: the file on disk differs from what was written", p)
+	}
+	return nil
 }

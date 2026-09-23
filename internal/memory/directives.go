@@ -74,14 +74,18 @@ func (s *Store) Apply(ds []Directive) []string {
 		var err error
 		switch d.Kind {
 		case "remember":
-			err = s.Remember(text)
+			var upd bool
+			var ev []string
+			upd, ev, err = s.Remember(text)
 			if err == nil {
-				out = append(out, "remembered: "+clip(text, 80))
+				out = append(out, pick(upd, "updated note: ", "remembered: ")+clip(text, 80)+forgot(ev))
 			}
 		case "prefer":
-			err = s.Prefer(text)
+			var upd bool
+			var ev []string
+			upd, ev, err = s.Prefer(text)
 			if err == nil {
-				out = append(out, "preference saved: "+clip(text, 80))
+				out = append(out, pick(upd, "preference updated: ", "preference saved: ")+clip(text, 80)+forgot(ev))
 			}
 		case "decide":
 			var id string
@@ -111,4 +115,36 @@ func clip(s string, n int) string {
 		return s
 	}
 	return strings.ToValidUTF8(s[:n], "") + "…"
+}
+
+func pick(c bool, a, b string) string {
+	if c {
+		return a
+	}
+	return b
+}
+
+// Hold records directives from a turn that read untrusted content (web
+// pages, MCP output) as pending journal entries instead of applying them:
+// memory is injected into every future prompt, so it must not be writable
+// by whatever a fetched page says. `agentium tidy` reviews pending items.
+func (s *Store) Hold(ds []Directive) []string {
+	var out []string
+	for _, d := range ds {
+		text := clip(strings.TrimSpace(Redact(d.Text)), 300)
+		if suspicious.MatchString(text) {
+			out = append(out, fmt.Sprintf("ignored @%s (looks like an instruction injection): %s", d.Kind, clip(text, 60)))
+			continue
+		}
+		_ = s.Journal("@pending " + d.Kind + " " + text)
+		out = append(out, "held for review (this turn read web/MCP content; run `agentium tidy`): "+clip(text, 60))
+	}
+	return out
+}
+
+func forgot(ev []string) string {
+	if len(ev) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (memory full: moved %d older note(s) to the journal, e.g. %q)", len(ev), clip(ev[0], 40))
 }

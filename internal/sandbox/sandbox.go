@@ -22,6 +22,9 @@ import (
 type Config struct {
 	Write   []string `json:"write"`   // writable directory trees
 	Network bool     `json:"network"` // allow TCP connect/bind
+	// NetworkUnenforced: this machine cannot block the network, so
+	// commands must not be told it is blocked.
+	NetworkUnenforced bool `json:"-"`
 }
 
 // helperArg is argv[1] of the re-exec helper.
@@ -43,17 +46,27 @@ func DefaultWrite(root string) []string {
 		"/dev/null", "/dev/zero", "/dev/tty", "/dev/ptmx", "/dev/pts", "/dev/shm"}
 	if h, err := os.UserHomeDir(); err == nil {
 		for _, p := range []string{
-			".cache", "go", ".npm", ".yarn", ".pnpm-store", ".cargo/registry", ".cargo/git",
-			".rustup/tmp", ".m2", ".gradle", ".nuget", ".bun/install/cache", ".local/share/pnpm",
-			"Library/Caches",
+			// Caches only: never directories on PATH (~/go/bin, pnpm's
+			// home) or with scripts other tools run later (~/.gradle
+			// init.d, ~/.m2 settings), which would let a sandboxed command
+			// plant code that runs unconfined.
+			".cache", "go/pkg", ".npm", ".yarn/berry/cache", ".pnpm-store", ".cargo/registry", ".cargo/git",
+			".rustup/tmp", ".m2/repository", ".gradle/caches", ".gradle/wrapper", ".nuget/packages",
+			".bun/install/cache", ".local/share/pnpm/store", "Library/Caches",
 		} {
 			paths = append(paths, filepath.Join(h, p))
 		}
 	}
-	for _, env := range []string{"GOCACHE", "GOMODCACHE", "GOPATH", "npm_config_cache", "CARGO_HOME", "XDG_CACHE_HOME", "TMPDIR"} {
+	for _, env := range []string{"GOCACHE", "GOMODCACHE", "npm_config_cache", "XDG_CACHE_HOME", "TMPDIR"} {
 		if v := os.Getenv(env); v != "" {
 			paths = append(paths, v)
 		}
+	}
+	if v := os.Getenv("GOPATH"); v != "" {
+		paths = append(paths, filepath.Join(v, "pkg")) // not GOPATH/bin
+	}
+	if v := os.Getenv("CARGO_HOME"); v != "" {
+		paths = append(paths, filepath.Join(v, "registry"), filepath.Join(v, "git")) // not CARGO_HOME/bin
 	}
 	return uniqueExisting(paths)
 }

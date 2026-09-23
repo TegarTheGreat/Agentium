@@ -67,6 +67,11 @@ type Agent struct {
 	// Note is prepended to the next user input once (e.g. "the user undid
 	// your last changes"), so the model's picture of the files stays true.
 	Note string
+	// Attach holds images for the next Run's user message.
+	Attach []provider.Image
+	// Ledger is the harness-kept working state (files, commands, errors,
+	// todos) that survives compaction.
+	Ledger Ledger
 }
 
 // Stats summarizes one Run.
@@ -104,6 +109,8 @@ type runState struct {
 	reminded    bool
 	truncations int
 	sigs        []string
+	failStreak  int // consecutive tool batches with a failure
+	escalations int
 }
 
 // Run sends input and loops until the model stops calling tools.
@@ -115,13 +122,19 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		input = "[" + a.Note + "]\n\n" + input
 		a.Note = ""
 	}
+	a.Ledger.startTurn()
+	// Thinking harder is for the moments that need it; each user turn
+	// starts again at the configured level.
+	base := a.Reasoning.Effort
+	defer func() { a.Reasoning.Effort = base }()
 	if a.Env != nil {
 		a.Env.StartTurn()
 		if a.Env.Gate != nil && a.Env.Gate.GetMode() == policy.Plan {
 			input += "\n\n" + policy.PlanNote
 		}
 	}
-	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input})
+	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input, Images: a.Attach})
+	a.Attach = nil
 	maxTurns := a.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 100
@@ -242,6 +255,9 @@ func validCalls(calls []provider.ToolCall) []provider.ToolCall {
 // or stalled connections. Text already streamed to the user may repeat
 // after a mid-stream retry; the Retry event lets the UI say so.
 func (a *Agent) call(ctx context.Context, req provider.Request) (provider.Response, error) {
+	if a.Env != nil && !a.Env.Vision {
+		req.Messages = withoutImages(req.Messages)
+	}
 	var resp provider.Response
 	var err error
 	for attempt := 0; ; attempt++ {
@@ -290,6 +306,7 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			t0 := time.Now()
 			var res string
 			var err error
+			var imgs []provider.Image
 			t, ok := byName[c.Name]
 			switch {
 			case !ok:
@@ -297,12 +314,15 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			case len(c.Args) > 0 && !json.Valid(c.Args):
 				err = errors.New("arguments are not valid JSON")
 			default:
-				res, err = safeRun(ctx, t, a.Env, c.Args)
+				tctx, images := tool.WithImageSink(ctx)
+				res, err = safeRun(tctx, t, a.Env, c.Args)
+				imgs = images()
+				a.Ledger.record(c.Name, c.Args, res, err)
 			}
 			if a.Events.ToolDone != nil {
 				a.Events.ToolDone(c, res, err, time.Since(t0))
 			}
-			msg := provider.Message{Role: provider.RoleTool, ToolCallID: c.ID, Text: res}
+			msg := provider.Message{Role: provider.RoleTool, ToolCallID: c.ID, Text: res, Images: imgs}
 			if err != nil {
 				msg.IsError = true
 				if res != "" {
@@ -330,4 +350,28 @@ func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessa
 // Reset clears the conversation.
 func (a *Agent) Reset() {
 	a.Messages = nil
+	if a.Env != nil {
+		a.Env.ForgetReads()
+	}
+}
+
+// withoutImages replaces images with a note for models that cannot view
+// them (e.g. after /model switched away from a vision model), without
+// touching the stored history.
+func withoutImages(ms []provider.Message) []provider.Message {
+	var out []provider.Message
+	for i, m := range ms {
+		if len(m.Images) == 0 {
+			continue
+		}
+		if out == nil {
+			out = append([]provider.Message(nil), ms...)
+		}
+		out[i].Images = nil
+		out[i].Text += fmt.Sprintf("\n[%d image(s) omitted: this model cannot view images]", len(m.Images))
+	}
+	if out == nil {
+		return ms
+	}
+	return out
 }

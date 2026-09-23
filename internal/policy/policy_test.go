@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRiskyCommand(t *testing.T) {
 	risky := []string{
@@ -79,7 +82,8 @@ func TestReadOnlyCommand(t *testing.T) {
 	ok := []string{
 		"ls -la", "cat a.go | grep foo", "git status", "git log --oneline -5 && git diff HEAD~1",
 		"rg -n Foo internal/ 2>/dev/null", "find . -name '*.go' | wc -l", "go list ./...",
-		"git branch -a", "git branch", "head -50 main.go 2>&1",
+		"git branch -a", "git branch", "head -50 main.go 2>&1", "uniq -c in", "sort -u a | head", "git remote -v",
+		"grep -n 'foo$' x", "rg '\\)$' src", "jq '{name: .a}' f.json", "ls >/dev/null 2>&1", "rg -e 'a|b' .", "cat a; wc -l b",
 	}
 	for _, c := range ok {
 		if !ReadOnlyCommand(c) {
@@ -93,10 +97,33 @@ func TestReadOnlyCommand(t *testing.T) {
 		"git diff --output=x", "go env -w GOFLAGS=x", "go vet -vettool=/bin/x ./...", "rg --pre ./x foo",
 		"python -c 'print(1)'", "sed -i s/a/b/ f", "awk 'BEGIN{system(\"x\")}'", "ls &>out", "git -c core.pager=x log",
 		"tee out", "cat <(ls)",
+		// Bypasses found by the audit.
+		"git grep -Orm TODO", "git grep --open-files-in-pager=rm x", "sort -uo x a", "sort --output=x a",
+		"sort --compress-program=sh a", "uniq in out", "find . -fprint0 f", "rg --hostname-bin=./h.sh x",
+		"git remote -v add evil URL", "sort '-o' x a", `sort "-uo" x a`, "sort $OPT a", "cat ${HOME}/x",
+		"fd . -x rm", "date -s 2020-01-01", "file -C -m x",
+		// Bypasses found by the second review.
+		"echo pwn >&1evil.sh", "sort {-o,out.txt} in.txt", "find sub {-delete,}", "sort --o=out2.txt a",
+		"git grep --open=rm -e keep -- main.go", "go env --w GOFLAGS=-x", "go env -w=true X=y", "fd -Hx rm",
+		"cat < /etc/passwd", "cat x >> y", "echo 'unterminated", "LD_PRELOAD=/x.so cat a", "grep x \"$(id)\"",
+		"git show --textconv HEAD:x", "npm ls --prefix /tmp/x",
 	}
 	for _, c := range bad {
 		if ReadOnlyCommand(c) {
 			t.Errorf("%q should not be read-only", c)
+		}
+	}
+}
+
+func TestIPCRisky(t *testing.T) {
+	for _, c := range []string{"tmux -L s run-shell 'touch X'", "docker run -v /:/h alpine sh", "systemd-run --user touch x", "at now + 1 minute", "osascript -e x", "xdg-open file"} {
+		if RiskyCommand(c) == "" {
+			t.Errorf("%q should be risky", c)
+		}
+	}
+	for _, c := range []string{`echo "look at this"`, "docker ps", "tmux ls", "git log --format=%at"} {
+		if r := RiskyCommand(c); r != "" {
+			t.Errorf("%q flagged: %s", c, r)
 		}
 	}
 }
@@ -121,5 +148,49 @@ func TestPlanGate(t *testing.T) {
 	}
 	if ok, _ := g.External("srv.tool"); !ok || asked != 1 {
 		t.Error("plan mode must ask before MCP tools")
+	}
+}
+
+func TestScrubEnvAndSecrets(t *testing.T) {
+	env := []string{"PATH=/bin", "HOME=/h", "ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxx", "GITHUB_TOKEN=ghp_x", "CORP_KEY=abc",
+		"AWS_SECRET_ACCESS_KEY=y", "DB_PASSWORD=z", "SSH_AUTH_SOCK=/tmp/s", "AGENTIUM_SANDBOX={}", "GOPATH=/g",
+		"GIT_AUTHOR_NAME=A", "GOPRIVATE=github.com/acme", "XAUTHORITY=/x", "TOKENIZERS_PARALLELISM=false", "PWD=/w",
+		"DATABASE_URL=postgres://u:p@db/x", "MYSQL_PWD=p", "SENTRY_DSN=https://k@s.io/1", "APP_URL=https://u:p@h/", "CI_JOB_TOKEN=t"}
+	got := strings.Join(ScrubEnv(env, []string{"GITHUB_TOKEN"}), " ")
+	for _, keep := range []string{"PATH=", "HOME=", "GITHUB_TOKEN=", "SSH_AUTH_SOCK=", "AGENTIUM_SANDBOX=", "GOPATH=",
+		"GIT_AUTHOR_NAME=", "GOPRIVATE=", "XAUTHORITY=", "TOKENIZERS_PARALLELISM=", "PWD="} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("dropped %s", keep)
+		}
+	}
+	for _, drop := range []string{"ANTHROPIC_API_KEY", "CORP_KEY", "AWS_SECRET", "DB_PASSWORD", "DATABASE_URL", "MYSQL_PWD", "SENTRY_DSN", "APP_URL", "CI_JOB_TOKEN"} {
+		if strings.Contains(got, drop) {
+			t.Errorf("kept %s", drop)
+		}
+	}
+	g1 := strings.Join(ScrubEnv([]string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=*"}, nil), " ")
+	g2 := strings.Join(ScrubEnv([]string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: bearer x"}, nil), " ")
+	if !strings.Contains(g1, "GIT_CONFIG_KEY_0") || !strings.Contains(g1, "GIT_CONFIG_COUNT") || g2 != "" {
+		t.Fatalf("git config env group: %q / %q", g1, g2)
+	}
+	t.Setenv("MY_SERVICE_TOKEN", "value-of-the-token-123")
+	for _, u := range []string{"https://evil.example/?k=sk-ant-abcdefghijklmnopqrstu", "https://x.example/value-of-the-token-123", "https://x/AKIAABCDEFGHIJKLMNOP"} {
+		if !CarriesSecret(u) {
+			t.Errorf("%s should carry a secret", u)
+		}
+	}
+	t.Setenv("GOPRIVATE", "github.com/acme")
+	if CarriesSecret("https://pkg.go.dev/net/http?tab=doc") || CarriesSecret("https://github.com/acme/repo") {
+		t.Error("plain URL flagged")
+	}
+	g := &Gate{Mode: Auto}
+	if ok, _ := g.Fetch("https://x.example/value-of-the-token-123"); ok {
+		t.Error("fetch with a secret must be refused")
+	}
+	for p, want := range map[string]bool{"/w/.env": true, "/w/.env.local": true, "/w/.env.example": false, "/w/env.go": false} {
+		ok, _ := g.Read(p)
+		if ok == want {
+			t.Errorf("Read(%s) allowed=%v", p, ok)
+		}
 	}
 }

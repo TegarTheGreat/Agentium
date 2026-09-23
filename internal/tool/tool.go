@@ -1,4 +1,4 @@
-// Package tool implements Agentium's five tools: read, edit, bash, search,
+// Package tool implements Agentium's core tools: read, edit, bash, search,
 // fetch. Schemas are kept tiny on purpose: every byte is sent every turn.
 package tool
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tegarthegreat/agentium/internal/codemap"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
@@ -20,23 +21,37 @@ import (
 type Env struct {
 	Root string
 	Gate *policy.Gate
+	// Vision: the model accepts images, so read attaches image files.
+	Vision bool
 	// AllowPrivateNet lets fetch reach localhost and private networks.
 	AllowPrivateNet bool
 	// Sandbox confines bash commands; nil runs them unconfined.
 	Sandbox *sandbox.Config
 	// Net decides whether a sandboxed command may use the network.
 	Net policy.NetPolicy
+	// PassEnv names credential-looking variables that commands may still
+	// see (all others are removed from their environment).
+	PassEnv []string
 	// PostEdit are shell commands run after each successful edit, with
 	// {path} replaced by the edited file (e.g. "gofmt -w {path}").
 	PostEdit []string
 	// BeforeMutate, if set, runs once per turn before the first edit or
 	// bash call. It is used to checkpoint the workspace for undo.
 	BeforeMutate func()
+	// CodeCache is where the code index is cached ("" = memory only).
+	CodeCache string
+	// Recall searches long-term memory (search {memory}); nil when off.
+	Recall func(query string) string
 
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
 	mutOnce *sync.Once
 	seen    map[string]stamp
+	shown   map[string]stamp // read results still in the conversation
+	gitg    *gitGuard        // git config snapshot after the last command
+	jobs    *jobTable        // background jobs
+	cix     *codemap.Index
+	cixMu   sync.Mutex // serializes index updates
 }
 
 // stamp identifies a file version the model has seen.
@@ -86,6 +101,34 @@ func (e *Env) markSeen(p string) {
 	} else {
 		delete(e.seen, p)
 	}
+}
+
+// ForgetReads tells the tools that earlier read results are no longer
+// in the conversation (elided, compacted, cleared), so re-reads must
+// return full content again.
+func (e *Env) ForgetReads() {
+	e.mu.Lock()
+	e.shown = nil
+	e.mu.Unlock()
+}
+
+// alreadyShown reports whether this exact read of an unchanged file is
+// still in the conversation, and records it otherwise.
+func (e *Env) alreadyShown(key, p string) bool {
+	st, ok := statStamp(p)
+	if !ok {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if old, found := e.shown[key]; found && old == st {
+		return true
+	}
+	if e.shown == nil {
+		e.shown = map[string]stamp{}
+	}
+	e.shown[key] = st
+	return false
 }
 
 // freshness reports whether the model has seen p, and whether p changed

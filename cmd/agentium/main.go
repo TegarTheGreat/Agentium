@@ -27,10 +27,11 @@ import (
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"github.com/tegarthegreat/agentium/internal/session"
+	"github.com/tegarthegreat/agentium/internal/skill"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.6.0"
+var version = "0.9.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -44,6 +45,7 @@ Usage:
   agentium models [provider]    list models with context size and price (models.dev)
   agentium undo                 revert the file changes of the last turn here
   agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
+  agentium skills [list|show|add|remove]   manage SKILL.md skills (add: dir, git URL or owner/repo, pinned + reviewed)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
 
@@ -63,7 +65,7 @@ Flags:
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
 
-In a session: /plan  /go  /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
+In a session: /<skill> [task]  /skills  /plan  /go  /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
 Keys: ↑/↓ history · Ctrl-A/E/U/K/W · paste keeps newlines · end a line with \ for a newline
 `
 
@@ -97,6 +99,9 @@ func main() {
 			return
 		case "bench":
 			exit(cmdBench(os.Args[2:]))
+			return
+		case "skills":
+			exit(cmdSkills(os.Args[2:]))
 			return
 		}
 	}
@@ -165,7 +170,8 @@ type ui struct {
 	mu      sync.Mutex
 	quiet   bool
 	color   bool
-	midLine bool // stdout has text without a trailing newline
+	midLine bool      // stdout has text without a trailing newline
+	md      *mdStream // renders Markdown when stdout is a terminal
 }
 
 func (u *ui) dim(s string) string {
@@ -178,6 +184,11 @@ func (u *ui) dim(s string) string {
 func (u *ui) text(d string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if u.md != nil {
+		u.md.Write(d)
+		u.midLine = u.md.Pending()
+		return
+	}
 	os.Stdout.WriteString(d)
 	if d != "" {
 		u.midLine = !strings.HasSuffix(d, "\n")
@@ -185,6 +196,13 @@ func (u *ui) text(d string) {
 }
 
 func (u *ui) endLine() {
+	if u.md != nil {
+		if u.md.Pending() {
+			u.md.Flush() // a tool line mid-reply: keep block state (e.g. a fence)
+		}
+		u.midLine = false
+		return
+	}
 	if u.midLine {
 		os.Stdout.WriteString("\n")
 		u.midLine = false
@@ -356,6 +374,9 @@ func run(args []string) error {
 		*quiet = true
 	}
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
+	if !*asJSON && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" && os.Getenv("AGENTIUM_RAW") == "" {
+		u.md = newMD(os.Stdout)
+	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
 	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}
@@ -400,15 +421,24 @@ func run(args []string) error {
 		}()
 		tools = append(tools, tool.MCPTools(clients)...)
 	}
-	system := agent.SystemPrompt(cwd, mem != nil, snapshot)
+	skills := skill.Discover(config.Home(), cwd)
+	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + skill.Prompt(skills)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
 		MaxCost: *maxCost,
-		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
+		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate, Vision: res.Vision(), CodeCache: codeCache(cwd)},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
+	}
+	a.Tools = append(a.Tools, a.TodoTool())
+	defer a.Env.KillJobs() // background servers do not outlive the session
+	if mem != nil {
+		a.Env.Recall = mem.search
+		if stale := mem.store.Stale(); len(stale) > 0 && !*quiet {
+			fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("· memory: %d stale note(s) hidden (cited files gone or unconfirmed for months); `agentium tidy` reviews them", len(stale))))
+		}
 	}
 	if cfg.FastModel != "" {
 		if fr, err := provider.Resolve(cfg.FastModel, cfg, auth); err == nil {
@@ -434,7 +464,8 @@ func run(args []string) error {
 		}
 	}
 	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
-	if !boxStatus.Available && !*quiet && !*noSandbox && sandboxWanted(cfg) {
+	if !*quiet && !*noSandbox && sandboxWanted(cfg) && (!boxStatus.Available || !boxStatus.Network) {
+		// Say plainly what is not enforced (e.g. network on kernels < 6.7).
 		fmt.Fprintln(os.Stderr, u.dim("· "+boxStatus.Detail))
 	}
 	if mem != nil {
@@ -491,6 +522,11 @@ func run(args []string) error {
 		},
 		Notice: func(msg string) { u.line("· " + msg) },
 		TurnFinish: func(r provider.Response) {
+			if u.md != nil {
+				u.mu.Lock()
+				u.md.End() // a reply is over: its unclosed fence must not leak
+				u.mu.Unlock()
+			}
 			if r.Text != "" {
 				replies = append(replies, r.Text)
 			}
@@ -519,6 +555,7 @@ func run(args []string) error {
 			u.mu.Lock()
 			u.endLine()
 			u.mu.Unlock()
+			a.Env.KillJobs()
 			os.Exit(130)
 		}
 	}()
@@ -527,9 +564,21 @@ func run(args []string) error {
 		curPrompt = input
 		replies, edited = nil, nil
 		send := input
+		if imgs, notes := mentionedImages(input, cwd, a.Env.Vision); len(imgs)+len(notes) > 0 {
+			a.Attach = imgs
+			for _, n := range notes {
+				u.line("· " + n)
+			}
+		}
+		if msg, ok, err := skill.Invoke(skills, input); ok {
+			if err != nil {
+				return err
+			}
+			send = msg
+		}
 		if mem != nil {
 			if block, n := mem.recall(input); n > 0 {
-				send = block + "\n\n" + input
+				send = block + "\n\n" + send
 				u.line(fmt.Sprintf("· recalled %d item%s from memory", n, plural(n)))
 			}
 		}
@@ -537,7 +586,7 @@ func run(args []string) error {
 		active.Store(&cancel)
 		st, err := a.Run(ctx, send)
 		if mem != nil {
-			mem.afterTurn(input, replies, edited, u.line)
+			mem.afterTurn(input, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), u.line)
 		}
 		runStopHooks(stopHooks, cwd)
 		active.Store(nil)
@@ -689,7 +738,11 @@ func run(args []string) error {
 				line += "\n\n" + extra
 			}
 		}
-		if strings.HasPrefix(line, "/") {
+		if strings.HasPrefix(line, "/") && !skillCall(skills, line) {
+			if line == "/skills" {
+				printSkills(skills)
+				continue
+			}
 			if done := slash(line, a, gate, cfg, auth, sess, store); done {
 				return nil
 			}
@@ -725,6 +778,9 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 			return false
 		}
 		a.Client, a.Model = res.Client, res.Model
+		a.Env.Vision = res.Vision()
+		// The new model's reasoning capabilities, same requested effort.
+		a.Reasoning = res.Reasoning(a.Reasoning.Effort)
 		sess.Model = res.Provider + "/" + res.Model
 		fmt.Fprintln(os.Stderr, "· model:", sess.Model)
 	case "/mode":
@@ -769,6 +825,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		hash := sess.SystemHash
 		*sess = *chosen
 		a.Messages = chosen.Messages
+		a.Env.ForgetReads()
 		if chosen.SystemHash != hash {
 			for i := range a.Messages {
 				a.Messages[i].Raw = nil
@@ -788,7 +845,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
 	default:
-		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo|plan> /plan /go /usage /exit")
+		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo|plan> /plan /go /skills /<skill> /usage /exit")
 	}
 	return false
 }

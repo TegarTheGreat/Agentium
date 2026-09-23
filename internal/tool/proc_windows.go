@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"os"
 	"os/exec"
 )
 
@@ -20,3 +21,5 @@ func killProcessGroup(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 	}
 }
+
+func sharedFile(os.FileInfo) bool { return false }

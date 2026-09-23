@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/agent"
+	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
+	"github.com/tegarthegreat/agentium/internal/skill"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
@@ -35,8 +37,11 @@ type candidate struct {
 	removed  int
 }
 
+// git runs git for agentium's own bookkeeping with repository-configured
+// programs (fsmonitor, hooks) disabled, so nothing an agent planted in
+// .git runs outside the sandbox through us.
 func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
 	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -113,7 +118,7 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 				env.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(c.dir)}
 			}
 			try := &agent.Agent{
-				Client: a.Client, Model: a.Model, System: agent.SystemPrompt(c.work, false, ""),
+				Client: a.Client, Model: a.Model, System: agent.SystemPrompt(c.work, false, "") + skill.Prompt(skill.Discover(config.Home(), c.work)),
 				Tools: tool.All(), Env: env, MaxTurns: a.MaxTurns, MaxTokens: a.MaxTokens,
 				ContextTokens: a.ContextTokens, Verify: true, Reasoning: a.Reasoning, FastMode: a.FastMode, Cost: a.Cost,
 				Events: agent.Events{
@@ -121,6 +126,7 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 				},
 			}
 			c.stats, c.runErr = try.Run(ctx, prompt+"\n\nWhen done, this check must pass: "+check)
+			env.KillJobs()
 			c.cost = try.Spent
 			out, err := runCheck(ctx, c.work, check, env.Sandbox)
 			c.checkOut, c.pass = out, err == nil
@@ -173,7 +179,7 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 		fmt.Fprintf(os.Stderr, "attempt %d passes without changes; nothing to apply\n", win.n)
 		return nil
 	}
-	cmd := exec.Command("git", "apply", "--whitespace=nowarn", "-")
+	cmd := exec.Command("git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "apply", "--whitespace=nowarn", "-")
 	cmd.Dir = top
 	cmd.Stdin = bytes.NewReader(win.patch)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -198,9 +204,10 @@ func runCheck(ctx context.Context, dir, check string, box *sandbox.Config) (stri
 			return "", err
 		}
 		cmd = exec.CommandContext(ctx, c.Path, c.Args[1:]...)
-		cmd.Env = c.Env
+		cmd.Env = policy.ScrubEnv(c.Env, nil)
 	} else {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", check)
+		cmd.Env = policy.ScrubEnv(os.Environ(), nil)
 	}
 	// On timeout or Ctrl-C kill the whole process group, and don't wait
 	// forever on children that keep the output pipe open.

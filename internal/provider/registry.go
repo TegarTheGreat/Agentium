@@ -193,6 +193,30 @@ type Resolved struct {
 	Known bool
 }
 
+// Vision reports whether the model accepts images: from the registry
+// when it says, else from well-known multimodal model families.
+func (r Resolved) Vision() bool {
+	if r.Known && r.Info.Input != nil {
+		for _, in := range r.Info.Input {
+			if in == "image" {
+				return true
+			}
+		}
+		return false
+	}
+	m := strings.ToLower(r.Model)
+	if strings.Contains(m, "o3-mini") || strings.Contains(m, "o1-mini") {
+		return false
+	}
+	for _, f := range []string{"claude", "gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "gemini", "grok-4", "pixtral",
+		"llava", "vision", "-vl", "llama-4", "kimi-k2.5", "glm-4.5v", "glm-4.6v"} {
+		if strings.Contains(m, f) {
+			return true
+		}
+	}
+	return false
+}
+
 // Reasoning returns request reasoning settings for this model.
 func (r Resolved) Reasoning(effort string) Reasoning {
 	return Reasoning{Effort: effort, Efforts: r.Info.Efforts, Budget: r.Info.Budget, Interleaved: r.Info.Interleaved}

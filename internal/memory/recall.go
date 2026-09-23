@@ -91,6 +91,9 @@ func NewIndex(docs []Doc) *Index {
 type Hit struct {
 	Doc   Doc
 	Score float64
+	// Coverage is the share of distinct query terms the doc contains.
+	Coverage float64
+	Matched  int
 }
 
 // Search returns up to k docs ranked by BM25, with a recency tiebreak
@@ -125,7 +128,7 @@ func (ix *Index) Search(query string, k int) []Hit {
 			continue
 		}
 		score += float64(i) / n * 0.05 // recency tiebreak
-		hits = append(hits, Hit{Doc: ix.docs[i], Score: score})
+		hits = append(hits, Hit{Doc: ix.docs[i], Score: score, Matched: matched, Coverage: float64(matched) / float64(len(qs))})
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	if len(hits) > k {

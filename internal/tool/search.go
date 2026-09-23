@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/policy"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -19,20 +20,29 @@ const searchMaxLines = 200
 
 var searchTool = Tool{
 	Def: providerDef("search",
-		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob. Respects .gitignore.",
-		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"}}}`),
+		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob; symbol = where a function/type/class is defined (Name or Type.Name); refs = where it is used, with the enclosing function; memory = past decisions, errors and sessions. Respects .gitignore.",
+		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"},"symbol":{"type":"string"},"refs":{"type":"string"},"memory":{"type":"string"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
 			Pattern    string `json:"pattern"`
 			Path       string `json:"path"`
 			Glob       string `json:"glob"`
 			IgnoreCase bool   `json:"ignore_case"`
+			Symbol     string `json:"symbol"`
+			Refs       string `json:"refs"`
+			Memory     string `json:"memory"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
 		}
-		if a.Pattern == "" && a.Glob == "" {
-			return "", errors.New("give pattern and/or glob")
+		if a.Pattern == "" && a.Glob == "" && a.Symbol == "" && a.Refs == "" && a.Memory == "" {
+			return "", errors.New("give pattern, glob, symbol, refs or memory")
+		}
+		if a.Memory != "" {
+			if env.Recall == nil {
+				return "(memory is off)", nil
+			}
+			return env.Recall(a.Memory), nil
 		}
 		dir := env.Root
 		if a.Path != "" {
@@ -42,6 +52,12 @@ var searchTool = Tool{
 			if ok, why := env.Gate.Read(dir); !ok {
 				return "", fmt.Errorf("denied (%s)", why)
 			}
+		}
+		if a.Symbol != "" {
+			return env.findSymbol(ctx, dir, a.Symbol), nil
+		}
+		if a.Refs != "" {
+			return env.findRefs(ctx, dir, a.Refs), nil
 		}
 		if rg := ripgrep(); rg != "" {
 			return runRipgrep(ctx, rg, env.Root, dir, a.Pattern, a.Glob, a.IgnoreCase)
@@ -89,7 +105,24 @@ func runRipgrep(ctx context.Context, rg, root, dir, pattern, glob string, icase 
 		}
 		return "", err
 	}
-	return capLines(relativize(string(out), root), searchMaxLines), nil
+	return capLines(relativize(dropDotEnv(string(out)), root), searchMaxLines), nil
+}
+
+// dropDotEnv removes results from .env files: their values are secrets,
+// and reading them needs approval.
+func dropDotEnv(out string) string {
+	lines := strings.Split(out, "\n")
+	kept := lines[:0]
+	for _, l := range lines {
+		path := l
+		if i := strings.IndexByte(l, ':'); i > 0 {
+			path = l[:i]
+		}
+		if !policy.DotEnv(path) {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func relativize(s, root string) string {
@@ -112,7 +145,7 @@ func capLines(s string, n int) string {
 // secretGlobs keep credential stores out of search results even when a
 // search covers the home directory.
 var secretGlobs = []string{".ssh/", ".aws/", ".gnupg/", ".kube/", ".docker/", ".netrc", ".npmrc", ".pypirc",
-	".git-credentials", ".config/gcloud/", ".config/gh/", ".agentium/"}
+	".git-credentials", ".config/gcloud/", ".config/gh/", ".agentium/", ".env", ".env.local", ".env.production", ".env.development"}
 
 var skipDirs = map[string]bool{".ssh": true, ".aws": true, ".gnupg": true, ".kube": true, ".docker": true, ".agentium": true, ".git": true, ".hg": true, ".svn": true, "node_modules": true, "vendor": true, ".venv": true, "venv": true, "dist": true, "build": true, "target": true, "__pycache__": true, ".next": true, ".cache": true}
 
@@ -145,6 +178,9 @@ func walkSearch(ctx context.Context, root, dir, pattern, glob string, icase bool
 		rel, _ := filepath.Rel(root, p)
 		switch d.Name() {
 		case ".netrc", ".npmrc", ".pypirc", ".git-credentials":
+			return nil
+		}
+		if policy.DotEnv(d.Name()) {
 			return nil
 		}
 		if glob != "" && !globMatch(glob, rel) {
