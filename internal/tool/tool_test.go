@@ -676,3 +676,38 @@ func TestReadNonRegularAndLarge(t *testing.T) {
 		t.Fatalf("large read: %q %v", out[:min(len(out), 200)], err)
 	}
 }
+
+func TestUnchangedRereadAndAtomicWrite(t *testing.T) {
+	e := env(t)
+	p := filepath.Join(e.Root, "a.txt")
+	os.WriteFile(p, []byte("one\ntwo\n"), 0o640)
+	first, _ := call(t, readTool, e, `{"path":"a.txt"}`)
+	again, _ := call(t, readTool, e, `{"path":"a.txt"}`)
+	if !strings.Contains(first, "one") || !strings.Contains(again, "unchanged since you read it") {
+		t.Fatalf("reread: %q", again)
+	}
+	if out, _ := call(t, readTool, e, `{"path":"a.txt","offset":2}`); !strings.Contains(out, "two") {
+		t.Fatal("a different range must be served")
+	}
+	if _, err := call(t, editTool, e, `{"path":"a.txt","old":"one","new":"uno"}`); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := call(t, readTool, e, `{"path":"a.txt"}`); !strings.Contains(out, "uno") {
+		t.Fatalf("changed file must be served in full: %q", out)
+	}
+	call(t, readTool, e, `{"path":"a.txt"}`)
+	e.ForgetReads()
+	if out, _ := call(t, readTool, e, `{"path":"a.txt"}`); !strings.Contains(out, "uno") {
+		t.Fatal("after ForgetReads the content must be served again")
+	}
+	st, _ := os.Stat(p)
+	if st.Mode().Perm() != 0o640 {
+		t.Fatalf("permissions not preserved: %v", st.Mode())
+	}
+	ents, _ := os.ReadDir(e.Root)
+	for _, en := range ents {
+		if strings.Contains(en.Name(), ".agentium-") {
+			t.Fatal("temporary file left behind")
+		}
+	}
+}

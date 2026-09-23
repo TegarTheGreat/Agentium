@@ -116,6 +116,9 @@ func (a *Agent) elide(keep int) {
 	}
 	if first >= 0 {
 		a.invalidateFrom(first)
+		if a.Env != nil {
+			a.Env.ForgetReads() // elided reads must be served in full again
+		}
 	}
 }
 
@@ -257,6 +260,9 @@ func (a *Agent) compact(ctx context.Context) error {
 		text += "\n\n" + st
 	}
 	a.Messages = append([]provider.Message{{Role: provider.RoleUser, Text: text}}, tail...)
+	if a.Env != nil {
+		a.Env.ForgetReads()
+	}
 	a.invalidateFrom(0)
 	return nil
 }
