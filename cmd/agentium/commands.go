@@ -415,7 +415,7 @@ func startMCP(servers map[string]config.MCPServer, dir string, report func(strin
 	for name, sc := range servers {
 		go func(name string, sc config.MCPServer) {
 			c, err := mcp.Start(ctx, name, mcp.Config{Command: sc.Command, Args: sc.Args, Env: sc.Env,
-				URL: sc.URL, Type: sc.Type, Headers: sc.Headers,
+				URL: sc.URL, Type: sc.Type, Headers: sc.Headers, Tokens: mcpTokens(),
 				LogPath: filepath.Join(config.Home(), "logs", "mcp-"+name+".log")}, dir)
 			ch <- res{c, err}
 		}(name, sc)
@@ -448,4 +448,66 @@ func runStopHooks(hooks []string, dir string) {
 func codeCache(cwd string) string {
 	h := sha256.Sum256([]byte(cwd))
 	return filepath.Join(config.ProjectDir(config.ProjectRoot(cwd)), "codemap-"+hex.EncodeToString(h[:6])+".gob")
+}
+
+// mcpTokens is where OAuth grants for remote MCP servers are kept.
+func mcpTokens() *mcp.TokenStore {
+	return &mcp.TokenStore{Path: filepath.Join(config.Home(), "mcp-auth.json")}
+}
+
+// cmdMCP: agentium mcp [list | login <name> | logout <name>].
+func cmdMCP(args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	store := mcpTokens()
+	if len(args) == 0 || args[0] == "list" {
+		if len(cfg.MCP) == 0 {
+			fmt.Fprintln(os.Stderr, `no MCP servers configured ("mcp" in ~/.agentium/config.json)`)
+			return nil
+		}
+		names := make([]string, 0, len(cfg.MCP))
+		for n := range cfg.MCP {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			sc := cfg.MCP[n]
+			switch {
+			case sc.URL == "":
+				fmt.Printf("%-16s stdio  %s\n", n, sc.Command)
+			case store.Get(sc.URL) != nil:
+				fmt.Printf("%-16s remote %s (logged in)\n", n, sc.URL)
+			default:
+				fmt.Printf("%-16s remote %s\n", n, sc.URL)
+			}
+		}
+		return nil
+	}
+	if len(args) != 2 || args[0] != "login" && args[0] != "logout" {
+		return errors.New("usage: agentium mcp [list | login <name> | logout <name>]")
+	}
+	sc, ok := cfg.MCP[args[1]]
+	if !ok || sc.URL == "" {
+		return fmt.Errorf("no remote MCP server %q in config", args[1])
+	}
+	if args[0] == "logout" {
+		if err := store.Put(sc.URL, nil); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, "logged out of", args[1])
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	err = mcp.Login(ctx, sc.URL, sc.Headers, store, func(u string) {
+		fmt.Fprintf(os.Stderr, "Opening your browser to log in to %s.\nIf it does not open, visit:\n  %s\n", args[1], u)
+		openBrowser(u)
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "logged in to", args[1])
+	return nil
 }
