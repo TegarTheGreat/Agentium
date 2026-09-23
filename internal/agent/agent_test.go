@@ -601,3 +601,36 @@ func TestLessonFromErrorToFix(t *testing.T) {
 		t.Fatalf("lessons: %v", ls)
 	}
 }
+
+func TestEffortEscalatesOnFailureAndResets(t *testing.T) {
+	fail := calls(tc("x", "bash", `{"cmd":"exit 1"}`))
+	var efforts []string
+	step := func(req provider.Request) (provider.Response, error) {
+		efforts = append(efforts, req.Reasoning.Effort)
+		return fail(req)
+	}
+	s := &script{steps: []func(provider.Request) (provider.Response, error){step, step, step, step, func(req provider.Request) (provider.Response, error) {
+		efforts = append(efforts, req.Reasoning.Effort)
+		return provider.Response{Text: "done"}, nil
+	}}}
+	a := newAgent(t, s)
+	a.Reasoning = provider.Reasoning{Effort: "medium", Efforts: []string{"low", "medium", "high", "max"}}
+	var notes []string
+	a.Events.Notice = func(m string) { notes = append(notes, m) }
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	// Three failures in a row, then the stuck warning on the 4th identical call.
+	if strings.Join(efforts, ",") != "medium,medium,medium,high,max" {
+		t.Fatalf("efforts per call: %v", efforts)
+	}
+	if a.Reasoning.Effort != "medium" {
+		t.Fatalf("effort not reset after the turn: %s", a.Reasoning.Effort)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.Join(notes, "|"), "thinking harder (effort high)") {
+		t.Fatalf("notice: %v", notes)
+	}
+	if (provider.Reasoning{Effort: "max", Efforts: []string{"max"}}).NextEffort() != "" || (provider.Reasoning{}).NextEffort() != "" {
+		t.Fatal("no level above max / no levels at all")
+	}
+}

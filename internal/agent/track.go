@@ -35,6 +35,17 @@ func argString(c provider.ToolCall, key string) string {
 // without a check since, and whether the model is looping. Repeats get a
 // warning appended to the result; it returns true when the run should stop.
 func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provider.Message) (stop bool) {
+	failed, warned := false, false
+	defer func() {
+		if failed {
+			rs.failStreak++
+		} else {
+			rs.failStreak = 0
+		}
+		if !stop && (warned || rs.failStreak >= escalateAfter) {
+			a.escalate(rs)
+		}
+	}()
 	for i, c := range calls {
 		r := &results[i]
 		switch c.Name {
@@ -46,6 +57,9 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 			if !r.IsError && checkCmd.MatchString(argString(c, "cmd")) {
 				rs.editedCode = false
 			}
+		}
+		if r.IsError || c.Name == "bash" && failedExit.MatchString(r.Text) {
+			failed = true
 		}
 		h := sha256.Sum256([]byte(c.Name + "\x00" + canonical(c.Args) + "\x00" + r.Text))
 		sig := hex.EncodeToString(h[:8])
@@ -63,6 +77,7 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 		case n >= stuckStop:
 			stop = true
 		case n >= stuckWarn:
+			warned = true
 			r.Text += fmt.Sprintf("\n[agentium: this exact call returned the same result %d times; it is not working, change your approach]", n)
 			a.notice(fmt.Sprintf("model repeated %s %d times; warned it", c.Name, n))
 		}
@@ -78,4 +93,27 @@ func canonical(raw json.RawMessage) string {
 	}
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// escalateAfter is how many failing tool batches in a row make the agent
+// think harder.
+const escalateAfter = 3
+
+var failedExit = regexp.MustCompile(`\[exit [1-9]\d*\]\s*$`)
+
+// escalate raises reasoning effort one level (at most twice per turn):
+// fast, cheap thinking by default, slow deliberate thinking when the
+// fast path keeps failing — Kahneman's System 1 and System 2.
+func (a *Agent) escalate(rs *runState) {
+	if rs.escalations >= 2 {
+		return
+	}
+	next := a.Reasoning.NextEffort()
+	if next == "" {
+		return
+	}
+	rs.escalations++
+	rs.failStreak = 0
+	a.Reasoning.Effort = next
+	a.notice("repeated failures: thinking harder (effort " + next + ")")
 }
