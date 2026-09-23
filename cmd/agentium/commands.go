@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -434,4 +436,10 @@ func runStopHooks(hooks []string, dir string) {
 		_ = cmd.Start()
 		go func() { _ = cmd.Wait() }()
 	}
+}
+
+// codeCache is where the code index for cwd is cached.
+func codeCache(cwd string) string {
+	h := sha256.Sum256([]byte(cwd))
+	return filepath.Join(config.ProjectDir(config.ProjectRoot(cwd)), "codemap-"+hex.EncodeToString(h[:6])+".gob")
 }

@@ -19,7 +19,7 @@ const (
 
 var readTool = Tool{
 	Def: providerDef("read",
-		"Read a text file or an image (or list a directory). Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
+		"Read a text file or an image, or show a directory as a tree. Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
 		`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based start line"},"limit":{"type":"integer"},"outline":{"type":"boolean"}},"required":["path"]}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
@@ -46,12 +46,12 @@ var readTool = Tool{
 		}
 		if a.Outline {
 			if st.IsDir() {
-				return outlineDir(ctx, env.Root, p), nil
+				return env.outlineDir(ctx, p), nil
 			}
 			return outlineFile(p)
 		}
 		if st.IsDir() {
-			return listDir(p)
+			return tree(ctx, p)
 		}
 		if st.Size() <= MaxImageBytes*4 {
 			if head := fileHead(p); len(head) > 0 {

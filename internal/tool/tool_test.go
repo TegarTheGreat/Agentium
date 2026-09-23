@@ -540,7 +540,7 @@ func TestOutlineAndSymbol(t *testing.T) {
 		t.Fatal("outline must not count as having read the file")
 	}
 	out, _ = call(t, readTool, e, `{"path":".","outline":true}`)
-	if !strings.Contains(out, "== b.py\n1: class Svc") || !strings.Contains(out, "== pkg/a.go") || strings.Contains(out, "notes.md") || strings.Contains(out, "def start") {
+	if !strings.Contains(out, "== b.py (4 lines)\n1: class Svc") || !strings.Contains(out, "== pkg/a.go") || strings.Contains(out, "notes.md") || strings.Contains(out, "def start") {
 		t.Fatalf("dir outline: %q", out)
 	}
 	out, _ = call(t, searchTool, e, `{"symbol":"Svc.Start"}`)
@@ -579,5 +579,39 @@ func TestReadImage(t *testing.T) {
 	// A .png that is not an image is read as a file.
 	if out, _ := readTool.Run(ctx, e, json.RawMessage(`{"path":"fake.png"}`)); !strings.Contains(out, "not an image") {
 		t.Fatalf("fake png: %q", out)
+	}
+}
+
+func TestRefsTreeAndIndexCache(t *testing.T) {
+	e := env(t)
+	e.CodeCache = filepath.Join(t.TempDir(), "codemap.gob")
+	os.MkdirAll(filepath.Join(e.Root, "svc", "deep", "er"), 0o755)
+	os.WriteFile(filepath.Join(e.Root, "svc", "a.go"), []byte("package svc\n\nfunc Load() int { return 1 }\n\n// Load is documented here\nfunc Use() int {\n\treturn Load() + Loader()\n}\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "main.py"), []byte("from svc import Load\n\nclass App:\n    def run(self):\n        return Load()\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Root, "svc", "deep", "er", "x.txt"), []byte("x"), 0o644)
+
+	out, err := call(t, searchTool, e, `{"refs":"Load"}`)
+	if err != nil || !strings.HasPrefix(out, "3 reference(s) in 2 file(s)") ||
+		!strings.Contains(out, "svc/a.go:7 [in Use]: return Load() + Loader()") ||
+		!strings.Contains(out, "main.py:5 [in App.run]: return Load()") ||
+		strings.Contains(out, "func Load") || strings.Contains(out, "documented") {
+		t.Fatalf("refs: %q %v", out, err)
+	}
+	if _, err := os.Stat(e.CodeCache); err != nil {
+		t.Fatal("index not cached on disk")
+	}
+	// A changed file is re-indexed; a fresh Env reuses the disk cache.
+	os.WriteFile(filepath.Join(e.Root, "svc", "b.go"), []byte("package svc\n\nfunc Extra() { Load() }\n"), 0o644)
+	e2 := &Env{Root: e.Root, CodeCache: e.CodeCache}
+	if out, _ := call(t, searchTool, e2, `{"refs":"Load"}`); !strings.Contains(out, "svc/b.go:3 [in Extra]") {
+		t.Fatalf("refs after change: %q", out)
+	}
+	if out, _ := call(t, searchTool, e2, `{"symbol":"Extra","path":"svc"}`); strings.TrimSpace(out) != "svc/b.go:3: func Extra()" {
+		t.Fatalf("symbol in subdir: %q", out)
+	}
+
+	out, err = call(t, readTool, e, `{"path":"."}`)
+	if err != nil || !strings.Contains(out, "svc/\n  deep/ (1 files)\n  a.go\n  b.go\nmain.py") {
+		t.Fatalf("tree: %q %v", out, err)
 	}
 }

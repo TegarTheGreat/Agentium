@@ -19,8 +19,8 @@ const searchMaxLines = 200
 
 var searchTool = Tool{
 	Def: providerDef("search",
-		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob; symbol = where a function/type/class is defined (Name or Type.Name). Respects .gitignore.",
-		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"},"symbol":{"type":"string"}}}`),
+		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob; symbol = where a function/type/class is defined (Name or Type.Name); refs = where it is used, with the enclosing function. Respects .gitignore.",
+		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"},"symbol":{"type":"string"},"refs":{"type":"string"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
 			Pattern    string `json:"pattern"`
@@ -28,12 +28,13 @@ var searchTool = Tool{
 			Glob       string `json:"glob"`
 			IgnoreCase bool   `json:"ignore_case"`
 			Symbol     string `json:"symbol"`
+			Refs       string `json:"refs"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
 		}
-		if a.Pattern == "" && a.Glob == "" && a.Symbol == "" {
-			return "", errors.New("give pattern, glob or symbol")
+		if a.Pattern == "" && a.Glob == "" && a.Symbol == "" && a.Refs == "" {
+			return "", errors.New("give pattern, glob, symbol or refs")
 		}
 		dir := env.Root
 		if a.Path != "" {
@@ -45,7 +46,10 @@ var searchTool = Tool{
 			}
 		}
 		if a.Symbol != "" {
-			return findSymbol(ctx, env.Root, dir, a.Symbol), nil
+			return env.findSymbol(ctx, dir, a.Symbol), nil
+		}
+		if a.Refs != "" {
+			return env.findRefs(ctx, dir, a.Refs), nil
 		}
 		if rg := ripgrep(); rg != "" {
 			return runRipgrep(ctx, rg, env.Root, dir, a.Pattern, a.Glob, a.IgnoreCase)
