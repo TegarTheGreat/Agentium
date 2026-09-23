@@ -573,3 +573,20 @@ func TestLedgerTodoAndCompactionState(t *testing.T) {
 		t.Fatalf("compacted state: %q", first)
 	}
 }
+
+func TestImagesStrippedForTextOnlyModel(t *testing.T) {
+	s := &script{}
+	a := newAgent(t, s)
+	a.Attach = []provider.Image{{MediaType: "image/png", Data: []byte("x")}}
+	a.Env.Vision = false // e.g. /model switched to a text-only model
+	if _, err := a.Run(context.Background(), "what is this"); err != nil {
+		t.Fatal(err)
+	}
+	sent := s.reqs[0].Messages[0]
+	if len(sent.Images) != 0 || !strings.Contains(sent.Text, "1 image(s) omitted") {
+		t.Fatalf("sent %+v", sent)
+	}
+	if len(a.Messages[0].Images) != 1 {
+		t.Fatal("history must keep the image for a later vision model")
+	}
+}

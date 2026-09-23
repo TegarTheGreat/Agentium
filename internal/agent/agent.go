@@ -249,6 +249,9 @@ func validCalls(calls []provider.ToolCall) []provider.ToolCall {
 // or stalled connections. Text already streamed to the user may repeat
 // after a mid-stream retry; the Retry event lets the UI say so.
 func (a *Agent) call(ctx context.Context, req provider.Request) (provider.Response, error) {
+	if a.Env != nil && !a.Env.Vision {
+		req.Messages = withoutImages(req.Messages)
+	}
 	var resp provider.Response
 	var err error
 	for attempt := 0; ; attempt++ {
@@ -341,4 +344,25 @@ func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessa
 // Reset clears the conversation.
 func (a *Agent) Reset() {
 	a.Messages = nil
+}
+
+// withoutImages replaces images with a note for models that cannot view
+// them (e.g. after /model switched away from a vision model), without
+// touching the stored history.
+func withoutImages(ms []provider.Message) []provider.Message {
+	var out []provider.Message
+	for i, m := range ms {
+		if len(m.Images) == 0 {
+			continue
+		}
+		if out == nil {
+			out = append([]provider.Message(nil), ms...)
+		}
+		out[i].Images = nil
+		out[i].Text += fmt.Sprintf("\n[%d image(s) omitted: this model cannot view images]", len(m.Images))
+	}
+	if out == nil {
+		return ms
+	}
+	return out
 }

@@ -28,6 +28,10 @@ func TestMarkdownStream(t *testing.T) {
 		{[]string{"a * b and snake_case_name"}, "a * b and snake_case_name\n"},
 		{[]string{"-", "-", "flag is fine"}, "--flag is fine\n"},
 		{[]string{"**unclosed bold\nnext"}, "</><b>unclosed bold</>\nnext\n"},
+		{[]string{"a ** b and src/**/*.go stay"}, "a ** b and src/**/*.go stay\n"},
+		{[]string{"see (**this**) now"}, "see (</><b>this</>) now\n"},
+		{[]string{"---\r\nx\r\n"}, "<d>" + strings.Repeat("─", 40) + "</>\nx\n"},
+		{[]string{"````md\n```go\nx := **y**\n```\n````\nafter **b**"}, "<d>````md</>\n```go\nx := **y**\n```\n<d>````</>\nafter </><b>b</>\n"},
 	}
 	for _, c := range cases {
 		if got := render(c.in...); got != c.want {
@@ -45,5 +49,23 @@ func TestMarkdownStreamsPartialLines(t *testing.T) {
 	}
 	if !m.Pending() {
 		t.Fatal("mid-line output must report pending")
+	}
+}
+
+func TestMarkdownEndResetsFence(t *testing.T) {
+	var sb strings.Builder
+	m := newMD(&sb)
+	m.Write("```\ncut off inside code")
+	m.End()
+	sb.Reset()
+	m.Write("**next** reply\n")
+	if got := sb.String(); !strings.Contains(got, sgrBold+"next") {
+		t.Fatalf("fence leaked into the next reply: %q", got)
+	}
+}
+
+func TestRuneWidth(t *testing.T) {
+	if strWidth("日本語") != 6 || strWidth("abc") != 3 || strWidth("👍") != 2 || strWidth("é") != 1 || strWidth("é") != 1 {
+		t.Fatal("runeWidth")
 	}
 }
