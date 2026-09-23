@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tegarthegreat/agentium/internal/lsp"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
 )
@@ -831,5 +832,18 @@ func TestBackgroundJobs(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if out, _ := call(t, bashTool, e, `{"job":2}`); !strings.Contains(out, "exited 3") {
 		t.Fatalf("exit: %q", out)
+	}
+}
+
+func TestEditReportsLSPErrors(t *testing.T) {
+	if _, err := exec.LookPath("pyright-langserver"); err != nil {
+		t.Skip("pyright not installed")
+	}
+	e := env(t)
+	e.LSP = lsp.NewManager(e.Root, os.Environ())
+	defer e.LSP.Close()
+	out, err := call(t, editTool, e, `{"path":"app.py","new":"def f(x: int) -> int:\n    return x\n\nprint(g(1))\n"}`)
+	if err != nil || !strings.Contains(out, "pyright reports 1 error(s) in app.py") || !strings.Contains(out, `"g" is not defined`) {
+		t.Fatalf("edit result: %q %v", out, err)
 	}
 }

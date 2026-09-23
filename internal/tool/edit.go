@@ -22,7 +22,7 @@ var editTool = Tool{
 	Run: runEdit,
 }
 
-func runEdit(_ context.Context, env *Env, raw json.RawMessage) (string, error) {
+func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 	var a struct {
 		Path string `json:"path"`
 		Old  string `json:"old"`
@@ -109,6 +109,13 @@ func runEdit(_ context.Context, env *Env, raw json.RawMessage) (string, error) {
 	}
 	env.markSeen(p)
 	warn += runPostEdit(env, p)
+	if env.LSP != nil {
+		// Type errors, bad imports, missing functions: what a syntax
+		// check cannot see. Hooks may have reformatted, so re-read.
+		if b, err := os.ReadFile(p); err == nil {
+			warn += env.LSP.Check(ctx, p, b)
+		}
+	}
 
 	add, del := diffStat(string(before), after)
 	switch {

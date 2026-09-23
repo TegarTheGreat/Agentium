@@ -22,6 +22,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/lsp"
 	"github.com/tegarthegreat/agentium/internal/memory"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
@@ -445,6 +446,10 @@ func run(args []string) error {
 	}
 	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
 	defer a.Env.KillJobs() // background servers do not outlive the session
+	if cfg.LSP == nil || *cfg.LSP {
+		a.Env.LSP = lsp.NewManager(cwd, policy.ScrubEnv(os.Environ(), nil))
+		defer a.Env.LSP.Close()
+	}
 	if mem != nil {
 		a.Env.Recall = mem.search
 		if stale := mem.store.Stale(); len(stale) > 0 && !*quiet {
