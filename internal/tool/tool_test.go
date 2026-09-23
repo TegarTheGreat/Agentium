@@ -847,3 +847,40 @@ func TestEditReportsLSPErrors(t *testing.T) {
 		t.Fatalf("edit result: %q %v", out, err)
 	}
 }
+
+func TestWebSearch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ddg":
+			r.ParseForm()
+			fmt.Fprintf(w, `<div><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%%3A%%2F%%2Fgo.dev%%2Fdoc%%2F&rut=x">The <b>Go</b> docs</a>
+<a class="result__snippet" href="x">Docs for %s &amp; more</a></div>`, r.Form.Get("q"))
+		case "/brave":
+			if r.Header.Get("X-Subscription-Token") != "bk" {
+				w.WriteHeader(401)
+				return
+			}
+			fmt.Fprint(w, `{"web":{"results":[{"title":"Brave <strong>hit</strong>","url":"https://b.example/","description":"about it"}]}}`)
+		}
+	}))
+	defer srv.Close()
+	oldD, oldB := ddgURL, braveURL
+	ddgURL, braveURL = srv.URL+"/ddg", srv.URL+"/brave"
+	defer func() { ddgURL, braveURL = oldD, oldB }()
+	e := env(t)
+	e.AllowPrivateNet = true // the test server is on localhost
+	t.Setenv("BRAVE_API_KEY", "")
+	t.Setenv("TAVILY_API_KEY", "")
+	out, err := call(t, fetchTool, e, `{"search":"go generics"}`)
+	if err != nil || !strings.Contains(out, "DuckDuckGo results") || !strings.Contains(out, "1. The Go docs\n   https://go.dev/doc/") || !strings.Contains(out, "Docs for go generics & more") {
+		t.Fatalf("ddg: %q %v", out, err)
+	}
+	t.Setenv("BRAVE_API_KEY", "bk")
+	out, _ = call(t, fetchTool, e, `{"search":"x"}`)
+	if !strings.Contains(out, "Brave results") || !strings.Contains(out, "1. Brave hit\n   https://b.example/\n   about it") {
+		t.Fatalf("brave: %q", out)
+	}
+	if _, err := call(t, fetchTool, e, `{"search":"leak sk-ant-abcdefghijklmnopqrstu"}`); err == nil {
+		t.Fatal("a query carrying a secret must be refused")
+	}
+}
