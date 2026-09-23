@@ -17,6 +17,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/bench"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/models"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
@@ -49,25 +50,47 @@ func readSecret(prompt string) (string, error) {
 }
 
 func cmdLogin(args []string) error {
+	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	oauth := fs.Bool("oauth", false, "log in through the browser (openrouter)")
+	noKeychain := fs.Bool("no-keychain", false, "store the key in auth.json even if an OS keychain is available")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	specs := provider.Specs(cfg)
-	if len(args) != 1 {
-		return fmt.Errorf("usage: agentium login <provider>\nproviders: %s", strings.Join(provider.IDs(specs), ", "))
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: agentium login [--oauth] <provider>   (see `agentium providers`)")
 	}
-	id := args[0]
+	id := fs.Arg(0)
 	s, ok := specs[id]
 	if !ok {
 		return fmt.Errorf("unknown provider %q; add it under \"providers\" in %s/config.json", id, config.Home())
 	}
-	if s.NoKey {
+	switch {
+	case id == "bedrock":
+		fmt.Fprintln(os.Stderr, "bedrock uses AWS credentials from the environment: AWS_BEARER_TOKEN_BEDROCK, or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN), and AWS_REGION")
+		return nil
+	case id == "vertex":
+		fmt.Fprintln(os.Stderr, "vertex uses Google Cloud credentials: set GOOGLE_CLOUD_PROJECT (and CLOUD_ML_REGION), then `gcloud auth application-default login`")
+		return nil
+	case s.NoKey:
 		fmt.Fprintf(os.Stderr, "%s needs no key (local server at %s)\n", id, s.BaseURL)
 		return nil
+	case id == "github" && !*oauth:
+		fmt.Fprintln(os.Stderr, "tip: with the GitHub CLI installed and logged in (`gh auth login`), no key is needed")
 	}
-	key, err := readSecret(fmt.Sprintf("API key for %s: ", id))
-	if err != nil {
+	var key string
+	if *oauth {
+		if id != "openrouter" {
+			return fmt.Errorf("browser login is available for openrouter; for %s paste an API key", id)
+		}
+		if key, err = openRouterOAuth(context.Background()); err != nil {
+			return err
+		}
+	} else if key, err = readSecret(fmt.Sprintf("API key for %s: ", id)); err != nil {
 		return err
 	}
 	if key == "" {
@@ -77,11 +100,17 @@ func cmdLogin(args []string) error {
 	if err != nil {
 		return err
 	}
-	auth[id] = config.Credential{APIKey: key}
+	where := config.Home() + "/auth.json"
+	if !*noKeychain && config.KeychainAvailable() && config.KeychainSet(id, key) == nil {
+		auth[id] = config.Credential{Keychain: true}
+		where = "the OS keychain"
+	} else {
+		auth[id] = config.Credential{APIKey: key}
+	}
 	if err := config.SaveAuth(auth); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "saved %s credentials to %s/auth.json\n", id, config.Home())
+	fmt.Fprintf(os.Stderr, "saved %s credentials to %s\n", id, where)
 	return nil
 }
 
@@ -93,8 +122,46 @@ func cmdLogout(args []string) error {
 	if err != nil {
 		return err
 	}
+	if auth[args[0]].Keychain {
+		_ = config.KeychainDelete(args[0])
+	}
 	delete(auth, args[0])
 	return config.SaveAuth(auth)
+}
+
+func cmdModels(args []string) error {
+	fs := flag.NewFlagSet("models", flag.ContinueOnError)
+	refresh := fs.Bool("refresh", false, "download the latest registry from models.dev")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	home := config.Home()
+	if *refresh || len(models.Providers(home)) == 0 {
+		fmt.Fprintln(os.Stderr, "fetching models.dev registry …")
+		if _, err := models.Refresh(context.Background(), home); err != nil {
+			return err
+		}
+	}
+	if fs.NArg() == 0 {
+		ps := models.Providers(home)
+		fmt.Printf("%d providers in the registry; `agentium models <provider>` lists models\n", len(ps))
+		return nil
+	}
+	pid := fs.Arg(0)
+	if a, ok := models.Aliases[pid]; ok {
+		pid = a
+	}
+	list := models.List(home, pid)
+	if len(list) == 0 {
+		return fmt.Errorf("no models for %q (try `agentium models --refresh`)", fs.Arg(0))
+	}
+	for _, m := range list {
+		if !m.Tools {
+			continue
+		}
+		fmt.Printf("%-40s ctx %-6s out %-6s $%g/$%g per Mtok %s\n", m.ID, fmtK(m.Context), fmtK(m.Output), m.Cost.Input, m.Cost.Output, m.Released)
+	}
+	return nil
 }
 
 func cmdProviders() error {
@@ -107,8 +174,13 @@ func cmdProviders() error {
 		return err
 	}
 	specs := provider.Specs(cfg)
+	hidden := 0
 	for _, id := range provider.IDs(specs) {
 		s := specs[id]
+		if s.FromRegistry && provider.Key(s, auth) == "" {
+			hidden++
+			continue
+		}
 		status := "no key"
 		switch {
 		case s.NoKey:
@@ -121,6 +193,9 @@ func cmdProviders() error {
 			def = "-"
 		}
 		fmt.Printf("%-11s %-7s %-9s %-28s %s\n", id, status, s.Protocol, def, s.BaseURL)
+	}
+	if hidden > 0 {
+		fmt.Printf("+ %d more OpenAI/Anthropic-compatible providers from models.dev (set their API key env var to use them)\n", hidden)
 	}
 	return nil
 }

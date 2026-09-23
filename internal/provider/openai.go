@@ -26,6 +26,9 @@ type oaMsg struct {
 	Content    *string      `json:"content"`
 	ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string       `json:"tool_call_id,omitempty"`
+	// Reasoning replay for models that need it (DeepSeek, Kimi, ...).
+	ReasoningContent *string `json:"reasoning_content,omitempty"`
+	Reasoning        *string `json:"reasoning,omitempty"`
 }
 
 type oaToolCall struct {
@@ -36,13 +39,18 @@ type oaToolCall struct {
 		Name      string `json:"name,omitempty"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+	// ExtraContent carries provider data such as Gemini thought
+	// signatures, which must be returned with the call.
+	ExtraContent json.RawMessage `json:"extra_content,omitempty"`
 }
 
 type oaChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string       `json:"content"`
-			ToolCalls []oaToolCall `json:"tool_calls"`
+			Content          string       `json:"content"`
+			ReasoningContent string       `json:"reasoning_content"`
+			Reasoning        string       `json:"reasoning"`
+			ToolCalls        []oaToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -79,7 +87,16 @@ func (c *OpenAI) body(req Request) map[string]any {
 				otc.ID, otc.Type = tc.ID, "function"
 				otc.Function.Name = tc.Name
 				otc.Function.Arguments = string(tc.Args)
+				otc.ExtraContent = tc.Extra
 				om.ToolCalls = append(om.ToolCalls, otc)
+			}
+			if m.Reasoning != "" && m.RawModel == req.Model {
+				switch req.Reasoning.Interleaved {
+				case "reasoning_content":
+					om.ReasoningContent = strp(m.Reasoning)
+				case "reasoning":
+					om.Reasoning = strp(m.Reasoning)
+				}
 			}
 			msgs = append(msgs, om)
 		case RoleTool:
@@ -95,7 +112,14 @@ func (c *OpenAI) body(req Request) map[string]any {
 		b["stream_options"] = map[string]any{"include_usage": true}
 	}
 	if req.MaxTokens > 0 {
-		b["max_tokens"] = req.MaxTokens
+		if c.official() {
+			b["max_completion_tokens"] = req.MaxTokens // OpenAI's reasoning models reject max_tokens
+		} else {
+			b["max_tokens"] = req.MaxTokens
+		}
+	}
+	if r := req.Reasoning; r.Effort != "" && len(r.Efforts) > 0 {
+		b["reasoning_effort"] = ClosestEffort(r.Effort, r.Efforts)
 	}
 	if len(req.Tools) > 0 {
 		tools := make([]map[string]any, len(req.Tools))
@@ -108,6 +132,8 @@ func (c *OpenAI) body(req Request) map[string]any {
 	}
 	return b
 }
+
+func (c *OpenAI) official() bool { return strings.Contains(c.BaseURL, "api.openai.com") }
 
 // Stream implements Client.
 func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (Response, error) {
@@ -136,7 +162,9 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 	type partial struct {
 		id, name string
 		args     strings.Builder
+		extra    json.RawMessage
 	}
+	var reasoning strings.Builder
 	calls := map[int]*partial{}
 	var streamErr error
 	done := false
@@ -161,6 +189,8 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 			}
 		}
 		for _, choice := range ch.Choices {
+			reasoning.WriteString(choice.Delta.ReasoningContent)
+			reasoning.WriteString(choice.Delta.Reasoning)
 			if d := choice.Delta.Content; d != "" {
 				text.WriteString(d)
 				if onText != nil {
@@ -183,6 +213,9 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 				if tc.Function.Name != "" {
 					p.name = tc.Function.Name
 				}
+				if len(tc.ExtraContent) > 0 {
+					p.extra = tc.ExtraContent
+				}
 				p.args.WriteString(tc.Function.Arguments)
 			}
 			if choice.FinishReason != "" {
@@ -201,6 +234,7 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 		err = ctx.Err()
 	}
 	out.Text = text.String()
+	out.Reasoning = reasoning.String()
 	idxs := make([]int, 0, len(calls))
 	for i := range calls {
 		idxs = append(idxs, i)
@@ -216,7 +250,7 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 		if id == "" {
 			id = fmt.Sprintf("call_%d", n)
 		}
-		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: id, Name: p.name, Args: json.RawMessage(args)})
+		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: id, Name: p.name, Args: json.RawMessage(args), Extra: p.extra})
 	}
 	return out, err
 }

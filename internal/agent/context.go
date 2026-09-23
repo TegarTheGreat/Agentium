@@ -67,7 +67,7 @@ func (a *Agent) manageContext(ctx context.Context) {
 // elide shortens tool outputs and large edit arguments older than the
 // most recent keep tool results.
 func (a *Agent) elide(keep int) {
-	seen := 0
+	seen, first := 0, -1
 	for i := len(a.Messages) - 1; i >= 0; i-- {
 		m := &a.Messages[i]
 		switch m.Role {
@@ -78,14 +78,31 @@ func (a *Agent) elide(keep int) {
 			}
 			cut := len(m.Text) - elidedKeep
 			m.Text = strings.ToValidUTF8(m.Text[:elidedKeep], "") + fmt.Sprintf("\n[elided %d chars of old output; rerun the tool if needed]", cut)
+			first = i
 		case provider.RoleAssistant:
 			if seen <= keep {
 				continue
 			}
 			for j := range m.ToolCalls {
-				m.ToolCalls[j].Args = elideArgs(m.ToolCalls[j].Args)
+				if e := elideArgs(m.ToolCalls[j].Args); len(e) != len(m.ToolCalls[j].Args) {
+					m.ToolCalls[j].Args = e
+					first = i
+				}
 			}
 		}
+	}
+	if first >= 0 {
+		a.invalidateFrom(first)
+	}
+}
+
+// invalidateFrom drops provider-native content (signed thinking blocks)
+// from message i onward: those blocks are bound to the exact history
+// before them, which was just edited. The messages keep their text and
+// tool calls, so nothing the model needs is lost.
+func (a *Agent) invalidateFrom(i int) {
+	for j := i; j < len(a.Messages); j++ {
+		a.Messages[j].Raw = nil
 	}
 }
 
@@ -192,6 +209,7 @@ func (a *Agent) compact(ctx context.Context) error {
 	tail := append([]provider.Message(nil), a.Messages[split:]...)
 	a.Messages = append([]provider.Message{{Role: provider.RoleUser,
 		Text: "[Summary of the earlier conversation]\n" + summary}}, tail...)
+	a.invalidateFrom(0)
 	return nil
 }
 

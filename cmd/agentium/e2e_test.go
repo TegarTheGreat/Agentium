@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,7 +111,7 @@ func runBin(t *testing.T, home, dir, stdin string, args ...string) (string, stri
 	t.Helper()
 	cmd := exec.Command(buildBinary(t), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "FAKE_KEY=k", "NO_COLOR=1")
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "FAKE_KEY=k", "NO_COLOR=1", "AGENTIUM_OFFLINE=1")
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -305,5 +307,83 @@ func TestTidy(t *testing.T) {
 	_, stderr, _ = runBin(t, home, dir, "", "tidy", "--yes", "-m", "fakeoai/m")
 	if !strings.Contains(stderr, "already tidy") {
 		t.Fatalf("second tidy: %s", stderr)
+	}
+}
+
+func TestModelsRegistryAndCost(t *testing.T) {
+	fixture, err := os.ReadFile("../../internal/models/testdata/api.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(fixture) }))
+	defer reg.Close()
+	home := t.TempDir()
+	cmd := exec.Command(buildBinary(t), "models", "--refresh", "anthropic")
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "AGENTIUM_MODELS_URL="+reg.URL)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "claude-opus-5-5") || !strings.Contains(string(out), "$4/$20") {
+		t.Fatalf("models: %v\n%s", err, out)
+	}
+	// Registry providers (tokengo) become usable by setting their key env.
+	cmd = exec.Command(buildBinary(t), "providers")
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "AGENTIUM_OFFLINE=1", "TOKENGO_API_KEY=x")
+	out, _ = cmd.CombinedOutput()
+	if !strings.Contains(string(out), "tokengo     ready") {
+		t.Fatalf("providers:\n%s", out)
+	}
+	// A known model gets its price in the stats line.
+	var gotEffort string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		json.Unmarshal(b, &body)
+		if oc, ok := body["output_config"].(map[string]any); ok {
+			gotEffort, _ = oc["effort"].(string)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1000000}}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"ok\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(fmt.Sprintf(`{"effort":"xhigh","providers":{"anthropic":{"base_url":%q}}}`, srv.URL)), 0o600)
+	cmd = exec.Command(buildBinary(t), "-m", "anthropic/claude-opus-5-5", "hi")
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "AGENTIUM_OFFLINE=1", "ANTHROPIC_API_KEY=k", "NO_COLOR=1")
+	out, err = cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "$4.0000") || gotEffort != "xhigh" {
+		t.Fatalf("cost/effort: %v effort=%q\n%s", err, gotEffort, out)
+	}
+}
+
+func TestOpenRouterOAuth(t *testing.T) {
+	var gotVerifier string
+	keySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["code"] != "the-code" || body["code_challenge_method"] != "S256" {
+			http.Error(w, "bad", 400)
+			return
+		}
+		gotVerifier = body["code_verifier"]
+		fmt.Fprint(w, `{"key":"sk-or-test"}`)
+	}))
+	defer keySrv.Close()
+	oldAuth, oldKey, oldOpen := openRouterAuthURL, openRouterKeyURL, openBrowser
+	defer func() { openRouterAuthURL, openRouterKeyURL, openBrowser = oldAuth, oldKey, oldOpen }()
+	openRouterKeyURL = keySrv.URL
+	openRouterAuthURL = "https://openrouter.example/auth"
+	// The "browser" follows the auth URL straight to the callback.
+	openBrowser = func(u string) {
+		pu, _ := url.Parse(u)
+		cb := pu.Query().Get("callback_url")
+		if pu.Query().Get("code_challenge") == "" {
+			return
+		}
+		go http.Get(cb + "?code=the-code")
+	}
+	key, err := openRouterOAuth(context.Background())
+	if err != nil || key != "sk-or-test" || len(gotVerifier) < 43 {
+		t.Fatalf("key=%q err=%v verifier=%q", key, err, gotVerifier)
 	}
 }

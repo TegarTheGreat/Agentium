@@ -36,6 +36,13 @@ type Config struct {
 	Verify *bool `json:"verify,omitempty"`
 	// Memory enables cross-session memory and recall (default on).
 	Memory *bool `json:"memory,omitempty"`
+	// Effort sets reasoning effort: minimal|low|medium|high|xhigh|max.
+	Effort string `json:"effort,omitempty"`
+	// Fast requests the provider's fast output mode where available.
+	Fast bool `json:"fast,omitempty"`
+	// Fallback lists models to switch to when the main one is rate
+	// limited or down, e.g. ["openrouter/anthropic/claude-sonnet-5"].
+	Fallback []string `json:"fallback,omitempty"`
 	// ContextTokens overrides the model's context window.
 	ContextTokens int                     `json:"context_tokens,omitempty"`
 	Providers     map[string]ProviderConf `json:"providers,omitempty"`
@@ -93,9 +100,23 @@ func Load() (Config, error) {
 	return c, err
 }
 
-// Credential is a stored secret for one provider.
+// Credential is a stored secret for one provider. With Keychain set the
+// secret lives in the OS keychain and APIKey is empty.
 type Credential struct {
-	APIKey string `json:"api_key,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+	Keychain bool   `json:"keychain,omitempty"`
+}
+
+// Secret returns the credential's key, reading the keychain if needed.
+func (c Credential) Secret(provider string) string {
+	if c.APIKey != "" {
+		return c.APIKey
+	}
+	if c.Keychain {
+		k, _ := KeychainGet(provider)
+		return k
+	}
+	return ""
 }
 
 // Auth maps provider id to credential.

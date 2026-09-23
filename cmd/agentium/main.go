@@ -4,6 +4,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,9 +36,11 @@ const usage = `agentium — fast, minimal coding agent
 Usage:
   agentium                      interactive session
   agentium "fix the tests"      one-shot task (also: -p "...", or pipe stdin)
-  agentium login <provider>     store an API key (~/.agentium/auth.json, 0600)
+  agentium login <provider>     store an API key (OS keychain, else ~/.agentium/auth.json 0600)
+  agentium login --oauth openrouter   log in through the browser
   agentium logout <provider>
   agentium providers            list providers and credential status
+  agentium models [provider]    list models with context size and price (models.dev)
   agentium undo                 revert the file changes of the last turn here
   agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
@@ -49,6 +53,8 @@ Flags:
   --mode ask|auto|yolo  approvals: every action | risky only (default) | never
   --yolo              same as --mode yolo
   --no-sandbox        run shell commands unconfined
+  --effort LEVEL      reasoning effort: low|medium|high|xhigh|max (model default if unset)
+  --fast              provider fast mode where available (Claude Opus: up to 2.5x output speed)
   -q                  quiet: no tool lines or stats
   --max-turns N       stop after N model turns (default 100)
 
@@ -79,6 +85,9 @@ func main() {
 			return
 		case "tidy":
 			exit(cmdTidy(os.Args[2:]))
+			return
+		case "models":
+			exit(cmdModels(os.Args[2:]))
 			return
 		case "bench":
 			exit(cmdBench(os.Args[2:]))
@@ -168,6 +177,9 @@ func summarizeCall(c provider.ToolCall) string {
 }
 
 func fmtK(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	}
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
@@ -234,6 +246,8 @@ func run(args []string) error {
 	quiet := fs.Bool("q", false, "")
 	maxTurns := fs.Int("max-turns", 0, "")
 	noSandbox := fs.Bool("no-sandbox", false, "")
+	effort := fs.String("effort", "", "")
+	fast := fs.Bool("fast", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -292,11 +306,31 @@ func run(args []string) error {
 	if mem != nil {
 		snapshot = mem.store.Snapshot()
 	}
+	var client provider.Client = res.Client
+	var fb *provider.Fallback
+	if len(cfg.Fallback) > 0 {
+		chain := []provider.Resolved{res}
+		for _, ref := range cfg.Fallback {
+			if r, err := provider.Resolve(ref, cfg, auth); err == nil {
+				chain = append(chain, r)
+			} else if !*quiet {
+				fmt.Fprintln(os.Stderr, u.dim("· fallback "+ref+" ignored: "+firstLine(err.Error())))
+			}
+		}
+		if len(chain) > 1 {
+			fb = &provider.Fallback{Chain: chain, OnSwap: func(from, to provider.Resolved, err error) {
+				u.line(fmt.Sprintf("· %s/%s unavailable (%s); switching to %s/%s", from.Provider, from.Model, firstLine(err.Error()), to.Provider, to.Model))
+			}}
+			client = fb
+		}
+	}
+	system := agent.SystemPrompt(cwd, mem != nil, snapshot)
 	a := &agent.Agent{
-		Client: res.Client, Model: res.Model, System: agent.SystemPrompt(cwd, mem != nil, snapshot),
+		Client: client, Model: res.Model, System: system,
+		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
 		Tools: tool.All(), Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
-		ContextTokens: firstPositive(cfg.ContextTokens, provider.ContextWindow(res.Model)),
+		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
 	if cfg.FastModel != "" {
@@ -306,11 +340,20 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, u.dim("· fast_model ignored: "+firstLine(err.Error())))
 		}
 	}
+	sess.SystemHash = hashString(system)
 	if *cont {
 		if prev, err := session.Latest(cwd); err == nil && prev != nil {
 			sess = prev
 			a.Messages = prev.Messages
 			a.Note, sess.Note = prev.Note, ""
+			if prev.SystemHash != hashString(system) {
+				// Memory or instructions changed since: signed thinking
+				// blocks from the old prompt would no longer verify.
+				for i := range a.Messages {
+					a.Messages[i].Raw = nil
+				}
+			}
+			sess.SystemHash = hashString(system)
 		}
 	}
 	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
@@ -408,7 +451,18 @@ func run(args []string) error {
 		u.endLine()
 		u.mu.Unlock()
 		if !*quiet {
-			fmt.Fprintln(os.Stderr, u.dim(statsLine(st)))
+			line := statsLine(st)
+			info, known := res.Info, res.Known
+			if fb != nil {
+				act := fb.Active()
+				info, known = act.Info, act.Known
+			}
+			if known {
+				if c := info.Price(st.Usage.Input, st.Usage.Output, st.Usage.CacheRead, st.Usage.CacheWrite); c > 0 {
+					line += fmt.Sprintf(" · $%.4f", c)
+				}
+			}
+			fmt.Fprintln(os.Stderr, u.dim(line))
 		}
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
@@ -494,6 +548,11 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		fmt.Fprintln(os.Stderr, "· commands: /undo /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
 	}
 	return false
+}
+
+func hashString(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
 }
 
 func appendUnique(xs []string, x string) []string {

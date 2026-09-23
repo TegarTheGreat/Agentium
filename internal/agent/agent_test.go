@@ -398,3 +398,35 @@ func TestElideArgs(t *testing.T) {
 		t.Fatal("short args untouched")
 	}
 }
+
+func TestRawInvalidatedAfterEdits(t *testing.T) {
+	a := &Agent{ContextChars: 3000}
+	big := strings.Repeat("q", 2000)
+	for i := 0; i < 9; i++ {
+		a.Messages = append(a.Messages,
+			provider.Message{Role: provider.RoleAssistant, Raw: json.RawMessage(`[{"type":"thinking","signature":"S"}]`), RawModel: "m",
+				ToolCalls: []provider.ToolCall{tc(fmt.Sprint(i), "read", `{}`)}},
+			provider.Message{Role: provider.RoleTool, ToolCallID: fmt.Sprint(i), Text: big})
+	}
+	a.elide(keepRecentTools)
+	// Messages before the first edit keep their signed blocks; everything
+	// from the first edited message onward loses them.
+	firstEdited := -1
+	for i, m := range a.Messages {
+		if strings.Contains(m.Text, "[elided") {
+			firstEdited = i
+			break
+		}
+	}
+	for i, m := range a.Messages {
+		if m.Role != provider.RoleAssistant {
+			continue
+		}
+		if i < firstEdited && m.Raw == nil {
+			t.Fatalf("message %d before the edit lost its raw blocks", i)
+		}
+		if i > firstEdited && m.Raw != nil {
+			t.Fatalf("message %d after the edit kept stale raw blocks", i)
+		}
+	}
+}
