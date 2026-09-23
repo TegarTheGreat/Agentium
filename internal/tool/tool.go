@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/tegarthegreat/agentium/internal/codemap"
+	"github.com/tegarthegreat/agentium/internal/lsp"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
@@ -42,6 +43,8 @@ type Env struct {
 	CodeCache string
 	// Recall searches long-term memory (search {memory}); nil when off.
 	Recall func(query string) string
+	// LSP reports language-server diagnostics after edits; nil when off.
+	LSP *lsp.Manager
 
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
@@ -109,7 +112,7 @@ func (e *Env) markSeen(p string) {
 // goes through the parent so a turn stays one undo step.
 func (e *Env) Child(gate *policy.Gate) *Env {
 	return &Env{Root: e.Root, Gate: gate, Vision: e.Vision, AllowPrivateNet: e.AllowPrivateNet, Sandbox: e.Sandbox,
-		Net: e.Net, PassEnv: e.PassEnv, PostEdit: e.PostEdit, CodeCache: e.CodeCache, Recall: e.Recall,
+		Net: e.Net, PassEnv: e.PassEnv, PostEdit: e.PostEdit, CodeCache: e.CodeCache, Recall: e.Recall, LSP: e.LSP,
 		BeforeMutate: e.mutate}
 }
 

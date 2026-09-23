@@ -38,6 +38,9 @@ type Config struct {
 	Verify *bool `json:"verify,omitempty"`
 	// Memory enables cross-session memory and recall (default on).
 	Memory *bool `json:"memory,omitempty"`
+	// LSP enables language-server diagnostics after edits (default true
+	// when a server for the language is installed).
+	LSP *bool `json:"lsp,omitempty"`
 	// Effort sets reasoning effort: minimal|low|medium|high|xhigh|max.
 	Effort string `json:"effort,omitempty"`
 	// Fast requests the provider's fast output mode where available.
