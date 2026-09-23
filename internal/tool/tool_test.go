@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tegarthegreat/agentium/internal/lsp"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
 )
@@ -831,5 +832,102 @@ func TestBackgroundJobs(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if out, _ := call(t, bashTool, e, `{"job":2}`); !strings.Contains(out, "exited 3") {
 		t.Fatalf("exit: %q", out)
+	}
+}
+
+func TestEditReportsLSPErrors(t *testing.T) {
+	if _, err := exec.LookPath("pyright-langserver"); err != nil {
+		t.Skip("pyright not installed")
+	}
+	e := env(t)
+	e.LSP = lsp.NewManager(e.Root, os.Environ())
+	defer e.LSP.Close()
+	out, err := call(t, editTool, e, `{"path":"app.py","new":"def f(x: int) -> int:\n    return x\n\nprint(g(1))\n"}`)
+	if err != nil || !strings.Contains(out, "pyright reports 1 error(s) in app.py") || !strings.Contains(out, `"g" is not defined`) {
+		t.Fatalf("edit result: %q %v", out, err)
+	}
+}
+
+func TestWebSearch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ddg":
+			r.ParseForm()
+			fmt.Fprintf(w, `<div><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%%3A%%2F%%2Fgo.dev%%2Fdoc%%2F&rut=x">The <b>Go</b> docs</a>
+<a class="result__snippet" href="x">Docs for %s &amp; more</a></div>`, r.Form.Get("q"))
+		case "/brave":
+			if r.Header.Get("X-Subscription-Token") != "bk" {
+				w.WriteHeader(401)
+				return
+			}
+			fmt.Fprint(w, `{"web":{"results":[{"title":"Brave <strong>hit</strong>","url":"https://b.example/","description":"about it"}]}}`)
+		}
+	}))
+	defer srv.Close()
+	oldD, oldB := ddgURL, braveURL
+	ddgURL, braveURL = srv.URL+"/ddg", srv.URL+"/brave"
+	defer func() { ddgURL, braveURL = oldD, oldB }()
+	e := env(t)
+	e.AllowPrivateNet = true // the test server is on localhost
+	t.Setenv("BRAVE_API_KEY", "")
+	t.Setenv("TAVILY_API_KEY", "")
+	out, err := call(t, fetchTool, e, `{"search":"go generics"}`)
+	if err != nil || !strings.Contains(out, "DuckDuckGo results") || !strings.Contains(out, "1. The Go docs\n   https://go.dev/doc/") || !strings.Contains(out, "Docs for go generics & more") {
+		t.Fatalf("ddg: %q %v", out, err)
+	}
+	t.Setenv("BRAVE_API_KEY", "bk")
+	out, _ = call(t, fetchTool, e, `{"search":"x"}`)
+	if !strings.Contains(out, "Brave results") || !strings.Contains(out, "1. Brave hit\n   https://b.example/\n   about it") {
+		t.Fatalf("brave: %q", out)
+	}
+	if _, err := call(t, fetchTool, e, `{"search":"leak sk-ant-abcdefghijklmnopqrstu"}`); err == nil {
+		t.Fatal("a query carrying a secret must be refused")
+	}
+}
+
+func TestTTYJobs(t *testing.T) {
+	if _, _, err := openPTY(); err != nil {
+		t.Skip(err)
+	}
+	e := env(t)
+	defer e.KillJobs()
+	out, _ := call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY || echo NO_TTY","background":true,"tty":true}`)
+	if !strings.Contains(out, "IS_TTY") {
+		t.Fatalf("tty: %q", out)
+	}
+	out, _ = call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY || echo NO_TTY","background":true}`)
+	if !strings.Contains(out, "NO_TTY") {
+		t.Fatalf("pipe job should not have a tty: %q", out)
+	}
+	if _, err := exec.LookPath("python3"); err == nil {
+		// Python shows its interactive prompt only on a terminal.
+		out, _ = call(t, bashTool, e, `{"cmd":"python3 -q","background":true,"tty":true}`)
+		if !strings.Contains(out, ">>>") {
+			t.Fatalf("python prompt: %q", out)
+		}
+		id := strings.Fields(out)[1]
+		out, _ = call(t, bashTool, e, fmt.Sprintf(`{"job":%s,"stdin":"print(6*7)\n"}`, id))
+		if !strings.Contains(out, "42") || strings.Contains(out, "\x1b") {
+			t.Fatalf("repl: %q", out)
+		}
+	}
+	// Ctrl-C through the terminal stops a foreground program.
+	out, _ = call(t, bashTool, e, `{"cmd":"sleep 30","background":true,"tty":true}`)
+	id := strings.Fields(out)[1]
+	call(t, bashTool, e, fmt.Sprintf(`{"job":%s,"stdin":"\u0003"}`, id))
+	time.Sleep(500 * time.Millisecond)
+	if out, _ := call(t, bashTool, e, fmt.Sprintf(`{"job":%s}`, id)); !strings.Contains(out, "exited") {
+		t.Fatalf("ctrl-c: %q", out)
+	}
+	if sandbox.Probe().Available {
+		e.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(e.Root)}
+		out, _ := call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY; touch /etc/agentium-x 2>&1 | head -1","background":true,"tty":true}`)
+		if !strings.Contains(out, "IS_TTY") || !strings.Contains(strings.ToLower(out), "denied") && !strings.Contains(strings.ToLower(out), "read-only") {
+			t.Fatalf("sandboxed tty job: %q", out)
+		}
+		e.Sandbox = nil
+	}
+	if cleanTTY("\x1b[31mred\x1b[0m\r\nline\rprogress 50%\rprogress 100%") != "red\nprogress 100%" {
+		t.Fatalf("cleanTTY: %q", cleanTTY("\x1b[31mred\x1b[0m\r\nline\rprogress 50%\rprogress 100%"))
 	}
 }

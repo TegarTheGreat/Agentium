@@ -38,6 +38,9 @@ type Config struct {
 	Verify *bool `json:"verify,omitempty"`
 	// Memory enables cross-session memory and recall (default on).
 	Memory *bool `json:"memory,omitempty"`
+	// LSP enables language-server diagnostics after edits (default true
+	// when a server for the language is installed).
+	LSP *bool `json:"lsp,omitempty"`
 	// Effort sets reasoning effort: minimal|low|medium|high|xhigh|max.
 	Effort string `json:"effort,omitempty"`
 	// Fast requests the provider's fast output mode where available.
@@ -61,11 +64,16 @@ type Hooks struct {
 	Stop []string `json:"stop,omitempty"`
 }
 
-// MCPServer is a stdio MCP server to start.
+// MCPServer is an MCP server: a local command (stdio) or a remote URL
+// (Streamable HTTP; "type": "sse" for the legacy transport). Values of
+// env and headers may use $VARS.
 type MCPServer struct {
-	Command string            `json:"command"`
+	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Type    string            `json:"type,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // SandboxConf configures confinement of shell commands.

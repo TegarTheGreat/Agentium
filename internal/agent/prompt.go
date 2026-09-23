@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/tool"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,6 +40,9 @@ func SystemPrompt(root string, memoryOn bool, snapshot string) string {
 		sb.WriteString(memoryRules)
 	}
 	fmt.Fprintf(&sb, "\n\nEnv: cwd=%s os=%s/%s date=%s", root, runtime.GOOS, runtime.GOARCH, time.Now().Format("2006-01-02"))
+	if sh := tool.ShellName(); sh != "bash" {
+		fmt.Fprintf(&sb, " shell=%s", sh) // bash commands must be written for this shell
+	}
 	if isGitRepo(root) {
 		sb.WriteString(" git=yes")
 	}

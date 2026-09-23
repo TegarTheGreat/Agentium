@@ -280,3 +280,21 @@ Riset ketiga (Sep 2026) menghasilkan tiga temuan pokok:
 | Masking output lama | Elision di 55% jendela | Sama (JetBrains 2025: masking ≈ ringkasan LLM dengan biaya ~½) |
 
 **Catatan jujur:** semua perbaikan ini didasarkan pada bukti eksternal dan tes unit/e2e. Belum ada pengukuran end-to-end dengan model asli (butuh API key). Celah keamanan E3 #1–#5 dan #7–#11 belum ditutup; #6 (skill + recall) sudah diperbaiki.
+
+
+---
+
+## G. Status v0.10.0 — yang sebelumnya kurang, sekarang ada
+
+| Kekurangan (bagian E4) | Status |
+|---|---|
+| Subagent / delegasi paralel | ✅ Tool `task`: konteks bersih, paralel, mode `explore` read-only. Memakai prompt dan daftar tool yang sama dengan induk, jadi prompt cache tetap kena |
+| Proses latar + input interaktif | ✅ `bash {background}` + `{job, stdin, kill}`. Belum ada PTY penuh (program yang mewajibkan TTY) |
+| Diagnostik LSP | ✅ gopls, pyright, typescript-language-server, rust-analyzer, clangd. Diuji dengan pyright dan gopls asli |
+| Tool todo/plan | ✅ `todo` (v0.8) |
+| Web search | ✅ Brave / Tavily / DuckDuckGo |
+| MCP HTTP/SSE | ✅ Streamable HTTP (session, versi protokol, header auth) + SSE lama. ❌ OAuth MCP (pakai header `Authorization`) |
+| ACP (integrasi IDE) | ✅ `agentium acp`: streaming, tool call, plan, izin, mode, MCP dari editor. Diuji e2e dengan client tiruan, belum dengan Zed/JetBrains asli |
+| Windows | ✅ Git Bash / PowerShell, kill sampai proses anak, warna ANSI, CI windows-latest. ❌ Tanpa sandbox OS, tanpa line editor |
+| Bukti benchmark nyata | ❌ Masih butuh API key |
+| LICENSE | ❌ Keputusan pemilik repo |

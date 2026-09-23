@@ -174,7 +174,7 @@ func (s Skill) Body() (string, error) {
 	}
 	t = strings.TrimSpace(t)
 	if len(t) > maxBody {
-		t = t[:maxBody] + "\n[truncated]"
+		t = strings.ToValidUTF8(t[:maxBody], "") + "\n[truncated]"
 	}
 	return t, nil
 }
@@ -261,7 +261,33 @@ var ErrExists = errors.New("skill already installed (remove it first)")
 func oneLine(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > n {
-		s = s[:n] + "…"
+		s = strings.ToValidUTF8(s[:n], "") + "…"
 	}
 	return s
+}
+
+// Shadowed describes project skills that replace one of the user's own
+// skills with the same name: a cloned repository should not silently
+// change what /name does.
+func Shadowed(home, cwd string) []string {
+	user := map[string]string{}
+	var out []string
+	for _, loc := range Dirs(home, cwd) {
+		entries, err := os.ReadDir(loc.Dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			sk, err := Parse(filepath.Join(loc.Dir, e.Name(), "SKILL.md"))
+			if err != nil {
+				continue
+			}
+			if loc.Source == "user" {
+				user[sk.Name] = sk.Path
+			} else if p, ok := user[sk.Name]; ok {
+				out = append(out, fmt.Sprintf("project skill /%s (%s) overrides your skill at %s", sk.Name, sk.Path, p))
+			}
+		}
+	}
+	return out
 }

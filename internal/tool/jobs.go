@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ type job struct {
 	stdin io.WriteCloser
 	done  chan struct{}
 	err   error
+	tty   bool // runs in a pseudo-terminal; output is cleaned of escapes
 
 	mu      sync.Mutex
 	buf     []byte // the latest output, at most jobKeepBytes
@@ -61,7 +63,28 @@ func (j *job) unread() string {
 	}
 	s := string(j.buf[j.readPos-start:])
 	j.readPos = j.total
+	if j.tty {
+		s = cleanTTY(s)
+	}
 	return note + s
+}
+
+var ansi = regexp.MustCompile(`\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>78NOM]`)
+
+// cleanTTY turns terminal output into plain text: escape sequences
+// (colors, cursor moves, titles) removed, CRLF and bare CR resolved.
+func cleanTTY(s string) string {
+	s = ansi.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if k := strings.LastIndexByte(l, '\r'); k >= 0 {
+			// A carriage return redraws the line (progress bars): keep
+			// what was drawn last.
+			lines[i] = l[k+1:]
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (j *job) running() bool {
@@ -101,8 +124,9 @@ func (e *Env) jobTable() *jobTable {
 	return e.jobs
 }
 
-// startJob runs cmdline in the background.
-func (e *Env) startJob(cmdline string, box *sandbox.Config) (string, error) {
+// startJob runs cmdline in the background, in a pseudo-terminal when tty
+// is set (for programs that insist on one: REPLs, prompts, ssh).
+func (e *Env) startJob(cmdline string, box *sandbox.Config, tty bool) (string, error) {
 	t := e.jobTable()
 	t.mu.Lock()
 	live := 0
@@ -119,7 +143,7 @@ func (e *Env) startJob(cmdline string, box *sandbox.Config) (string, error) {
 	id := t.next
 	t.mu.Unlock()
 
-	cmd := exec.Command(shellPath(), "-c", cmdline)
+	cmd := exec.Command(shellPath(), shellArgs(shellPath(), cmdline)...)
 	if box != nil {
 		c, _, err := sandbox.Command(shellPath(), cmdline, *box)
 		if err != nil {
@@ -132,21 +156,49 @@ func (e *Env) startJob(cmdline string, box *sandbox.Config) (string, error) {
 	}
 	cmd.Env = policy.ScrubEnv(cmd.Env, e.PassEnv)
 	cmd.Dir = e.Root
-	setProcessGroup(cmd)
-	j := &job{id: id, cmd: cmdline, c: cmd, done: make(chan struct{})}
-	cmd.Stdout, cmd.Stderr = j, j
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		return "", err
+	j := &job{id: id, cmd: cmdline, c: cmd, done: make(chan struct{}), tty: tty}
+	if tty {
+		master, slave, err := openPTY()
+		if err != nil {
+			return "", err
+		}
+		cmd.Env = append(cmd.Env, "TERM=xterm-256color", "COLUMNS=120", "LINES=40")
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
+		ttyAttr(cmd)
+		if err := cmd.Start(); err != nil {
+			master.Close()
+			slave.Close()
+			return "", err
+		}
+		slave.Close() // the child holds its own copy
+		j.stdin = master
+		copied := make(chan struct{})
+		go func() { io.Copy(j, master); close(copied) }() // ends with EIO when the child exits
+		go func() {
+			j.err = cmd.Wait()
+			select {
+			case <-copied:
+			case <-time.After(time.Second):
+			}
+			master.Close()
+			close(j.done)
+		}()
+	} else {
+		setProcessGroup(cmd)
+		cmd.Stdout, cmd.Stderr = j, j
+		in, err := cmd.StdinPipe()
+		if err != nil {
+			return "", err
+		}
+		j.stdin = in
+		if err := cmd.Start(); err != nil {
+			return "", err
+		}
+		go func() {
+			j.err = cmd.Wait()
+			close(j.done)
+		}()
 	}
-	j.stdin = in
-	if err := cmd.Start(); err != nil {
-		return "", err
-	}
-	go func() {
-		j.err = cmd.Wait()
-		close(j.done)
-	}()
 	t.mu.Lock()
 	t.jobs[id] = j
 	t.mu.Unlock()

@@ -22,6 +22,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/lsp"
 	"github.com/tegarthegreat/agentium/internal/memory"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
@@ -31,7 +32,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.9.0"
+var version = "0.10.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -46,6 +47,7 @@ Usage:
   agentium undo                 revert the file changes of the last turn here
   agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
   agentium skills [list|show|add|remove]   manage SKILL.md skills (add: dir, git URL or owner/repo, pinned + reviewed)
+  agentium acp [-m model]       serve the Agent Client Protocol on stdio (Zed, JetBrains)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
 
@@ -102,6 +104,9 @@ func main() {
 			return
 		case "skills":
 			exit(cmdSkills(os.Args[2:]))
+			return
+		case "acp":
+			exit(cmdACP(os.Args[2:]))
 			return
 		}
 	}
@@ -230,7 +235,18 @@ func summarizeCall(c provider.ToolCall) string {
 		}
 		return ""
 	}
-	s := pick("cmd", "path", "pattern", "url", "glob")
+	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "prompt")
+	if j, ok := m["job"].(float64); ok {
+		s = fmt.Sprintf("job %d", int(j))
+		if pick("stdin") != "" {
+			s += " ← " + pick("stdin")
+		} else if m["kill"] == true {
+			s += " (stop)"
+		}
+	}
+	if m["background"] == true {
+		s += " &"
+	}
 	if c.Name == "search" && m["glob"] != nil && m["pattern"] != nil {
 		s = fmt.Sprintf("%v in %v", m["pattern"], m["glob"])
 	}
@@ -422,6 +438,11 @@ func run(args []string) error {
 		tools = append(tools, tool.MCPTools(clients)...)
 	}
 	skills := skill.Discover(config.Home(), cwd)
+	if !*quiet {
+		for _, sh := range skill.Shadowed(config.Home(), cwd) {
+			fmt.Fprintln(os.Stderr, u.dim("· "+sh))
+		}
+	}
 	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + skill.Prompt(skills)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
@@ -432,8 +453,12 @@ func run(args []string) error {
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
-	a.Tools = append(a.Tools, a.TodoTool())
+	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
 	defer a.Env.KillJobs() // background servers do not outlive the session
+	if cfg.LSP == nil || *cfg.LSP {
+		a.Env.LSP = lsp.NewManager(cwd, policy.ScrubEnv(os.Environ(), nil))
+		defer a.Env.LSP.Close()
+	}
 	if mem != nil {
 		a.Env.Recall = mem.search
 		if stale := mem.store.Stale(); len(stale) > 0 && !*quiet {
@@ -510,8 +535,9 @@ func run(args []string) error {
 		fmt.Fprintln(os.Stderr, u.dim("· --max-cost: no price known for this model; the limit cannot be enforced"))
 	}
 	a.Events = agent.Events{
-		Text:      u.text,
-		ToolStart: func(c provider.ToolCall) { u.line("› " + summarizeCall(c)) },
+		Text:         u.text,
+		ToolStart:    func(c provider.ToolCall) { u.line("› " + summarizeCall(c)) },
+		SubToolStart: func(c provider.ToolCall) { u.line("  ↳ " + summarizeCall(c)) },
 		ToolDone: func(c provider.ToolCall, out string, err error, d time.Duration) {
 			if err != nil {
 				u.line(fmt.Sprintf("  ✗ %s: %s", c.Name, firstLine(err.Error())))
@@ -572,6 +598,7 @@ func run(args []string) error {
 		}
 		if msg, ok, err := skill.Invoke(skills, input); ok {
 			if err != nil {
+				a.Attach = nil // don't carry this turn's images into the next
 				return err
 			}
 			send = msg
@@ -637,6 +664,9 @@ func run(args []string) error {
 		a.Events.Text = func(d string) { jw.emit(map[string]any{"type": "text", "text": d}) }
 		a.Events.ToolStart = func(c provider.ToolCall) {
 			jw.emit(map[string]any{"type": "tool_call", "id": c.ID, "name": c.Name, "args": c.Args})
+		}
+		a.Events.SubToolStart = func(c provider.ToolCall) {
+			jw.emit(map[string]any{"type": "tool_call", "id": c.ID, "name": c.Name, "args": c.Args, "subagent": true})
 		}
 		a.Events.ToolDone = func(c provider.ToolCall, out string, err error, d time.Duration) {
 			ev := map[string]any{"type": "tool_result", "id": c.ID, "name": c.Name, "ok": err == nil, "ms": d.Milliseconds(), "output": clipText(out, 2000)}

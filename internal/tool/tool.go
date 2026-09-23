@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/tegarthegreat/agentium/internal/codemap"
+	"github.com/tegarthegreat/agentium/internal/lsp"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
@@ -42,6 +43,8 @@ type Env struct {
 	CodeCache string
 	// Recall searches long-term memory (search {memory}); nil when off.
 	Recall func(query string) string
+	// LSP reports language-server diagnostics after edits; nil when off.
+	LSP *lsp.Manager
 
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
@@ -101,6 +104,16 @@ func (e *Env) markSeen(p string) {
 	} else {
 		delete(e.seen, p)
 	}
+}
+
+// Child returns an Env for a sub-agent: same workspace, sandbox and
+// settings, its own view of what was read (it has its own context) and
+// its own jobs. gate may differ (read-only exploration). Checkpointing
+// goes through the parent so a turn stays one undo step.
+func (e *Env) Child(gate *policy.Gate) *Env {
+	return &Env{Root: e.Root, Gate: gate, Vision: e.Vision, AllowPrivateNet: e.AllowPrivateNet, Sandbox: e.Sandbox,
+		Net: e.Net, PassEnv: e.PassEnv, PostEdit: e.PostEdit, CodeCache: e.CodeCache, Recall: e.Recall, LSP: e.LSP,
+		BeforeMutate: e.mutate}
 }
 
 // ForgetReads tells the tools that earlier read results are no longer
@@ -240,4 +253,10 @@ func Clip(s string, max int) string {
 		t = t[i+1:]
 	}
 	return fmt.Sprintf("%s\n[... %d bytes omitted; narrow the output (grep, head, tail, sed -n) to see them ...]\n%s", h, cut, t)
+}
+
+// ShellName is the shell bash commands run in ("bash", "sh",
+// "powershell", "cmd"), for the system prompt.
+func ShellName() string {
+	return strings.TrimSuffix(strings.ToLower(filepath.Base(shellPath())), ".exe")
 }
