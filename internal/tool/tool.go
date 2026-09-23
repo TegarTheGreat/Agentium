@@ -175,5 +175,5 @@ func Clip(s string, max int) string {
 	if i := strings.IndexByte(t, '\n'); i >= 0 && i < tail/2 {
 		t = t[i+1:]
 	}
-	return fmt.Sprintf("%s\n[... %d bytes omitted ...]\n%s", h, cut, t)
+	return fmt.Sprintf("%s\n[... %d bytes omitted; narrow the output (grep, head, tail, sed -n) to see them ...]\n%s", h, cut, t)
 }

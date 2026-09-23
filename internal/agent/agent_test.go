@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,7 +183,7 @@ func TestElide(t *testing.T) {
 			provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{tc("i", "read", `{}`)}},
 			provider.Message{Role: provider.RoleTool, ToolCallID: "i", Text: big})
 	}
-	a.elide()
+	a.elide(keepRecentTools)
 	elided := 0
 	for i, m := range a.Messages {
 		if m.Role != provider.RoleTool {
@@ -200,7 +201,7 @@ func TestElide(t *testing.T) {
 	}
 	// Under budget: untouched.
 	b := &Agent{ContextChars: 1 << 30, Messages: []provider.Message{{Role: provider.RoleTool, Text: big}}}
-	b.elide()
+	b.manageContext(context.Background())
 	if b.Messages[0].Text != big {
 		t.Fatal("elided under budget")
 	}
@@ -242,5 +243,158 @@ func TestSystemPromptSmallAndIncludesAgentsMD(t *testing.T) {
 	}
 	if len(basePrompt) > 1500 {
 		t.Fatalf("base prompt grew to %d chars; keep it lean", len(basePrompt))
+	}
+}
+
+func TestVerifyReminder(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "edit", `{"path":"main.go","new":"package main\n"}`)),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Done."}, nil },
+		calls(tc("2", "bash", `{"cmd":"go vet ./..."}`)),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Verified."}, nil },
+	}}
+	a := newAgent(t, s)
+	a.Verify = true
+	var notes []string
+	a.Events.Notice = func(m string) { notes = append(notes, m) }
+	st, err := a.Run(context.Background(), "write main.go")
+	if err != nil || st.Turns != 4 {
+		t.Fatalf("turns=%d err=%v", st.Turns, err)
+	}
+	if len(notes) != 1 || !strings.Contains(s.reqs[2].Messages[len(s.reqs[2].Messages)-1].Text, "have not run a build") {
+		t.Fatalf("reminder missing: %v", notes)
+	}
+	// Non-code edits (docs) and edits followed by a check get no reminder.
+	s2 := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "edit", `{"path":"README.md","new":"hi"}`)),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Done."}, nil },
+	}}
+	a2 := newAgent(t, s2)
+	a2.Verify = true
+	if st, _ := a2.Run(context.Background(), "docs"); st.Turns != 2 {
+		t.Fatalf("docs edit should not trigger verify, turns=%d", st.Turns)
+	}
+}
+
+func TestStuckDetector(t *testing.T) {
+	same := calls(tc("x", "bash", `{"cmd":"echo same"}`))
+	var steps []func(provider.Request) (provider.Response, error)
+	for i := 0; i < 10; i++ {
+		steps = append(steps, same)
+	}
+	s := &script{steps: steps}
+	a := newAgent(t, s)
+	st, err := a.Run(context.Background(), "loop")
+	if !errors.Is(err, ErrStuck) || st.Turns != stuckStop {
+		t.Fatalf("err=%v turns=%d", err, st.Turns)
+	}
+	warned := false
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleTool && strings.Contains(m.Text, "change your approach") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("model should be warned before being stopped")
+	}
+	// Same command with different results (e.g. polling) is not stuck.
+	n := 0
+	var poll []func(provider.Request) (provider.Response, error)
+	for i := 0; i < 6; i++ {
+		poll = append(poll, calls(tc("p", "bash", `{"cmd":"date +%N"}`)))
+	}
+	s2 := &script{steps: poll}
+	a2 := newAgent(t, s2)
+	_, err = a2.Run(context.Background(), "poll")
+	_ = n
+	if errors.Is(err, ErrStuck) {
+		t.Fatal("changing results must not count as stuck")
+	}
+}
+
+func TestTruncatedReply(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "Writing", StopReason: "max_tokens",
+				ToolCalls: []provider.ToolCall{tc("1", "edit", `{"path":"a.txt","new":"unterminated`)}}, nil
+		},
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "ok"}, nil },
+	}}
+	a := newAgent(t, s)
+	st, err := a.Run(context.Background(), "big file")
+	if err != nil || st.Turns != 2 {
+		t.Fatalf("turns=%d err=%v", st.Turns, err)
+	}
+	// The cut-off call was dropped and the model was told to continue.
+	if len(a.Messages[1].ToolCalls) != 0 {
+		t.Fatal("invalid truncated tool call should be dropped")
+	}
+	if !strings.Contains(a.Messages[2].Text, "cut off") {
+		t.Fatalf("continue note missing: %+v", a.Messages[2])
+	}
+	// Endless truncation gives up.
+	var steps []func(provider.Request) (provider.Response, error)
+	for i := 0; i < 5; i++ {
+		steps = append(steps, func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "x", StopReason: "length"}, nil
+		})
+	}
+	if _, err := newAgent(t, &script{steps: steps}).Run(context.Background(), "x"); !errors.Is(err, ErrTruncated) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCompaction(t *testing.T) {
+	fast := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "Goal: build X.\n@remember project uses tabs\nState: half done."}, nil
+		},
+	}}
+	s := &script{}
+	a := newAgent(t, s)
+	a.ContextTokens = 20000 // tiny window: forces compaction
+	a.MaxTokens = 1000
+	a.Fast, a.FastModel = fast, "fast"
+	var remembered []string
+	a.OnRemember = func(f string) { remembered = append(remembered, f) }
+	big := strings.Repeat("y", 9000)
+	for i := 0; i < 8; i++ {
+		a.Messages = append(a.Messages,
+			provider.Message{Role: provider.RoleUser, Text: fmt.Sprintf("step %d %s", i, big)},
+			provider.Message{Role: provider.RoleAssistant, Text: "ok " + big})
+	}
+	if _, err := a.Run(context.Background(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fast.reqs) != 1 {
+		t.Fatalf("fast model should summarize once, got %d", len(fast.reqs))
+	}
+	first := a.Messages[0].Text
+	if !strings.HasPrefix(first, "[Summary of the earlier conversation]") || strings.Contains(first, "@remember") {
+		t.Fatalf("summary message = %q", first)
+	}
+	if len(remembered) != 1 || remembered[0] != "project uses tabs" {
+		t.Fatalf("remembered = %v", remembered)
+	}
+	if a.size() > 60000 {
+		t.Fatalf("still too big after compaction: %d", a.size())
+	}
+	// The kept tail starts at a user message and still ends with the new turn.
+	if a.Messages[1].Role != provider.RoleUser || a.Messages[len(a.Messages)-2].Text != "continue" {
+		t.Fatal("tail not preserved")
+	}
+}
+
+func TestElideArgs(t *testing.T) {
+	long := strings.Repeat("z", 5000)
+	raw, _ := json.Marshal(map[string]any{"path": "f.go", "new": long})
+	out := elideArgs(raw)
+	var m map[string]any
+	if json.Unmarshal(out, &m) != nil || m["path"] != "f.go" || !strings.Contains(m["new"].(string), "elided") {
+		t.Fatalf("elideArgs = %s", out)
+	}
+	short := json.RawMessage(`{"path":"x"}`)
+	if string(elideArgs(short)) != string(short) {
+		t.Fatal("short args untouched")
 	}
 }
