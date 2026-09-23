@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +20,9 @@ type Events struct {
 	ToolDone   func(call provider.ToolCall, out string, err error, d time.Duration)
 	Retry      func(err error, wait time.Duration)
 	TurnFinish func(resp provider.Response)
+	// Notice reports harness actions the user may want to know about
+	// (verification reminder, compaction, stuck detection, truncation).
+	Notice func(msg string)
 }
 
 // Agent holds one conversation.
@@ -32,11 +34,22 @@ type Agent struct {
 	Env       *tool.Env
 	MaxTurns  int
 	MaxTokens int
-	// ContextChars is the soft budget for the conversation, in characters.
-	// Past it, old tool outputs are elided in one batch (rarely, so the
-	// provider's prompt cache survives most turns).
+	// ContextTokens is the model's context window. It sets when old tool
+	// output is elided and when the conversation is compacted. Zero
+	// disables both (and ContextChars, if set, is used directly).
+	ContextTokens int
+	// ContextChars is the soft budget in characters before elision.
+	// Derived from ContextTokens when zero.
 	ContextChars int
-	Events       Events
+	// Fast, if set, does background work (compaction summaries) cheaply.
+	Fast      provider.Client
+	FastModel string
+	// Verify makes the agent remind the model, once per run, to run a
+	// check when it tries to finish after changing code without one.
+	Verify bool
+	// OnRemember receives durable facts surfaced during compaction.
+	OnRemember func(fact string)
+	Events     Events
 
 	Messages []provider.Message
 	Usage    provider.Usage
@@ -54,13 +67,36 @@ type Stats struct {
 	Elapsed   time.Duration
 }
 
-// ErrMaxTurns is returned when the loop hits MaxTurns.
-var ErrMaxTurns = errors.New("stopped: reached max turns")
+var (
+	// ErrMaxTurns is returned when the loop hits MaxTurns.
+	ErrMaxTurns = errors.New("stopped: reached max turns")
+	// ErrStuck is returned when the model keeps repeating the same action
+	// with the same result.
+	ErrStuck = errors.New("stopped: the same action kept giving the same result")
+	// ErrTruncated is returned when replies keep hitting the output limit.
+	ErrTruncated = errors.New("stopped: replies keep hitting the output token limit")
+)
+
+const (
+	stuckWarn      = 3
+	stuckStop      = 5
+	stuckWindow    = 16
+	maxTruncations = 2
+)
+
+// runState is per-Run bookkeeping.
+type runState struct {
+	editedCode  bool
+	reminded    bool
+	truncations int
+	sigs        []string
+}
 
 // Run sends input and loops until the model stops calling tools.
 func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 	start := time.Now()
 	var st Stats
+	var rs runState
 	if a.Note != "" {
 		input = "[" + a.Note + "]\n\n" + input
 		a.Note = ""
@@ -74,8 +110,12 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		maxTurns = 100
 	}
 	defs := tool.Defs(a.Tools)
+	done := func(err error) (Stats, error) {
+		st.Elapsed = time.Since(start)
+		return st, err
+	}
 	for st.Turns < maxTurns {
-		a.elide()
+		a.manageContext(ctx)
 		resp, err := a.call(ctx, provider.Request{
 			Model: a.Model, System: a.System, Messages: a.Messages, Tools: defs, MaxTokens: a.MaxTokens,
 		})
@@ -88,27 +128,69 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 			if resp.Text != "" {
 				a.Messages = append(a.Messages, provider.Message{Role: provider.RoleAssistant, Text: resp.Text})
 			}
-			st.Elapsed = time.Since(start)
-			return st, err
+			return done(err)
+		}
+		truncated := resp.StopReason == "max_tokens" || resp.StopReason == "length"
+		if truncated {
+			resp.ToolCalls = validCalls(resp.ToolCalls)
 		}
 		a.Messages = append(a.Messages, provider.Message{Role: provider.RoleAssistant, Text: resp.Text, ToolCalls: resp.ToolCalls})
 		if a.Events.TurnFinish != nil {
 			a.Events.TurnFinish(resp)
 		}
-		if len(resp.ToolCalls) == 0 {
-			st.Elapsed = time.Since(start)
-			return st, nil
+		if len(resp.ToolCalls) > 0 {
+			st.ToolCalls += len(resp.ToolCalls)
+			results := a.runTools(ctx, resp.ToolCalls)
+			stuck := a.track(&rs, resp.ToolCalls, results)
+			a.Messages = append(a.Messages, results...)
+			if ctx.Err() != nil {
+				return done(ctx.Err())
+			}
+			if stuck {
+				a.notice("stopped: repeating the same action")
+				return done(ErrStuck)
+			}
 		}
-		st.ToolCalls += len(resp.ToolCalls)
-		results := a.runTools(ctx, resp.ToolCalls)
-		a.Messages = append(a.Messages, results...)
-		if ctx.Err() != nil {
-			st.Elapsed = time.Since(start)
-			return st, ctx.Err()
+		if truncated {
+			rs.truncations++
+			if rs.truncations > maxTruncations {
+				return done(ErrTruncated)
+			}
+			a.notice("reply hit the output limit; asking the model to continue")
+			a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser,
+				Text: "[agentium] Your last reply was cut off at the output token limit. Continue from where you stopped; split large file writes into several smaller edits."})
+			continue
+		}
+		if len(resp.ToolCalls) > 0 {
+			continue
+		}
+		if a.Verify && rs.editedCode && !rs.reminded {
+			rs.reminded = true
+			a.notice("code changed without a check; asking the model to verify")
+			a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser,
+				Text: "[agentium] You changed code but have not run a build, test or lint since. Run the most relevant quick check now. If it cannot be verified, reply with one line saying why."})
+			continue
+		}
+		return done(nil)
+	}
+	return done(ErrMaxTurns)
+}
+
+func (a *Agent) notice(msg string) {
+	if a.Events.Notice != nil {
+		a.Events.Notice(msg)
+	}
+}
+
+// validCalls drops tool calls whose arguments were cut off mid-JSON.
+func validCalls(calls []provider.ToolCall) []provider.ToolCall {
+	var out []provider.ToolCall
+	for _, c := range calls {
+		if c.Name != "" && json.Valid(c.Args) {
+			out = append(out, c)
 		}
 	}
-	st.Elapsed = time.Since(start)
-	return st, ErrMaxTurns
+	return out
 }
 
 // call streams one model call, retrying rate limits, overloads and broken
@@ -198,44 +280,6 @@ func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessa
 		}
 	}()
 	return t.Run(ctx, env, args)
-}
-
-const (
-	keepRecentTools = 6
-	elidedKeep      = 300
-)
-
-// size estimates the conversation size in characters.
-func (a *Agent) size() int {
-	n := len(a.System)
-	for _, m := range a.Messages {
-		n += len(m.Text)
-		for _, c := range m.ToolCalls {
-			n += len(c.Args) + len(c.Name)
-		}
-	}
-	return n
-}
-
-// elide shortens old tool outputs once the soft budget is exceeded. It
-// works in one batch so the cached prefix changes rarely.
-func (a *Agent) elide() {
-	if a.ContextChars <= 0 || a.size() <= a.ContextChars {
-		return
-	}
-	seen := 0
-	for i := len(a.Messages) - 1; i >= 0; i-- {
-		m := &a.Messages[i]
-		if m.Role != provider.RoleTool {
-			continue
-		}
-		seen++
-		if seen <= keepRecentTools || len(m.Text) <= elidedKeep+100 {
-			continue
-		}
-		cut := len(m.Text) - elidedKeep
-		m.Text = strings.ToValidUTF8(m.Text[:elidedKeep], "") + fmt.Sprintf("\n[elided %d chars of old output; rerun the tool if needed]", cut)
-	}
 }
 
 // Reset clears the conversation.

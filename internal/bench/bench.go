@@ -188,7 +188,7 @@ func RunLive(ctx context.Context, client provider.Client, model string, tasks []
 		a := &agent.Agent{
 			Client: client, Model: model, System: agent.SystemPrompt(dir),
 			Tools: tool.All(), Env: env,
-			MaxTurns: 20, ContextChars: 200_000,
+			MaxTurns: 20, ContextTokens: provider.ContextWindow(model), Verify: true,
 			Events: agent.Events{TurnFinish: func(r provider.Response) {
 				reply.Reset()
 				reply.WriteString(r.Text)

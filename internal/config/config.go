@@ -29,9 +29,14 @@ type Config struct {
 	FetchPrivate bool `json:"fetch_private,omitempty"`
 	// Checkpoints snapshot the workspace before each changing turn so it
 	// can be undone (default on; needs git).
-	Checkpoints *bool                   `json:"checkpoints,omitempty"`
-	Sandbox     *SandboxConf            `json:"sandbox,omitempty"`
-	Providers   map[string]ProviderConf `json:"providers,omitempty"`
+	Checkpoints *bool        `json:"checkpoints,omitempty"`
+	Sandbox     *SandboxConf `json:"sandbox,omitempty"`
+	// Verify reminds the model to run a check after changing code
+	// (default on).
+	Verify *bool `json:"verify,omitempty"`
+	// ContextTokens overrides the model's context window.
+	ContextTokens int                     `json:"context_tokens,omitempty"`
+	Providers     map[string]ProviderConf `json:"providers,omitempty"`
 }
 
 // SandboxConf configures confinement of shell commands.

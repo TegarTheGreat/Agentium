@@ -286,7 +286,15 @@ func run(args []string) error {
 		Client: res.Client, Model: res.Model, System: agent.SystemPrompt(cwd),
 		Tools: tool.All(), Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
-		ContextChars: 400_000,
+		ContextTokens: firstPositive(cfg.ContextTokens, provider.ContextWindow(res.Model)),
+		Verify:        cfg.Verify == nil || *cfg.Verify,
+	}
+	if cfg.FastModel != "" {
+		if fr, err := provider.Resolve(cfg.FastModel, cfg, auth); err == nil {
+			a.Fast, a.FastModel = fr.Client, fr.Model
+		} else if !*quiet {
+			fmt.Fprintln(os.Stderr, u.dim("· fast_model ignored: "+firstLine(err.Error())))
+		}
 	}
 	if *cont {
 		if prev, err := session.Latest(cwd); err == nil && prev != nil {
@@ -322,6 +330,7 @@ func run(args []string) error {
 		Retry: func(err error, wait time.Duration) {
 			u.line(fmt.Sprintf("  retrying in %s: %s", wait, firstLine(err.Error())))
 		},
+		Notice: func(msg string) { u.line("· " + msg) },
 	}
 
 	var active atomic.Pointer[context.CancelFunc]
