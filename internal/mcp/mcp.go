@@ -35,6 +35,8 @@ type Config struct {
 	Headers map[string]string `json:"headers,omitempty"`
 	// LogPath receives a stdio server's stderr ("" = discard).
 	LogPath string `json:"-"`
+	// Tokens holds OAuth grants for remote servers (nil = no OAuth).
+	Tokens *TokenStore `json:"-"`
 }
 
 // Tool is a tool offered by a server.
@@ -93,7 +95,7 @@ func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, e
 		}
 		c.tr = tr
 	case cfg.URL != "":
-		c.tr = &httpTransport{c: c, url: cfg.URL, headers: expand(cfg.Headers)}
+		c.tr = &httpTransport{c: c, url: cfg.URL, headers: expand(cfg.Headers), tokens: cfg.Tokens}
 	case cfg.Command != "":
 		tr, err := startStdio(c, cfg, dir)
 		if err != nil {

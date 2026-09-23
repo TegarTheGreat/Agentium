@@ -23,6 +23,7 @@ type httpTransport struct {
 	c       *Client
 	url     string
 	headers map[string]string
+	tokens  *TokenStore
 
 	mu      sync.Mutex
 	session string // Mcp-Session-Id from the initialize reply
@@ -38,6 +39,11 @@ func (t *httpTransport) send(ctx context.Context, b []byte) error {
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
+	}
+	if t.tokens != nil && req.Header.Get("Authorization") == "" {
+		if tok, err := t.tokens.Token(ctx, t.url); err == nil {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 	}
 	t.mu.Lock()
 	if t.session != "" {
@@ -63,6 +69,9 @@ func (t *httpTransport) send(ctx context.Context, b []byte) error {
 	case resp.StatusCode == http.StatusNotFound && req.Header.Get("Mcp-Session-Id") != "":
 		resp.Body.Close()
 		return errors.New("MCP session expired (restart agentium to reconnect)")
+	case resp.StatusCode == http.StatusUnauthorized && strings.Contains(strings.ToLower(resp.Header.Get("WWW-Authenticate")), "bearer") && t.headers["Authorization"] == "":
+		resp.Body.Close()
+		return fmt.Errorf("%w (OAuth): run `agentium mcp login %s`", ErrLoginRequired, t.c.Name)
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		resp.Body.Close()
 		return fmt.Errorf("HTTP %d: check the server's \"headers\" (e.g. Authorization) in config", resp.StatusCode)

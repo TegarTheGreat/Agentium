@@ -182,6 +182,7 @@ func (e *Env) startJob(cmdline string, box *sandbox.Config, tty bool) (string, e
 			slave.Close()
 			return "", err
 		}
+		contain(cmd)
 		slave.Close() // the child holds its own copy
 		j.stdin = master
 		copied := make(chan struct{})
@@ -206,6 +207,7 @@ func (e *Env) startJob(cmdline string, box *sandbox.Config, tty bool) (string, e
 		if err := cmd.Start(); err != nil {
 			return "", err
 		}
+		contain(cmd)
 		go func() {
 			j.err = cmd.Wait()
 			close(j.done)

@@ -298,3 +298,14 @@ Riset ketiga (Sep 2026) menghasilkan tiga temuan pokok:
 | Windows | ✅ Git Bash / PowerShell, kill sampai proses anak, warna ANSI, CI windows-latest. ❌ Tanpa sandbox OS, tanpa line editor |
 | Bukti benchmark nyata | ❌ Masih butuh API key |
 | LICENSE | ❌ Keputusan pemilik repo |
+
+## H. Status v0.11.0 — sisa bagian G ditutup
+
+| Item | Status |
+|---|---|
+| PTY penuh | ✅ `bash {background:true, tty:true}`: pseudo-terminal lewat /dev/ptmx (Linux, macOS), untuk program yang mewajibkan TTY. Windows: belum (ConPTY) |
+| OAuth MCP | ✅ Spesifikasi otorisasi MCP: protected-resource metadata, AS metadata, dynamic client registration, PKCE + callback localhost, token disimpan (0600) dan di-refresh otomatis. `agentium mcp list/login/logout` |
+| Validasi ACP | ✅ Job CI `acp`: setiap pesan diuji terhadap skema zod SDK resmi `@agentclientprotocol/sdk`. Zed/JetBrains asli belum diuji manual |
+| Windows | ✅ Line editor (console VT mode: riwayat, paste, lebar CJK), Job Object kill-on-close (proses anak ikut mati saat Agentium keluar, termasuk saat crash). ❌ Tetap tanpa sandbox OS: gate persetujuan satu-satunya pelindung, disarankan mode `ask` |
+| LICENSE | ✅ MIT |
+| Bukti benchmark nyata | ❌ Butuh API key milik pemilik repo. Alat siap: `agentium bench -m <model>` dan `bench/terminalbench` (Harbor) |
