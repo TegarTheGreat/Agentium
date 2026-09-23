@@ -923,7 +923,10 @@ func TestTTYJobs(t *testing.T) {
 	if sandbox.Probe().Available {
 		e.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(e.Root)}
 		out, _ := call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY; touch /etc/agentium-x 2>&1 | head -1","background":true,"tty":true}`)
-		if !strings.Contains(out, "IS_TTY") || !strings.Contains(strings.ToLower(out), "denied") && !strings.Contains(strings.ToLower(out), "read-only") {
+		// Landlock says "Permission denied", sandbox-exec "Operation not permitted".
+		lower := strings.ToLower(out)
+		refused := strings.Contains(lower, "denied") || strings.Contains(lower, "not permitted") || strings.Contains(lower, "read-only")
+		if _, err := os.Stat("/etc/agentium-x"); !strings.Contains(out, "IS_TTY") || !refused || err == nil {
 			t.Fatalf("sandboxed tty job: %q", out)
 		}
 		// Stopping an interactive shell also stops the jobs it started
