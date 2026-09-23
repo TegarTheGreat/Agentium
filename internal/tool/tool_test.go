@@ -83,7 +83,7 @@ func TestEdit(t *testing.T) {
 	if _, err := call(t, editTool, e, `{"path":"dup.txt","old":"x","new":"y"}`); err == nil || !strings.Contains(err.Error(), "3 times") {
 		t.Fatalf("ambiguous edit: %v", err)
 	}
-	if out, err := call(t, editTool, e, `{"path":"dup.txt","old":"x","new":"y","all":true}`); err != nil || !strings.Contains(out, "3 replaced") {
+	if out, err := call(t, editTool, e, `{"path":"dup.txt","old":"x","new":"y","all":true}`); err != nil || !strings.Contains(out, "3 places") {
 		t.Fatalf("all: %q %v", out, err)
 	}
 	if _, err := call(t, editTool, e, `{"path":"dup.txt","old":"nope","new":"y"}`); err == nil {
@@ -322,5 +322,78 @@ func TestBashSandbox(t *testing.T) {
 	e.Gate.SetMode(policy.Yolo)
 	if _, err := call(t, bashTool, e, `{"cmd":"true","net":true}`); err == nil {
 		t.Fatal("deny policy wins even in yolo mode")
+	}
+}
+
+func TestEditFuzzyAndLint(t *testing.T) {
+	e := env(t)
+	write(t, e, "m.go", "package m\n\nfunc F() int {\n\tif true {\n\t\treturn 1\n\t}\n\treturn 0\n}\n")
+	call(t, readTool, e, `{"path":"m.go"}`)
+	// Model used spaces instead of tabs: indentation-tolerant match, and the
+	// replacement is re-indented to the file's style.
+	out, err := call(t, editTool, e, `{"path":"m.go","old":"    if true {\n        return 1\n    }","new":"    if false {\n        return 2\n    }"}`)
+	if err != nil || !strings.Contains(out, "indentation") {
+		t.Fatalf("fuzzy indent: %q %v", out, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(e.Root, "m.go"))
+	if !strings.Contains(string(b), "\tif false {\n\t\treturn 2\n\t}") {
+		t.Fatalf("reindent wrong:\n%s", b)
+	}
+	// Syntax-breaking edit is rejected and the file is left untouched.
+	before, _ := os.ReadFile(filepath.Join(e.Root, "m.go"))
+	if _, err := call(t, editTool, e, `{"path":"m.go","old":"return 0\n}","new":"return 0\n"}`); err == nil || !strings.Contains(err.Error(), "syntax error") {
+		t.Fatalf("lint gate: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(e.Root, "m.go"))
+	if string(before) != string(after) {
+		t.Fatal("rejected edit modified the file")
+	}
+	// Broken new file is rejected too.
+	if _, err := call(t, editTool, e, `{"path":"bad.json","new":"{\"a\":"}`); err == nil {
+		t.Fatal("invalid new JSON file should be rejected")
+	}
+	// A file that was already broken can still be edited (with a warning).
+	write(t, e, "broken.go", "package b\nfunc (\n")
+	call(t, readTool, e, `{"path":"broken.go"}`)
+	if out, err := call(t, editTool, e, `{"path":"broken.go","old":"package b","new":"package c"}`); err != nil || !strings.Contains(out, "warning") {
+		t.Fatalf("editing broken file: %q %v", out, err)
+	}
+	// CRLF files accept LF-only old/new and keep CRLF.
+	write(t, e, "w.txt", "a\r\nb\r\nc\r\n")
+	call(t, readTool, e, `{"path":"w.txt"}`)
+	if out, err := call(t, editTool, e, `{"path":"w.txt","old":"a\nb","new":"x\ny"}`); err != nil || !strings.Contains(out, "CRLF") {
+		t.Fatalf("crlf: %q %v", out, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.Root, "w.txt")); string(b) != "x\r\ny\r\nc\r\n" {
+		t.Fatalf("crlf result %q", b)
+	}
+	// Trailing-whitespace tolerant.
+	write(t, e, "t.txt", "one  \ntwo\t\nthree\n")
+	call(t, readTool, e, `{"path":"t.txt"}`)
+	if out, err := call(t, editTool, e, `{"path":"t.txt","old":"one\ntwo","new":"1\n2"}`); err != nil || !strings.Contains(out, "trailing") {
+		t.Fatalf("trailing ws: %q %v", out, err)
+	}
+	// Ambiguous fuzzy match is refused.
+	write(t, e, "amb.txt", "  x\n  y\n\tx\n\ty\n")
+	call(t, readTool, e, `{"path":"amb.txt"}`)
+	if _, err := call(t, editTool, e, `{"path":"amb.txt","old":"x\ny","new":"z"}`); err == nil {
+		t.Fatal("ambiguous fuzzy match must fail")
+	}
+}
+
+func TestDiffStat(t *testing.T) {
+	for _, c := range []struct {
+		a, b     string
+		add, del int
+	}{
+		{"a\nb\nc\n", "a\nX\nc\n", 1, 1},
+		{"a\nb\n", "a\nb\nc\nd\n", 2, 0},
+		{"", "x\ny\n", 3, 0},
+		{"a\nb\nc\n", "a\n", 0, 2},
+	} {
+		add, del := diffStat(c.a, c.b)
+		if add != c.add || del != c.del {
+			t.Errorf("%q→%q = +%d -%d, want +%d -%d", c.a, c.b, add, del, c.add, c.del)
+		}
 	}
 }
