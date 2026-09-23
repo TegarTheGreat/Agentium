@@ -401,7 +401,8 @@ func TestDiffStat(t *testing.T) {
 
 func TestPostEditHook(t *testing.T) {
 	e := env(t)
-	e.PostEdit = []string{"sed -i 's/TODO/DONE/' {path}", "grep -q forbidden {path} && echo 'lint: forbidden word' && exit 1 || true"}
+	// Portable in-place rewrite (BSD sed -i needs a suffix argument).
+	e.PostEdit = []string{"t=$(sed 's/TODO/DONE/' {path}) && printf '%s\\n' \"$t\" > {path}", "grep -q forbidden {path} && echo 'lint: forbidden word' && exit 1 || true"}
 	out, err := call(t, editTool, e, `{"path":"n.txt","new":"TODO item\n"}`)
 	if err != nil || strings.Contains(out, "hook") {
 		t.Fatalf("clean hook run: %q %v", out, err)
