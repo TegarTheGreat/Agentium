@@ -61,7 +61,8 @@ Flags:
   --max-cost USD      stop once the session has cost this much (needs a known price)
   --max-turns N       stop after N model turns (default 100)
 
-In a session: /undo  /clear  /model <ref>  /mode <m>  /usage  /exit
+In a session: /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
+Keys: ↑/↓ history · Ctrl-A/E/U/K/W · paste keeps newlines · end a line with \ for a newline
 `
 
 func main() {
@@ -353,6 +354,7 @@ func run(args []string) error {
 	gate.Approve = ap.ask
 
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
+	go session.Prune(200, 90*24*time.Hour)
 	mem := openMemory(cfg, cwd)
 	snapshot := ""
 	if mem != nil {
@@ -601,12 +603,30 @@ func run(args []string) error {
 		box = "sandboxed"
 	}
 	fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
+	var ed *editor
+	if lineEditing && isTTY(os.Stderr) {
+		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
+	}
 	for {
-		fmt.Fprint(os.Stderr, "\n› ")
-		line, err := in.ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(os.Stderr)
-			return nil
+		var line string
+		var err error
+		if ed != nil {
+			fmt.Fprint(os.Stderr, "\n")
+			line, err = ed.readLine()
+			if errors.Is(err, errInterrupt) || errors.Is(err, errEOF) {
+				return nil
+			}
+			if err != nil { // no raw mode available: fall back to plain input
+				ed = nil
+				continue
+			}
+		} else {
+			fmt.Fprint(os.Stderr, "\n› ")
+			line, err = in.ReadString('\n')
+			if err != nil && line == "" {
+				fmt.Fprintln(os.Stderr)
+				return nil
+			}
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -655,6 +675,50 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 			gate.SetMode(policy.ParseMode(f[1]))
 		}
 		fmt.Fprintln(os.Stderr, "· mode:", gate.GetMode())
+	case "/sessions":
+		list, _ := session.ForCwd(sess.Cwd, 10)
+		if len(list) == 0 {
+			fmt.Fprintln(os.Stderr, "· no saved sessions here")
+		}
+		for i, ss := range list {
+			first := ""
+			for _, m := range ss.Messages {
+				if m.Role == provider.RoleUser && m.Text != "" {
+					first = m.Text
+					if j := strings.Index(first, "</recall>"); j >= 0 {
+						first = strings.TrimSpace(first[j+9:])
+					}
+					break
+				}
+			}
+			mark := " "
+			if ss.ID == sess.ID {
+				mark = "*"
+			}
+			fmt.Fprintf(os.Stderr, "%s%2d. %s · %d msgs · %s\n", mark, i+1, ss.Updated.Format("2006-01-02 15:04"), len(ss.Messages), oneLine(first, 60))
+		}
+		fmt.Fprintln(os.Stderr, "· /resume <n> to continue one")
+	case "/resume":
+		list, _ := session.ForCwd(sess.Cwd, 10)
+		n := 1
+		if len(f) > 1 {
+			fmt.Sscanf(f[1], "%d", &n)
+		}
+		if n < 1 || n > len(list) {
+			fmt.Fprintln(os.Stderr, "· no such session (see /sessions)")
+			return false
+		}
+		chosen := list[n-1]
+		hash := sess.SystemHash
+		*sess = *chosen
+		a.Messages = chosen.Messages
+		if chosen.SystemHash != hash {
+			for i := range a.Messages {
+				a.Messages[i].Raw = nil
+			}
+		}
+		sess.SystemHash = hash
+		fmt.Fprintf(os.Stderr, "· resumed session from %s (%d messages)\n", chosen.Updated.Format("2006-01-02 15:04"), len(chosen.Messages))
 	case "/undo":
 		note, err := undoLast(store, sess)
 		if err != nil {
@@ -667,7 +731,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
 	default:
-		fmt.Fprintln(os.Stderr, "· commands: /undo /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
+		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
 	}
 	return false
 }
