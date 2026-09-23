@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/agent"
+	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
@@ -34,6 +35,7 @@ Usage:
   agentium login <provider>     store an API key (~/.agentium/auth.json, 0600)
   agentium logout <provider>
   agentium providers            list providers and credential status
+  agentium undo                 revert the file changes of the last turn here
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
 
@@ -46,7 +48,7 @@ Flags:
   -q                  quiet: no tool lines or stats
   --max-turns N       stop after N model turns (default 100)
 
-In a session: /clear  /model <ref>  /mode <m>  /usage  /exit
+In a session: /undo  /clear  /model <ref>  /mode <m>  /usage  /exit
 `
 
 func main() {
@@ -66,6 +68,9 @@ func main() {
 			return
 		case "providers":
 			exit(cmdProviders())
+			return
+		case "undo":
+			exit(cmdUndo())
 			return
 		case "bench":
 			exit(cmdBench(os.Args[2:]))
@@ -275,7 +280,7 @@ func run(args []string) error {
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
 	a := &agent.Agent{
 		Client: res.Client, Model: res.Model, System: agent.SystemPrompt(cwd),
-		Tools: tool.All(), Env: &tool.Env{Root: cwd, Gate: gate},
+		Tools: tool.All(), Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
 		ContextChars: 400_000,
 	}
@@ -283,6 +288,19 @@ func run(args []string) error {
 		if prev, err := session.Latest(cwd); err == nil && prev != nil {
 			sess = prev
 			a.Messages = prev.Messages
+			a.Note, sess.Note = prev.Note, ""
+		}
+	}
+	store := openCheckpoints(cfg, cwd)
+	var curPrompt string
+	if store != nil {
+		a.Env.BeforeMutate = func() {
+			id, err := store.Snapshot(context.Background(), "before: "+firstLine(curPrompt))
+			if err != nil {
+				u.line("  checkpoint failed: " + firstLine(err.Error()))
+				return
+			}
+			sess.AddCheckpoint(id, curPrompt)
 		}
 	}
 	a.Events = agent.Events{
@@ -315,6 +333,7 @@ func run(args []string) error {
 	}()
 
 	turn := func(input string) error {
+		curPrompt = input
 		ctx, cancel := context.WithCancel(context.Background())
 		active.Store(&cancel)
 		st, err := a.Run(ctx, input)
@@ -351,7 +370,7 @@ func run(args []string) error {
 			continue
 		}
 		if strings.HasPrefix(line, "/") {
-			if done := slash(line, a, gate, cfg, auth, sess); done {
+			if done := slash(line, a, gate, cfg, auth, sess, store); done {
 				return nil
 			}
 			continue
@@ -366,7 +385,7 @@ func run(args []string) error {
 	}
 }
 
-func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, auth config.Auth, sess *session.Session) (exit bool) {
+func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, auth config.Auth, sess *session.Session, store *checkpoint.Store) (exit bool) {
 	f := strings.Fields(line)
 	switch f[0] {
 	case "/exit", "/quit", "/q":
@@ -393,11 +412,19 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 			gate.SetMode(policy.ParseMode(f[1]))
 		}
 		fmt.Fprintln(os.Stderr, "· mode:", gate.GetMode())
+	case "/undo":
+		note, err := undoLast(store, sess)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "·", err)
+			return false
+		}
+		a.Note = note
+		_ = sess.Save()
 	case "/usage":
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
 	default:
-		fmt.Fprintln(os.Stderr, "· commands: /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
+		fmt.Fprintln(os.Stderr, "· commands: /undo /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
 	}
 	return false
 }

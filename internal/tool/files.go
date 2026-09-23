@@ -47,6 +47,7 @@ var readTool = Tool{
 		if err != nil {
 			return "", err
 		}
+		env.markSeen(p)
 		if bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 {
 			return fmt.Sprintf("(binary file, %d bytes)", len(b)), nil
 		}
@@ -141,6 +142,17 @@ var editTool = Tool{
 		unlock := env.lock(p)
 		defer unlock()
 
+		seen, stale := env.freshness(p)
+		_, statErr := os.Stat(p)
+		exists := statErr == nil
+		if exists && stale {
+			return "", errors.New("file changed on disk since you read it; read it again before editing")
+		}
+		if a.Old == "" && exists && !seen {
+			return "", errors.New("file exists: read it first, or pass old to change part of it")
+		}
+		env.mutate()
+
 		if a.Old == "" {
 			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				return "", err
@@ -152,6 +164,7 @@ var editTool = Tool{
 			if err := os.WriteFile(p, []byte(a.New), perm); err != nil {
 				return "", err
 			}
+			env.markSeen(p)
 			return fmt.Sprintf("wrote %s (%d lines)", a.Path, strings.Count(a.New, "\n")+1), nil
 		}
 		b, err := os.ReadFile(p)
@@ -175,6 +188,7 @@ var editTool = Tool{
 		if err := os.WriteFile(p, []byte(s), st.Mode().Perm()); err != nil {
 			return "", err
 		}
+		env.markSeen(p)
 		if !a.All {
 			n = 1
 		}

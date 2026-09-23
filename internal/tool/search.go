@@ -51,7 +51,8 @@ var ripgrep = sync.OnceValue(func() string {
 })
 
 func runRipgrep(ctx context.Context, rg, root, dir, pattern, glob string, icase bool) (string, error) {
-	args := []string{"--color=never", "--no-messages", "--max-columns=300", "--max-columns-preview"}
+	// --hidden: dotfiles such as .github/ or .env.example matter in code work.
+	args := []string{"--color=never", "--no-messages", "--max-columns=300", "--max-columns-preview", "--hidden", "-g", "!.git/"}
 	if pattern == "" {
 		args = append(args, "--files")
 	} else {
@@ -100,7 +101,7 @@ func capLines(s string, n int) string {
 	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n[... %d more; narrow the search]", len(lines)-n)
 }
 
-var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, ".venv": true, "dist": true, "build": true, "target": true, "__pycache__": true}
+var skipDirs = map[string]bool{".git": true, ".hg": true, ".svn": true, "node_modules": true, "vendor": true, ".venv": true, "venv": true, "dist": true, "build": true, "target": true, "__pycache__": true, ".next": true, ".cache": true}
 
 // walkSearch is the fallback when ripgrep is not installed.
 func walkSearch(ctx context.Context, root, dir, pattern, glob string, icase bool) (string, error) {
@@ -123,7 +124,7 @@ func walkSearch(ctx context.Context, root, dir, pattern, glob string, icase bool
 			return ctx.Err()
 		}
 		if d.IsDir() {
-			if p != dir && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
+			if p != dir && skipDirs[d.Name()] {
 				return filepath.SkipDir
 			}
 			return nil

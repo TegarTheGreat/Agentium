@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,9 +19,78 @@ import (
 type Env struct {
 	Root string
 	Gate *policy.Gate
+	// AllowPrivateNet lets fetch reach localhost and private networks.
+	AllowPrivateNet bool
+	// BeforeMutate, if set, runs once per turn before the first edit or
+	// bash call. It is used to checkpoint the workspace for undo.
+	BeforeMutate func()
 
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	mu      sync.Mutex
+	locks   map[string]*sync.Mutex
+	mutOnce *sync.Once
+	seen    map[string]stamp
+}
+
+// stamp identifies a file version the model has seen.
+type stamp struct {
+	size int64
+	mod  int64
+}
+
+func statStamp(p string) (stamp, bool) {
+	st, err := os.Stat(p)
+	if err != nil {
+		return stamp{}, false
+	}
+	return stamp{st.Size(), st.ModTime().UnixNano()}, true
+}
+
+// StartTurn re-arms BeforeMutate for a new user turn.
+func (e *Env) StartTurn() {
+	e.mu.Lock()
+	e.mutOnce = &sync.Once{}
+	e.mu.Unlock()
+}
+
+func (e *Env) mutate() {
+	if e.BeforeMutate == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.mutOnce == nil {
+		e.mutOnce = &sync.Once{}
+	}
+	once := e.mutOnce
+	e.mu.Unlock()
+	once.Do(e.BeforeMutate)
+}
+
+// markSeen records the current version of p as known to the model.
+func (e *Env) markSeen(p string) {
+	st, ok := statStamp(p)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.seen == nil {
+		e.seen = map[string]stamp{}
+	}
+	if ok {
+		e.seen[p] = st
+	} else {
+		delete(e.seen, p)
+	}
+}
+
+// freshness reports whether the model has seen p, and whether p changed
+// on disk since.
+func (e *Env) freshness(p string) (seen, stale bool) {
+	e.mu.Lock()
+	old, ok := e.seen[p]
+	e.mu.Unlock()
+	if !ok {
+		return false, false
+	}
+	cur, exists := statStamp(p)
+	return true, !exists || cur != old
 }
 
 // lock serializes writes to the same file when tools run in parallel.

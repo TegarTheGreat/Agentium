@@ -201,3 +201,41 @@ func TestCLIBasics(t *testing.T) {
 		t.Fatalf("bench: %q %v", out, err)
 	}
 }
+
+func TestUndo(t *testing.T) {
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("original"), 0o644)
+
+	if _, stderr, err := runBin(t, home, dir, "", "-q", "-m", "fakeoai/m", "create hello.txt"); err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hello.txt")); err != nil {
+		t.Fatal("agent should have created hello.txt")
+	}
+	_, stderr, err := runBin(t, home, dir, "", "undo")
+	if err != nil || !strings.Contains(stderr, "reverted 1 file") {
+		t.Fatalf("undo: %v %q", err, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hello.txt")); !os.IsNotExist(err) {
+		t.Fatal("undo should remove the created file")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "keep.txt")); string(b) != "original" {
+		t.Fatal("undo must not touch unrelated files")
+	}
+	if _, stderr, _ = runBin(t, home, dir, "", "undo"); !strings.Contains(stderr, "nothing to undo") {
+		t.Fatalf("second undo: %q", stderr)
+	}
+	// The model is told about the undo on the next continued turn.
+	before := len(rec.all())
+	if _, stderr, err = runBin(t, home, dir, "", "-q", "-c", "-m", "fakeoai/m", "next"); err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	b, _ := json.Marshal(rec.all()[before])
+	if !strings.Contains(string(b), "undid the file changes") {
+		t.Fatalf("undo note not delivered: %s", b)
+	}
+}

@@ -41,6 +41,9 @@ type Agent struct {
 	Messages []provider.Message
 	Usage    provider.Usage
 	Turns    int
+	// Note is prepended to the next user input once (e.g. "the user undid
+	// your last changes"), so the model's picture of the files stays true.
+	Note string
 }
 
 // Stats summarizes one Run.
@@ -58,6 +61,13 @@ var ErrMaxTurns = errors.New("stopped: reached max turns")
 func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 	start := time.Now()
 	var st Stats
+	if a.Note != "" {
+		input = "[" + a.Note + "]\n\n" + input
+		a.Note = ""
+	}
+	if a.Env != nil {
+		a.Env.StartTurn()
+	}
 	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input})
 	maxTurns := a.MaxTurns
 	if maxTurns <= 0 {

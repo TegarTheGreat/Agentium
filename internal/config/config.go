@@ -20,12 +20,17 @@ type ProviderConf struct {
 
 // Config is ~/.agentium/config.json.
 type Config struct {
-	Model     string                  `json:"model,omitempty"`      // "provider/model"
-	FastModel string                  `json:"fast_model,omitempty"` // reserved for background work
-	Mode      string                  `json:"mode,omitempty"`       // ask | auto | yolo
-	MaxTokens int                     `json:"max_tokens,omitempty"`
-	MaxTurns  int                     `json:"max_turns,omitempty"`
-	Providers map[string]ProviderConf `json:"providers,omitempty"`
+	Model     string `json:"model,omitempty"`      // "provider/model"
+	FastModel string `json:"fast_model,omitempty"` // reserved for background work
+	Mode      string `json:"mode,omitempty"`       // ask | auto | yolo
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	MaxTurns  int    `json:"max_turns,omitempty"`
+	// FetchPrivate lets the fetch tool reach localhost/private networks.
+	FetchPrivate bool `json:"fetch_private,omitempty"`
+	// Checkpoints snapshot the workspace before each changing turn so it
+	// can be undone (default on; needs git).
+	Checkpoints *bool                   `json:"checkpoints,omitempty"`
+	Providers   map[string]ProviderConf `json:"providers,omitempty"`
 }
 
 // Home returns the Agentium state directory.
