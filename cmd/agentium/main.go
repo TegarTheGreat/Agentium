@@ -814,6 +814,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		hash := sess.SystemHash
 		*sess = *chosen
 		a.Messages = chosen.Messages
+		a.Env.ForgetReads()
 		if chosen.SystemHash != hash {
 			for i := range a.Messages {
 				a.Messages[i].Raw = nil

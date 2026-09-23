@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -103,7 +104,7 @@ func runEdit(_ context.Context, env *Env, raw json.RawMessage) (string, error) {
 	} else if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(p, []byte(after), perm); err != nil {
+	if err := writeAtomic(p, []byte(after), perm); err != nil {
 		return "", err
 	}
 	env.markSeen(p)
@@ -326,4 +327,48 @@ func runPostEdit(env *Env, path string) string {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// writeAtomic replaces p so that it holds either the old or the new
+// content, never a mix — even if the process is killed or the disk fills
+// mid-write: the data goes to a temporary file in the same directory, is
+// synced, then renamed over p. It then reads the file back to confirm
+// what is on disk is what was meant (a conservation check).
+func writeAtomic(p string, data []byte, perm fs.FileMode) error {
+	dir := filepath.Dir(p)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(p)+".agentium-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op after a successful rename
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync() // make the rename itself durable where supported
+		d.Close()
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, data) {
+		return fmt.Errorf("write verification failed for %s: the file on disk differs from what was written", p)
+	}
+	return nil
 }

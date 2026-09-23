@@ -350,6 +350,9 @@ func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessa
 // Reset clears the conversation.
 func (a *Agent) Reset() {
 	a.Messages = nil
+	if a.Env != nil {
+		a.Env.ForgetReads()
+	}
 }
 
 // withoutImages replaces images with a note for models that cannot view

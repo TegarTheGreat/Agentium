@@ -47,6 +47,7 @@ type Env struct {
 	locks   map[string]*sync.Mutex
 	mutOnce *sync.Once
 	seen    map[string]stamp
+	shown   map[string]stamp // read results still in the conversation
 	cix     *codemap.Index
 	cixMu   sync.Mutex // serializes index updates
 }
@@ -98,6 +99,34 @@ func (e *Env) markSeen(p string) {
 	} else {
 		delete(e.seen, p)
 	}
+}
+
+// ForgetReads tells the tools that earlier read results are no longer
+// in the conversation (elided, compacted, cleared), so re-reads must
+// return full content again.
+func (e *Env) ForgetReads() {
+	e.mu.Lock()
+	e.shown = nil
+	e.mu.Unlock()
+}
+
+// alreadyShown reports whether this exact read of an unchanged file is
+// still in the conversation, and records it otherwise.
+func (e *Env) alreadyShown(key, p string) bool {
+	st, ok := statStamp(p)
+	if !ok {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if old, found := e.shown[key]; found && old == st {
+		return true
+	}
+	if e.shown == nil {
+		e.shown = map[string]stamp{}
+	}
+	e.shown[key] = st
+	return false
 }
 
 // freshness reports whether the model has seen p, and whether p changed
