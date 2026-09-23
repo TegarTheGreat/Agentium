@@ -1,6 +1,6 @@
 # Agentium
 
-A fast, minimal coding agent for the terminal. It ships as one small static binary with five tools and a system prompt under 1k tokens, and it works with any model provider. It also has an OS sandbox, undo, cross-session memory, and verification built in.
+A fast, minimal coding agent for the terminal. It ships as one small static binary with six tools and a system prompt under 1k tokens, and it works with any model provider. It also has an OS sandbox, undo, cross-session memory, and verification built in.
 
 Example session:
 
@@ -23,8 +23,8 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 | Binary | 8.1 MB, static, no runtime |
 | Startup | ~4 ms |
 | Memory | ~8 MB RSS |
-| Prompt + tool schemas | ~810 tokens (memory rules included) |
-| Tools | `read` `edit` `bash` `search` `fetch` (+ MCP tools if configured) |
+| Prompt + tool schemas | ~960 tokens (memory rules and `todo` included) |
+| Tools | `read` `edit` `bash` `search` `fetch` `todo` (+ MCP tools if configured) |
 
 ## What it does
 
@@ -33,7 +33,12 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 - Tool calls in the same turn run in parallel. Edits to the same file are serialized.
 - The system prompt and tool list are fixed for the session, and Anthropic cache breakpoints are set automatically. Cost is shown per turn.
 - Output is clipped head+tail with a hint on how to see the rest.
-- **Code map.** `read {outline:true}` shows a file's definitions with line numbers, or a map of a whole directory, for a fraction of the tokens of a full read. `search {symbol:"Type.Method"}` jumps to a definition. Go is parsed exactly; Python, JS/TS, Rust, Java, Kotlin, C#, Swift, PHP, C/C++, Ruby and more use line patterns.
+- **Code map.** A per-project index of definitions and identifiers, cached on disk and refreshed only for changed files (Go's standard library, ~13k files: 3.3 s the first time, under 0.5 s after).
+  - `read` on a directory shows a gitignore-aware tree.
+  - `read {outline:true}` shows a file's definitions with line numbers. On a large directory it gives a ranked repo map (PageRank over "file uses what another file defines", as in Aider, favoring files you touched) within ~2k tokens.
+  - `search {symbol:"Type.Method"}` finds definitions; `search {refs:"Name"}` finds uses with the enclosing function (`main.py:5 [in App.run]`).
+  - Go is parsed exactly; Python, JS/TS, Rust, Java, Kotlin, C#, Swift, PHP, C/C++, Ruby and more use line patterns that handle comments, template strings, docstrings and Rust lifetimes.
+  - The map is on demand, never pushed into the prompt: 2026 studies found always-injected context and imprecise retrieval neutral or harmful.
 - Markdown replies are rendered in the terminal while they stream (bold, `code`, bullets, fenced code untouched). Pipes get raw Markdown.
 
 **Reliable**
@@ -53,10 +58,22 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 - **Plan mode.** `--plan` or `/plan`: the agent investigates and answers with a plan, and cannot change anything. With the sandbox the workspace is mounted read-only, so any non-destructive command can still run; without it only read-only commands pass. `/go` carries the plan out.
 
 **Remembers**
-- `USER.md` (your preferences) and `MEMORY.md` (per project) are small, capped files injected as a frozen snapshot, together with active decisions from `DECISIONS.md`.
-- The model saves memory with plain lines in its reply: `@remember`, `@prefer`, `@decide … (supersedes D-003)`, `@forget`. Entries are redacted for secrets and refused if they look like prompt injection.
-- **Automatic recall.** A local BM25 index over decisions, a per-turn journal and past sessions is searched before every turn. Relevant snippets arrive as a small `<recall>` block. Nothing depends on the model remembering to call a tool.
-- `agentium tidy` consolidates memory (shows a diff first).
+- **Long-term.**
+  - `USER.md` (your preferences) and `MEMORY.md` (per project, shared by every subdirectory of the repo) are small files injected as a frozen snapshot, together with active decisions from `DECISIONS.md` (with `supersedes`).
+  - The model saves memory with plain lines in its reply: `@remember`, `@prefer`, `@decide … (supersedes D-003)`, `@forget`.
+  - Each entry is dated and cites the files it mentions. Notes whose files are gone, or that nobody confirmed for four months, are hidden and listed for `agentium tidy`. A near-duplicate replaces the older note instead of piling up.
+  - Secrets are redacted and injection-like text is refused. Memory written in a turn that read web pages or MCP output is held for review.
+- **Recall.**
+  - A local BM25 index over decisions, a per-turn journal (including the errors hit) and past sessions.
+  - At most two precise snippets are pushed before a turn.
+  - The model can look up more with `search {memory:"…"}`, e.g. "have we seen this error before".
+- **Working memory.** The harness keeps a ledger:
+  - files read and changed;
+  - recent commands with exit codes;
+  - the latest unresolved error;
+  - a `todo` list for multi-step work.
+
+  It survives compaction verbatim, so the summary never has to reconstruct it.
 
 **Any provider**
 - Two wire protocols (OpenAI Chat Completions and Anthropic Messages) plus Bedrock and Vertex clients cover the built-ins and every compatible provider in the [models.dev](https://models.dev) registry (180+).
@@ -149,7 +166,7 @@ For Terminal-Bench 2.x via Harbor, see [bench/terminalbench](bench/terminalbench
 
 ## Status
 
-v0.7.0. Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux and macOS. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
+v0.8.0. Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux and macOS. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
 
 ## Develop
 
