@@ -517,3 +517,50 @@ func TestBestOf(t *testing.T) {
 		t.Fatal("nothing should be applied when no attempt passes")
 	}
 }
+
+func TestSkillsAndPlanEndToEnd(t *testing.T) {
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	src := t.TempDir()
+	os.MkdirAll(filepath.Join(src, "greet"), 0o755)
+	os.WriteFile(filepath.Join(src, "greet", "SKILL.md"), []byte("---\nname: greet\ndescription: say hello politely\n---\nALWAYS-GREET-RULE"), 0o644)
+
+	if _, stderr, err := runBin(t, home, t.TempDir(), "", "skills", "add", src); err == nil || !strings.Contains(err.Error()+stderr, "--yes") {
+		t.Fatalf("non-interactive add must need --yes: %v %s", err, stderr)
+	}
+	if _, stderr, err := runBin(t, home, t.TempDir(), "", "skills", "add", src, "--yes"); err != nil || !strings.Contains(stderr, "installed /greet") {
+		t.Fatalf("add: %v %s", err, stderr)
+	}
+	if _, stderr, _ := runBin(t, home, t.TempDir(), "", "skills"); !strings.Contains(stderr, "/greet") || !strings.Contains(stderr, "say hello politely") {
+		t.Fatalf("list: %s", stderr)
+	}
+
+	dir := t.TempDir()
+	if _, stderr, err := runBin(t, home, dir, "", "-m", "fakeant/m", "/greet the team"); err != nil {
+		t.Fatalf("skill run: %v %s", err, stderr)
+	}
+	first := rec.all()[0]
+	js, _ := json.Marshal(first)
+	if !strings.Contains(string(js), "ALWAYS-GREET-RULE") || !strings.Contains(string(js), "Task: the team") {
+		t.Fatalf("skill body not sent: %s", js)
+	}
+	if !strings.Contains(fmt.Sprint(first["system"]), "- greet: say hello politely") {
+		t.Fatalf("skill index missing from system prompt: %v", first["system"])
+	}
+
+	// Plan mode: the fake model tries to edit; the edit must be refused.
+	dir = t.TempDir()
+	_, stderr, _ := runBin(t, home, dir, "", "-m", "fakeant/m", "--plan", "create hello.txt")
+	if _, err := os.Stat(filepath.Join(dir, "hello.txt")); err == nil {
+		t.Fatalf("plan mode wrote a file; stderr: %s", stderr)
+	}
+	if !strings.Contains(stderr, "plan mode") {
+		t.Fatalf("stderr should show the refusal: %s", stderr)
+	}
+
+	if _, _, err := runBin(t, home, t.TempDir(), "", "skills", "remove", "greet"); err != nil {
+		t.Fatal(err)
+	}
+}
