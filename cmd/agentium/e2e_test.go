@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 var (
@@ -592,5 +594,105 @@ func TestImageMention(t *testing.T) {
 	js, _ = json.Marshal(rec2.all()[0]["messages"])
 	if strings.Contains(string(js), "image/png") || !strings.Contains(stderr, "cannot view images") {
 		t.Fatalf("text-only model: %s / %s", js, stderr)
+	}
+}
+
+func TestACPEndToEnd(t *testing.T) {
+	rec := &recorder{}
+	srv := fakeModel(t, rec)
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	// Ask mode: the edit needs permission, which ACP asks the client for.
+	cfg, _ := os.ReadFile(filepath.Join(home, "config.json"))
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(strings.Replace(string(cfg), "{", `{"mode":"ask",`, 1)), 0o600)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+
+	cmd := exec.Command(buildBinary(t), "acp", "-m", "fakeant/m")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "AGENTIUM_HOME="+home, "FAKE_KEY=k", "AGENTIUM_OFFLINE=1")
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	lines := bufio.NewScanner(stdout)
+	lines.Buffer(make([]byte, 1<<20), 1<<20)
+	send := func(v any) { b, _ := json.Marshal(v); stdin.Write(append(b, '\n')) }
+	next := func() map[string]any {
+		done := make(chan map[string]any, 1)
+		go func() {
+			if lines.Scan() {
+				var m map[string]any
+				json.Unmarshal(lines.Bytes(), &m)
+				done <- m
+			} else {
+				done <- nil
+			}
+		}()
+		select {
+		case m := <-done:
+			if m == nil {
+				t.Fatalf("stdout closed; stderr: %s", stderr.String())
+			}
+			return m
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timeout; stderr: %s", stderr.String())
+		}
+		return nil
+	}
+
+	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}}})
+	if m := next(); m["result"].(map[string]any)["protocolVersion"].(float64) != 1 {
+		t.Fatalf("initialize: %v", m)
+	}
+	send(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{"cwd": dir, "mcpServers": []any{}}})
+	m := next()
+	res, _ := m["result"].(map[string]any)
+	sid, _ := res["sessionId"].(string)
+	if sid == "" || res["modes"].(map[string]any)["currentModeId"] != "ask" {
+		t.Fatalf("session/new: %v", m)
+	}
+	send(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": map[string]any{"sessionId": sid,
+		"prompt": []any{map[string]any{"type": "text", "text": "create hello.txt"}}}})
+	var kinds []string
+	var final map[string]any
+	for final == nil {
+		m := next()
+		switch {
+		case m["method"] == "session/update":
+			u := m["params"].(map[string]any)["update"].(map[string]any)
+			kinds = append(kinds, u["sessionUpdate"].(string))
+			if u["sessionUpdate"] == "tool_call" && (u["kind"] != "edit" || u["status"] != "in_progress") {
+				t.Errorf("tool_call: %v", u)
+			}
+		case m["method"] == "session/request_permission":
+			p := m["params"].(map[string]any)
+			if len(p["options"].([]any)) != 3 {
+				t.Errorf("permission options: %v", p)
+			}
+			send(map[string]any{"jsonrpc": "2.0", "id": m["id"], "result": map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": "allow"}}})
+			kinds = append(kinds, "permission")
+		case m["id"] == float64(3):
+			final = m
+		}
+	}
+	if final["result"].(map[string]any)["stopReason"] != "end_turn" {
+		t.Fatalf("prompt result: %v", final)
+	}
+	got := strings.Join(kinds, ",")
+	for _, want := range []string{"tool_call", "permission", "tool_call_update", "agent_message_chunk"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "hello.txt")); string(b) != "hi from anthropic" {
+		t.Fatalf("file not created after permission: %q (updates %s)", b, got)
+	}
+	send(map[string]any{"jsonrpc": "2.0", "id": 4, "method": "nope/unknown"})
+	if m := next(); m["error"] == nil {
+		t.Fatalf("unknown method: %v", m)
 	}
 }
