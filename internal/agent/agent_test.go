@@ -430,3 +430,19 @@ func TestRawInvalidatedAfterEdits(t *testing.T) {
 		}
 	}
 }
+
+func TestMaxCost(t *testing.T) {
+	loop := calls(tc("x", "bash", `{"cmd":"true"}`))
+	s := &script{steps: []func(provider.Request) (provider.Response, error){loop, loop, loop, loop}}
+	a := newAgent(t, s)
+	a.Cost = func(u provider.Usage) float64 { return 0.4 }
+	a.MaxCost = 1.0
+	st, err := a.Run(context.Background(), "spend")
+	if !errors.Is(err, ErrBudget) || st.Turns != 3 {
+		t.Fatalf("err=%v turns=%d", err, st.Turns)
+	}
+	last := a.Messages[len(a.Messages)-1]
+	if last.Role != provider.RoleTool || !last.IsError {
+		t.Fatalf("pending call must get a result: %+v", last)
+	}
+}

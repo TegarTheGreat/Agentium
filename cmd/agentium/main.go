@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -56,6 +57,8 @@ Flags:
   --effort LEVEL      reasoning effort: low|medium|high|xhigh|max (model default if unset)
   --fast              provider fast mode where available (Claude Opus: up to 2.5x output speed)
   -q                  quiet: no tool lines or stats
+  --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
+  --max-cost USD      stop once the session has cost this much (needs a known price)
   --max-turns N       stop after N model turns (default 100)
 
 In a session: /undo  /clear  /model <ref>  /mode <m>  /usage  /exit
@@ -101,16 +104,57 @@ func exit(err error) {
 	if err == nil {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "agentium:", err)
-	if errors.Is(err, context.Canceled) {
-		os.Exit(130)
+	var js *jsonOut
+	if errors.As(err, &js) {
+		os.Exit(js.code)
 	}
-	os.Exit(1)
+	fmt.Fprintln(os.Stderr, "agentium:", err)
+	os.Exit(exitCode(err))
+}
+
+// exitCode: 0 ok, 1 error, 2 stopped by a limit or safeguard, 130 interrupted.
+func exitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, context.Canceled):
+		return 130
+	case errors.Is(err, agent.ErrMaxTurns), errors.Is(err, agent.ErrStuck), errors.Is(err, agent.ErrTruncated),
+		errors.Is(err, agent.ErrRefused), errors.Is(err, agent.ErrBudget):
+		return 2
+	}
+	return 1
 }
 
 func isTTY(f *os.File) bool {
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+// jsonOut carries an exit code for --json runs, whose result was already
+// reported on stdout.
+type jsonOut struct{ code int }
+
+func (j *jsonOut) Error() string { return fmt.Sprintf("exit %d", j.code) }
+
+type jsonWriter struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+}
+
+func newJSONWriter(w io.Writer) *jsonWriter { return &jsonWriter{enc: json.NewEncoder(w)} }
+
+func (j *jsonWriter) emit(v any) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	_ = j.enc.Encode(v)
+}
+
+func clipText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "") + "…"
 }
 
 // ui renders agent events tersely.
@@ -247,6 +291,8 @@ func run(args []string) error {
 	maxTurns := fs.Int("max-turns", 0, "")
 	noSandbox := fs.Bool("no-sandbox", false, "")
 	effort := fs.String("effort", "", "")
+	asJSON := fs.Bool("json", false, "")
+	maxCost := fs.Float64("max-cost", 0, "")
 	fast := fs.Bool("fast", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -294,10 +340,16 @@ func run(args []string) error {
 	if *yolo {
 		m = policy.Yolo
 	}
+	if *asJSON && *prompt == "" {
+		return errors.New("--json needs a prompt (argument, -p, or stdin)")
+	}
+	if *asJSON {
+		*quiet = true
+	}
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
-	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY}
+	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}
 	gate.Approve = ap.ask
 
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
@@ -328,7 +380,8 @@ func run(args []string) error {
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
-		Tools: tool.All(), Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
+		MaxCost: *maxCost,
+		Tools:   tool.All(), Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
@@ -381,6 +434,20 @@ func run(args []string) error {
 			}
 			sess.AddCheckpoint(id, curPrompt)
 		}
+	}
+	a.Cost = func(us provider.Usage) float64 {
+		info, known := res.Info, res.Known
+		if fb != nil {
+			act := fb.Active()
+			info, known = act.Info, act.Known
+		}
+		if !known {
+			return 0
+		}
+		return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
+	}
+	if *maxCost > 0 && !res.Known && !*quiet {
+		fmt.Fprintln(os.Stderr, u.dim("· --max-cost: no price known for this model; the limit cannot be enforced"))
 	}
 	a.Events = agent.Events{
 		Text:      u.text,
@@ -470,6 +537,41 @@ func run(args []string) error {
 		return err
 	}
 
+	if *prompt != "" && *asJSON {
+		jw := newJSONWriter(os.Stdout)
+		jw.emit(map[string]any{"type": "session", "id": sess.ID, "model": res.Provider + "/" + res.Model, "sandbox": a.Env.Sandbox != nil, "mode": string(gate.GetMode())})
+		a.Events.Text = func(d string) { jw.emit(map[string]any{"type": "text", "text": d}) }
+		a.Events.ToolStart = func(c provider.ToolCall) {
+			jw.emit(map[string]any{"type": "tool_call", "id": c.ID, "name": c.Name, "args": c.Args})
+		}
+		a.Events.ToolDone = func(c provider.ToolCall, out string, err error, d time.Duration) {
+			ev := map[string]any{"type": "tool_result", "id": c.ID, "name": c.Name, "ok": err == nil, "ms": d.Milliseconds(), "output": clipText(out, 2000)}
+			if err != nil {
+				ev["error"] = err.Error()
+			}
+			jw.emit(ev)
+		}
+		a.Events.Notice = func(msg string) { jw.emit(map[string]any{"type": "notice", "message": msg}) }
+		a.Events.Retry = func(err error, wait time.Duration) {
+			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds()})
+		}
+		t0 := time.Now()
+		err := turn(*prompt)
+		final := ""
+		if len(replies) > 0 {
+			final = replies[len(replies)-1]
+		}
+		result := map[string]any{"type": "result", "ok": err == nil, "text": final, "turns": a.Turns,
+			"usage": a.Usage, "cost_usd": a.Spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": edited}
+		if err != nil {
+			result["error"] = err.Error()
+		}
+		jw.emit(result)
+		if err != nil {
+			return &jsonOut{code: exitCode(err)}
+		}
+		return nil
+	}
 	if *prompt != "" {
 		return turn(*prompt)
 	}
