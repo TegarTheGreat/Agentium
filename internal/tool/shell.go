@@ -188,6 +188,7 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
+	contain(cmd)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	var err error

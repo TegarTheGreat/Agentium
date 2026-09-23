@@ -106,13 +106,13 @@ make build
 **Extensible**
 - **Skills.** A skill is a folder with a `SKILL.md` (the format Claude Code and Codex use). Skills in `~/.agentium/skills`, `~/.claude/skills` and each `.agentium/skills` or `.claude/skills` of the project are listed in one line each; the model reads a skill when a task matches it, and `/name [task]` runs one directly.
 - `agentium skills add <dir | git URL | owner/repo[#ref]>` fetches without running anything, pins the commit, lists bundled scripts, and installs only after you confirm. There is no marketplace to trust: you choose the source. Also `skills list|show|remove`.
-- **MCP servers**, local (stdio) or remote (`"url"` with `"headers"`, Streamable HTTP or `"type": "sse"`). Their tools appear as `mcp__server__tool`, and a stdio server's stderr goes to `~/.agentium/logs/`.
+- **MCP servers**, local (stdio) or remote (`"url"` with `"headers"`, Streamable HTTP or `"type": "sse"`). Their tools appear as `mcp__server__tool`, and a stdio server's stderr goes to `~/.agentium/logs/`. Servers that need OAuth (MCP authorization spec: discovery, dynamic client registration, PKCE) log in with `agentium mcp login <name>`; tokens refresh automatically. `agentium mcp list` shows status.
 - **Hooks**: `post_edit` and `stop`.
-- **Editors:** `agentium acp` speaks the Agent Client Protocol, so Zed, JetBrains and other ACP clients can use Agentium. Tool calls, plans and permission prompts appear in the editor.
+- **Editors:** `agentium acp` speaks the Agent Client Protocol, so Zed, JetBrains and other ACP clients can use Agentium. Tool calls, plans and permission prompts appear in the editor. Messages are checked in CI against the schemas of the official ACP SDK.
 
 **Works like a team**
 - **Sub-agents.** `task {prompt, explore?}` gives a self-contained job to a sub-agent with a fresh context, and only its report comes back. Several run in parallel; `explore` makes one read-only.
-- **Background jobs.** `bash {background:true}` keeps dev servers, watchers and REPLs running. The model reads new output, sends input and stops them by job id. Jobs end with the session.
+- **Background jobs.** `bash {background:true}` keeps dev servers, watchers and REPLs running. The model reads new output, sends input and stops them by job id. `tty:true` runs a job in a pseudo-terminal for programs that insist on one (Linux and macOS). Jobs end with the session.
 - **Language servers.** After each edit, the project's language server reports the file's errors: type errors, bad imports, calls to things that do not exist. Supported: gopls, pyright, typescript-language-server, rust-analyzer and clangd, when installed.
 - **Web search.** `fetch {search:"…"}` uses Brave or Tavily when you have a key, otherwise DuckDuckGo.
 
@@ -137,7 +137,7 @@ In a session:
 - **Commands:** `/plan`, `/go`, `/<skill> [task]`, `/skills`, `/undo`, `/sessions`, `/resume <n>`, `/clear`, `/model <provider/model>`, `/mode ask|auto|yolo|plan`, `/usage`, `/exit`.
 - **Keys:** ↑/↓ history, Ctrl-A/E/U/K/W. Pastes keep their newlines. End a line with `\` for a newline. Ctrl-C interrupts a running turn.
 
-Other commands: `agentium providers`, `agentium models [provider] [--refresh]`, `agentium login [--oauth] <provider>`, `agentium logout <provider>`, `agentium undo`, `agentium tidy`, `agentium skills`, `agentium bench [-m model]`. Set `AGENTIUM_RAW=1` (or `NO_COLOR`) for unrendered output.
+Other commands: `agentium providers`, `agentium models [provider] [--refresh]`, `agentium login [--oauth] <provider>`, `agentium logout <provider>`, `agentium undo`, `agentium tidy`, `agentium skills`, `agentium mcp list|login|logout`, `agentium acp`, `agentium bench [-m model]`. Set `AGENTIUM_RAW=1` (or `NO_COLOR`) for unrendered output.
 
 ## Login
 
@@ -186,7 +186,7 @@ For Terminal-Bench 2.x via Harbor, see [bench/terminalbench](bench/terminalbench
 
 ## Status
 
-v0.10.0. Linux and macOS are fully supported. On Windows, commands run in Git Bash (or PowerShell) without an OS sandbox. Design principles (brain, natural laws, physics mapped to concrete mechanisms): [docs/DESIGN.md](docs/DESIGN.md). Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux and macOS. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
+v0.11.0. Linux and macOS are fully supported. On Windows, commands run in Git Bash (or PowerShell), the line editor works in the console, and a Job Object ends every command Agentium started when it exits; there is **no OS sandbox on Windows**, so the approval gate is the only guard there (use `ask` mode). Design principles (brain, natural laws, physics mapped to concrete mechanisms): [docs/DESIGN.md](docs/DESIGN.md). Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux, macOS and Windows. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
 
 ## Develop
 
