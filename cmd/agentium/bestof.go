@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/agent"
+	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
+	"github.com/tegarthegreat/agentium/internal/skill"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
@@ -113,7 +115,7 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 				env.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(c.dir)}
 			}
 			try := &agent.Agent{
-				Client: a.Client, Model: a.Model, System: agent.SystemPrompt(c.work, false, ""),
+				Client: a.Client, Model: a.Model, System: agent.SystemPrompt(c.work, false, "") + skill.Prompt(skill.Discover(config.Home(), c.work)),
 				Tools: tool.All(), Env: env, MaxTurns: a.MaxTurns, MaxTokens: a.MaxTokens,
 				ContextTokens: a.ContextTokens, Verify: true, Reasoning: a.Reasoning, FastMode: a.FastMode, Cost: a.Cost,
 				Events: agent.Events{

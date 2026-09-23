@@ -27,6 +27,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"github.com/tegarthegreat/agentium/internal/session"
+	"github.com/tegarthegreat/agentium/internal/skill"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
@@ -44,6 +45,7 @@ Usage:
   agentium models [provider]    list models with context size and price (models.dev)
   agentium undo                 revert the file changes of the last turn here
   agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
+  agentium skills [list|show|add|remove]   manage SKILL.md skills (add: dir, git URL or owner/repo, pinned + reviewed)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
 
@@ -63,7 +65,7 @@ Flags:
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
 
-In a session: /plan  /go  /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
+In a session: /<skill> [task]  /skills  /plan  /go  /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
 Keys: ↑/↓ history · Ctrl-A/E/U/K/W · paste keeps newlines · end a line with \ for a newline
 `
 
@@ -97,6 +99,9 @@ func main() {
 			return
 		case "bench":
 			exit(cmdBench(os.Args[2:]))
+			return
+		case "skills":
+			exit(cmdSkills(os.Args[2:]))
 			return
 		}
 	}
@@ -400,7 +405,8 @@ func run(args []string) error {
 		}()
 		tools = append(tools, tool.MCPTools(clients)...)
 	}
-	system := agent.SystemPrompt(cwd, mem != nil, snapshot)
+	skills := skill.Discover(config.Home(), cwd)
+	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + skill.Prompt(skills)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
@@ -527,6 +533,12 @@ func run(args []string) error {
 		curPrompt = input
 		replies, edited = nil, nil
 		send := input
+		if msg, ok, err := skill.Invoke(skills, input); ok {
+			if err != nil {
+				return err
+			}
+			send = msg
+		}
 		if mem != nil {
 			if block, n := mem.recall(input); n > 0 {
 				send = block + "\n\n" + input
@@ -689,7 +701,11 @@ func run(args []string) error {
 				line += "\n\n" + extra
 			}
 		}
-		if strings.HasPrefix(line, "/") {
+		if strings.HasPrefix(line, "/") && !skillCall(skills, line) {
+			if line == "/skills" {
+				printSkills(skills)
+				continue
+			}
 			if done := slash(line, a, gate, cfg, auth, sess, store); done {
 				return nil
 			}
@@ -788,7 +804,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
 	default:
-		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo|plan> /plan /go /usage /exit")
+		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo|plan> /plan /go /skills /<skill> /usage /exit")
 	}
 	return false
 }
