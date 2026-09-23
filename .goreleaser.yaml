@@ -18,5 +18,26 @@ archives:
     files: [README.md, LICENSE]
 checksum:
   name_template: checksums.txt
+release:
+  name_template: "Agentium {{ .Tag }}"
+  # Re-running a release refreshes its notes and binaries.
+  mode: replace
+  replace_existing_artifacts: true
+# Used only when CHANGELOG.md has no section for the tag.
 changelog:
   use: github
+  sort: asc
+  format: "{{ .SHA }} {{ .Message }}"
+  filters:
+    exclude:
+      - "^Merge "
+      - "^(ci|test|chore|docs)(\\(.*\\))?:"
+  groups:
+    - title: Features
+      regexp: '^feat(\(.*\))?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.*\))?:'
+      order: 1
+    - title: Other changes
+      order: 999

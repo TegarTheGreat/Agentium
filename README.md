@@ -289,7 +289,7 @@ make cross   # binaries for Linux, macOS and Windows in dist/
 
 - **Tests:** unit and end-to-end suites run against fake model servers for every protocol, a fake MCP server and real pseudo-terminals.
 - **CI:** runs on Linux, macOS and Windows, and validates the ACP server against the official SDK schemas.
-- **Releases:** built with GoReleaser when a `v*` tag is pushed.
+- **Releases:** built with GoReleaser from a `v*` tag, or from **Actions → release → Run workflow**. Notes come from [CHANGELOG.md](CHANGELOG.md).
 
 Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
 
