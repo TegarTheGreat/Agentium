@@ -58,7 +58,10 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 				rs.editedCode = false
 			}
 		}
-		if r.IsError || c.Name == "bash" && failedExit.MatchString(r.Text) {
+		// A denial is the user's or the policy's answer, not a sign the
+		// model needs to think harder.
+		denied := r.IsError && strings.Contains(r.Text, "denied (")
+		if !denied && (r.IsError || c.Name == "bash" && failedExit.MatchString(r.Text)) {
 			failed = true
 		}
 		h := sha256.Sum256([]byte(c.Name + "\x00" + canonical(c.Args) + "\x00" + r.Text))

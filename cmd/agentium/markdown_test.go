@@ -30,6 +30,7 @@ func TestMarkdownStream(t *testing.T) {
 		{[]string{"**unclosed bold\nnext"}, "</><b>unclosed bold</>\nnext\n"},
 		{[]string{"a ** b and src/**/*.go stay"}, "a ** b and src/**/*.go stay\n"},
 		{[]string{"see (**this**) now"}, "see (</><b>this</>) now\n"},
+		{[]string{"**[link](x)** and ***both***"}, "</><b>[link](x)</> and </><b>both</>\n"},
 		{[]string{"---\r\nx\r\n"}, "<d>" + strings.Repeat("─", 40) + "</>\nx\n"},
 		{[]string{"````md\n```go\nx := **y**\n```\n````\nafter **b**"}, "<d>````md</>\n```go\nx := **y**\n```\n<d>````</>\nafter </><b>b</>\n"},
 	}
@@ -65,6 +66,9 @@ func TestMarkdownEndResetsFence(t *testing.T) {
 }
 
 func TestRuneWidth(t *testing.T) {
+	if strWidth("✅⭐") != 4 || strWidth("🫠") != 2 {
+		t.Fatal("emoji width")
+	}
 	if strWidth("日本語") != 6 || strWidth("abc") != 3 || strWidth("👍") != 2 || strWidth("é") != 1 || strWidth("é") != 1 {
 		t.Fatal("runeWidth")
 	}

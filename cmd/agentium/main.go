@@ -197,7 +197,9 @@ func (u *ui) text(d string) {
 
 func (u *ui) endLine() {
 	if u.md != nil {
-		u.md.End()
+		if u.md.Pending() {
+			u.md.Flush() // a tool line mid-reply: keep block state (e.g. a fence)
+		}
 		u.midLine = false
 		return
 	}
@@ -519,6 +521,11 @@ func run(args []string) error {
 		},
 		Notice: func(msg string) { u.line("· " + msg) },
 		TurnFinish: func(r provider.Response) {
+			if u.md != nil {
+				u.mu.Lock()
+				u.md.End() // a reply is over: its unclosed fence must not leak
+				u.mu.Unlock()
+			}
 			if r.Text != "" {
 				replies = append(replies, r.Text)
 			}
@@ -770,6 +777,8 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		}
 		a.Client, a.Model = res.Client, res.Model
 		a.Env.Vision = res.Vision()
+		// The new model's reasoning capabilities, same requested effort.
+		a.Reasoning = res.Reasoning(a.Reasoning.Effort)
 		sess.Model = res.Provider + "/" + res.Model
 		fmt.Fprintln(os.Stderr, "· model:", sess.Model)
 	case "/mode":

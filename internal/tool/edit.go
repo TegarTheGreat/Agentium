@@ -336,8 +336,16 @@ func shellQuote(s string) string {
 // what is on disk is what was meant (a conservation check).
 func writeAtomic(p string, data []byte, perm fs.FileMode) error {
 	dir := filepath.Dir(p)
+	// Keep hard links, ownership, setuid/setgid bits and very long names
+	// intact by writing in place for such files.
+	if st, err := os.Stat(p); err == nil && (sharedFile(st) || st.Mode()&(fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0) || len(filepath.Base(p)) > 200 {
+		return writeInPlace(p, data, perm)
+	}
 	f, err := os.CreateTemp(dir, "."+filepath.Base(p)+".agentium-*")
 	if err != nil {
+		if os.IsPermission(err) {
+			return writeInPlace(p, data, perm) // writable file in a read-only directory
+		}
 		return err
 	}
 	tmp := f.Name()
@@ -357,11 +365,27 @@ func writeAtomic(p string, data []byte, perm fs.FileMode) error {
 		return err
 	}
 	if err := os.Rename(tmp, p); err != nil {
-		return err
+		// e.g. Windows, where a file open in an editor cannot be replaced.
+		return writeInPlace(p, data, perm)
 	}
 	if d, err := os.Open(dir); err == nil {
 		_ = d.Sync() // make the rename itself durable where supported
 		d.Close()
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, data) {
+		return fmt.Errorf("write verification failed for %s: the file on disk differs from what was written", p)
+	}
+	return nil
+}
+
+// writeInPlace is the fallback: write the file directly, then verify.
+func writeInPlace(p string, data []byte, perm fs.FileMode) error {
+	if err := os.WriteFile(p, data, perm); err != nil {
+		return err
 	}
 	got, err := os.ReadFile(p)
 	if err != nil {

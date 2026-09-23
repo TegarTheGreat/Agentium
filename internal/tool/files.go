@@ -50,10 +50,18 @@ var readTool = Tool{
 			if st.IsDir() {
 				return env.outlineDir(ctx, p), nil
 			}
+			if !st.Mode().IsRegular() {
+				return "", fmt.Errorf("%s is not a regular file", a.Path)
+			}
 			return outlineFile(p)
 		}
 		if st.IsDir() {
 			return tree(ctx, p)
+		}
+		// Before anything opens it: opening a FIFO blocks, and a device
+		// like /dev/zero never ends.
+		if !st.Mode().IsRegular() {
+			return "", fmt.Errorf("%s is not a regular file (device, pipe or socket); use bash if you really need it", a.Path)
 		}
 		if st.Size() <= MaxImageBytes*4 {
 			if head := fileHead(p); len(head) > 0 {
@@ -61,9 +69,6 @@ var readTool = Tool{
 					return out, err
 				}
 			}
-		}
-		if !st.Mode().IsRegular() {
-			return "", fmt.Errorf("%s is not a regular file (device, pipe or socket); use bash if you really need it", a.Path)
 		}
 		if st.Size() > readWholeMax {
 			// Never load a multi-GB log to show 60 KB of it.
@@ -178,6 +183,9 @@ func readLarge(p string, size int64, offset, limit int) (string, error) {
 		limit = readMaxLines
 	}
 	r := bufio.NewReaderSize(f, 64*1024)
+	if head, _ := r.Peek(8000); bytes.IndexByte(head, 0) >= 0 {
+		return fmt.Sprintf("(binary file, %d MB)", size>>20), nil
+	}
 	var sb strings.Builder
 	line, shown := 0, 0
 	for shown < limit && sb.Len() < readMaxBytes {
