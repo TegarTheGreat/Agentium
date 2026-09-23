@@ -109,6 +109,8 @@ type runState struct {
 	reminded    bool
 	truncations int
 	sigs        []string
+	failStreak  int // consecutive tool batches with a failure
+	escalations int
 }
 
 // Run sends input and loops until the model stops calling tools.
@@ -121,6 +123,10 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		a.Note = ""
 	}
 	a.Ledger.startTurn()
+	// Thinking harder is for the moments that need it; each user turn
+	// starts again at the configured level.
+	base := a.Reasoning.Effort
+	defer func() { a.Reasoning.Effort = base }()
 	if a.Env != nil {
 		a.Env.StartTurn()
 		if a.Env.Gate != nil && a.Env.Gate.GetMode() == policy.Plan {

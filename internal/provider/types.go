@@ -227,3 +227,35 @@ func RetryAfter(err error) time.Duration {
 	}
 	return 0
 }
+
+// NextEffort returns the next reasoning level above cur that the model
+// supports, or "" when there is none (or the model has no levels). An
+// empty cur counts as "high", the usual default.
+func (r Reasoning) NextEffort() string {
+	order := []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+	supported := r.Efforts
+	if len(supported) == 0 {
+		if !r.Budget {
+			return ""
+		}
+		supported = order // budget_tokens models: any level maps to a budget
+	}
+	cur := r.Effort
+	if cur == "" {
+		cur = "high"
+	}
+	at := -1
+	for i, o := range order {
+		if o == cur {
+			at = i
+		}
+	}
+	for _, o := range order[at+1:] {
+		for _, s := range supported {
+			if s == o {
+				return o
+			}
+		}
+	}
+	return ""
+}
