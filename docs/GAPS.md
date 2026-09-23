@@ -234,3 +234,49 @@ Temuan rendah: `impl<'a>` di Rust, `def` di dalam docstring Python, `ForCwd` mem
 3. Subagent sederhana (tool `task`: konteks terpisah, hanya ringkasan yang kembali).
 4. Diagnostik LSP opsional (gopls / tsserver / pyright kalau terpasang).
 5. Run Terminal-Bench 2.1 nyata, dengan API key milik pemilik.
+
+---
+
+## F. Pemetaan kode dan memori: sebelum dan sesudah v0.8.0
+
+Riset ketiga (Sep 2026) menghasilkan tiga temuan pokok:
+1. Retrieval harus presisi, kalau tidak justru merugikan. CodeGrep (arxiv 2608.05886): suntikan BM25 **menurunkan** resolve rate; hanya retriever dengan presisi ~0,68 yang membantu.
+2. Konteks yang selalu disuntikkan menambah biaya. ETH Zurich 2026: file konteks buatan LLM −0,5% s.d. −2%, dan +20% biaya.
+3. Memori harus kecil, divalidasi, dan dibatasi. Copilot memvalidasi sitasi saat dipakai dan memberi kedaluwarsa: merge rate PR 83% → 90%. Di VibeMemBench, 11 dari 12 sistem memori otomatis kalah dari tanpa memori.
+
+### F1. Pemetaan file, folder, dan kode
+
+| Aspek | v0.7 (sebelum) | v0.8 (sekarang) | Pembanding |
+|---|---|---|---|
+| Folder | Daftar 1 level | Pohon rekursif, patuh .gitignore, level dalam diringkas jadi jumlah file | Claude Code: ls/glob |
+| Indeks | Scan ulang semua file tiap panggilan | Indeks per proyek di disk, hanya file berubah yang diparse ulang, paralel. Go stdlib ~13k file: 3,3 dtk pertama, 0,46 dtk berikutnya, cari simbol ~70 ms | Aider: cache tag per mtime |
+| Definisi | `search {symbol}` | Sama, tapi instan dari indeks | LSP go-to-definition |
+| Pemakaian | Tidak ada | `search {refs}` + fungsi pembungkus (`[in App.run]`); komentar dan definisi dikecualikan | LSP find-references (Claude Code, OpenCode) |
+| Peta repo | Semua file urut abjad (bisa ~12k token) | Peta berperingkat ala Aider: graf identifier + PageRank + fokus ke file yang disentuh, dibatasi ~2k token, **on-demand** | Aider (1k token, disuntik); kita on-demand sesuai temuan riset |
+| Akurasi parser | Salah pada lifetime Rust, docstring Python, template string, CRLF | Scanner berstatus: komentar blok, string multi-baris, char literal, docstring, CRLF | Tree-sitter (Aider) lebih akurat |
+
+**Masih kurang:** belum ada LSP (error tipe lintas file, rename aman); bahasa selain Go masih berbasis pola baris, bukan parser penuh; embedding sengaja tidak dipakai (bukti netral/negatif).
+
+### F2. Memori jangka panjang
+
+| Aspek | Sebelum | Sekarang |
+|---|---|---|
+| Kunci proyek | Direktori kerja (subfolder = memori terpisah) | Root git: satu memori per repo |
+| Fakta basi | Selamanya di prompt | Tanggal + sitasi file; disembunyikan kalau file hilang atau tidak dikonfirmasi 120 hari; `tidy` meninjaunya |
+| Duplikat | Hanya yang persis sama | Mirip ≥ 60% (Jaccard) → **update**, bukan ditumpuk |
+| Recall otomatis | Hingga 4 hit, 1.500 karakter, ambang skor absolut | Maks 2 hit, 700 karakter; minimal 2 kata kueri dan ≥ 50% kata kueri harus cocok |
+| Recall on-demand | Tidak ada | `search {memory}` |
+| Pelajaran dari error | Tidak dicatat | Jurnal mencatat error tiap giliran |
+| Keracunan memori | Filter injeksi | + tulisan dari giliran yang membaca web/MCP **ditahan** untuk ditinjau |
+| Ukuran snapshot | 3.700 karakter | 3.000 karakter |
+
+### F3. Memori jangka pendek (dalam sesi)
+
+| Aspek | Sebelum | Sekarang |
+|---|---|---|
+| State kerja | Hanya di ringkasan LLM | **Ledger** deterministik: file dibaca/diubah, 10 perintah terakhir + exit code, error terakhir yang belum beres (verbatim, hilang otomatis saat perintah yang sama lulus) |
+| Daftar tugas | Tidak ada | Tool `todo` (maks 12 item) |
+| Setelah compaction | Ringkasan LLM saja | Ringkasan + ledger + todo apa adanya (pola Claude Code/Codex/OpenCode) |
+| Masking output lama | Elision di 55% jendela | Sama (JetBrains 2025: masking ≈ ringkasan LLM dengan biaya ~½) |
+
+**Catatan jujur:** semua perbaikan ini didasarkan pada bukti eksternal dan tes unit/e2e. Belum ada pengukuran end-to-end dengan model asli (butuh API key). Celah keamanan E3 #1–#5 dan #7–#11 belum ditutup; #6 (skill + recall) sudah diperbaiki.

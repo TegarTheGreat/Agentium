@@ -1,4 +1,4 @@
-// Package tool implements Agentium's five tools: read, edit, bash, search,
+// Package tool implements Agentium's core tools: read, edit, bash, search,
 // fetch. Schemas are kept tiny on purpose: every byte is sent every turn.
 package tool
 
