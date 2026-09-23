@@ -22,6 +22,8 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           v="${TAG#v}"
+          # Keep this branch's GoReleaser config even when an older tag is checked out.
+          cp .goreleaser.yaml "$RUNNER_TEMP/goreleaser.yaml"
           awk -v v="$v" '
             index($0, "## [" v "]") == 1 { on = 1; next }
             on && /^## \[/ { exit }
@@ -52,6 +54,6 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean ${{ env.NOTES }}
+          args: release --clean --config ${{ runner.temp }}/goreleaser.yaml ${{ env.NOTES }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
