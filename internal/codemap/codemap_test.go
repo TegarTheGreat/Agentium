@@ -130,3 +130,35 @@ func TestMatchAndFormat(t *testing.T) {
 		t.Fatal("Supported")
 	}
 }
+
+func TestOutlineTrickySyntax(t *testing.T) {
+	cases := []struct{ file, src, want string }{
+		{"lt.rs", `struct X<'a> { s: &'a str }
+impl<'a> Display for X<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let c = '{';
+        Ok(())
+    }
+}
+fn after() {}
+`, "X X X.fmt after"},
+		{"doc.py", `def real():
+    """
+    def fake():
+    class Fake:
+    """
+    return 1
+
+class After:
+    '''one-line doc'''
+    def m(self): pass
+`, "real After After.m"},
+		{"tpl.ts", "const html = `\n  function notReal() {\n`;\n/* class Hidden {\n} */\nexport function real() {\n  return '{';\n}\n", "real"},
+		{"crlf.java", "public class A {\r\n    public void run() {\r\n    }\r\n}\r\n", "A A.run"},
+	}
+	for _, c := range cases {
+		if got := names(Outline(c.file, []byte(c.src))); got != c.want {
+			t.Errorf("%s:\n got  %s\n want %s\n%s", c.file, got, c.want, Format(Outline(c.file, []byte(c.src))))
+		}
+	}
+}

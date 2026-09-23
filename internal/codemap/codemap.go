@@ -193,6 +193,12 @@ type lang struct {
 	// indent-scoped languages nest by indentation; brace languages by
 	// the depth of open braces.
 	braces bool
+	// charLit: ' starts a one-character literal ('x', '\n'), not a
+	// string, so Rust lifetimes ('a) and C chars don't confuse counting.
+	charLit bool
+	// docQuotes: triple-quoted strings (Python docstrings) hide their
+	// content from the outline.
+	docQuotes bool
 }
 
 func p(kind, re string) pattern { return pattern{regexp.MustCompile(re), kind} }
@@ -210,7 +216,7 @@ var (
 		p("method", `^\s+(?:(?:public|private|protected|static|readonly|async|override|get|set)\s+)*(?P<name>[\w$]+)\s*(<[^>]*>)?\([^)]*\)\s*(:\s*[^{]+)?\{\s*$`),
 	}
 	langs = map[string]*lang{
-		".py": {pats: []pattern{
+		".py": {docQuotes: true, pats: []pattern{
 			p("func", `^\s*(async\s+)?def\s+(?P<name>\w+)`),
 			p("class", `^\s*class\s+(?P<name>\w+)`),
 		}},
@@ -218,23 +224,24 @@ var (
 			p("func", `^\s*def\s+(self\.)?(?P<name>\w+[?!=]?)`),
 			p("class", `^\s*(class|module)\s+(?P<name>[\w:]+)`),
 		}},
-		".rs": {braces: true, pats: []pattern{
+		".rs": {braces: true, charLit: true, pats: []pattern{
 			p("func", `^\s*(pub(\([^)]*\))?\s+)?(default\s+)?(const\s+)?(async\s+)?(unsafe\s+)?(extern\s+"[^"]*"\s+)?fn\s+(?P<name>\w+)`),
 			p("type", `^\s*(pub(\([^)]*\))?\s+)?(struct|enum|trait|type|union|mod)\s+(?P<name>\w+)`),
-			p("impl", `^\s*impl\b(<[^>]*>)?\s*(?:[\w:<>, ]+\s+for\s+)?(?P<name>\w+)`),
+			p("impl", `^\s*(?:unsafe\s+)?impl\b(<[^>]*>)?\s*(?:[\w:<>,'& ]+\s+for\s+)?(?:&'?\w*\s*)?(?P<name>\w+)`),
 			p("macro", `^\s*macro_rules!\s*(?P<name>\w+)`),
 		}},
-		".java":  {braces: true, pats: jvm()},
-		".kt":    {braces: true, pats: append(jvm(), p("func", `^\s*(\w+\s+)*fun\s+(<[^>]*>\s*)?([\w.]+\.)?(?P<name>\w+)`))},
-		".cs":    {braces: true, pats: jvm()},
-		".scala": {braces: true, pats: append(jvm(), p("func", `^\s*(\w+\s+)*def\s+(?P<name>\w+)`))},
+		".java":  {braces: true, charLit: true, pats: jvm()},
+		".kt":    {braces: true, charLit: true, pats: append(jvm(), p("func", `^\s*(\w+\s+)*fun\s+(<[^>]*>\s*)?([\w.]+\.)?(?P<name>\w+)`))},
+		".cs":    {braces: true, charLit: true, pats: jvm()},
+		".scala": {braces: true, charLit: true, pats: append(jvm(), p("func", `^\s*(\w+\s+)*def\s+(?P<name>\w+)`))},
 		".swift": {braces: true, pats: append(jvm(), p("func", `^\s*(\w+\s+)*func\s+(?P<name>\w+)`))},
 		".php": {braces: true, pats: []pattern{
 			p("class", `^\s*(abstract\s+|final\s+)?(class|interface|trait|enum)\s+(?P<name>\w+)`),
 			p("func", `^\s*(\w+\s+)*function\s+&?(?P<name>\w+)`),
 		}},
-		".c": {braces: true, pats: cLike}, ".h": {braces: true, pats: cLike}, ".cc": {braces: true, pats: cLike},
-		".cpp": {braces: true, pats: cLike}, ".hpp": {braces: true, pats: cLike}, ".cxx": {braces: true, pats: cLike},
+		".c": {braces: true, charLit: true, pats: cLike}, ".h": {braces: true, charLit: true, pats: cLike},
+		".cc": {braces: true, charLit: true, pats: cLike}, ".cpp": {braces: true, charLit: true, pats: cLike},
+		".hpp": {braces: true, charLit: true, pats: cLike}, ".cxx": {braces: true, charLit: true, pats: cLike},
 		".js": {braces: true, pats: jsLike}, ".jsx": {braces: true, pats: jsLike}, ".mjs": {braces: true, pats: jsLike},
 		".cjs": {braces: true, pats: jsLike}, ".ts": {braces: true, pats: jsLike}, ".tsx": {braces: true, pats: jsLike},
 		".lua": {pats: []pattern{p("func", `^\s*(local\s+)?function\s+(?P<name>[\w.:]+)`)}},
@@ -256,22 +263,37 @@ func regexOutline(l *lang, src []byte) []Symbol {
 	var out []Symbol
 	depth := 0
 	var cols []int // indentation columns of enclosing definitions
-	inBlockComment := false
+	sc := &scanner{charLit: l.charLit}
+	inDoc := "" // open triple quote, for docQuotes languages
 	lines := bytes.Split(src, []byte("\n"))
 	for i, raw := range lines {
-		line := string(raw)
+		line := strings.TrimSuffix(string(raw), "\r")
 		trim := strings.TrimSpace(line)
-		if inBlockComment {
-			if strings.Contains(trim, "*/") {
-				inBlockComment = false
+		if l.docQuotes {
+			if inDoc != "" {
+				if strings.Count(line, inDoc)%2 == 1 {
+					inDoc = ""
+				}
+				continue
 			}
-			continue
+			for _, q := range []string{`"""`, `'''`} {
+				if strings.Count(line, q)%2 == 1 {
+					inDoc = q
+				}
+			}
+			if inDoc != "" && !strings.HasPrefix(trim, "def ") && !strings.HasPrefix(trim, "class ") && !strings.HasPrefix(trim, "async ") {
+				continue
+			}
 		}
-		if strings.HasPrefix(trim, "/*") && !strings.Contains(trim, "*/") {
-			inBlockComment = true
-			continue
+		// A line that starts inside a multi-line comment or string is
+		// not a definition.
+		startsHidden := sc.hidden()
+		delta := 0
+		if l.braces {
+			delta = sc.scan(line)
 		}
-		if trim == "" || strings.HasPrefix(trim, "//") || strings.HasPrefix(trim, "#") || strings.HasPrefix(trim, "*") {
+		if startsHidden || trim == "" || strings.HasPrefix(trim, "//") || strings.HasPrefix(trim, "#") || strings.HasPrefix(trim, "*") || strings.HasPrefix(trim, "/*") {
+			depth = max(depth+delta, 0)
 			continue
 		}
 		level := depth
@@ -297,12 +319,7 @@ func regexOutline(l *lang, src []byte) []Symbol {
 			}
 			break
 		}
-		if l.braces {
-			depth += braceDelta(line)
-			if depth < 0 {
-				depth = 0
-			}
-		}
+		depth = max(depth+delta, 0)
 	}
 	// Record the enclosing type for methods so "Type.method" matches.
 	var stack []Symbol
@@ -336,27 +353,80 @@ func indentCols(line string) int {
 	return n
 }
 
-// braceDelta counts braces outside strings and line comments, roughly.
-func braceDelta(line string) int {
+// scanner counts braces outside strings and comments, carrying state
+// across lines for block comments and backtick (template/raw) strings.
+type scanner struct {
+	charLit  bool
+	block    bool // inside /* */
+	backtick bool // inside a multi-line ` string
+}
+
+func (s *scanner) hidden() bool { return s.block || s.backtick }
+
+func (s *scanner) scan(line string) int {
 	d := 0
-	var quote rune
-	prev := rune(0)
-	for _, r := range line {
+	rs := []rune(line)
+	var quote rune // " or ' within this line
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		next := rune(0)
+		if i+1 < len(rs) {
+			next = rs[i+1]
+		}
 		switch {
+		case s.block:
+			if r == '*' && next == '/' {
+				s.block = false
+				i++
+			}
+		case s.backtick:
+			if r == '\\' {
+				i++
+			} else if r == '`' {
+				s.backtick = false
+			}
 		case quote != 0:
-			if r == quote && prev != '\\' {
+			if r == '\\' {
+				i++
+			} else if r == quote {
 				quote = 0
 			}
-		case r == '"' || r == '\'' || r == '`':
-			quote = r
-		case r == '/' && prev == '/':
+		case r == '/' && next == '/':
 			return d
+		case r == '/' && next == '*':
+			s.block = true
+			i++
+		case r == '`':
+			s.backtick = true
+		case r == '"':
+			quote = r
+		case r == '\'':
+			if !s.charLit {
+				quote = r
+			} else if n := charLitLen(rs[i:]); n > 0 {
+				i += n - 1
+			} // else a lifetime or label: ignore
 		case r == '{':
 			d++
 		case r == '}':
 			d--
 		}
-		prev = r
 	}
 	return d
+}
+
+// charLitLen returns the length of a char literal at the start of rs
+// ('x', '\n', '\u{1F600}', '\x41'), or 0 if it is not one.
+func charLitLen(rs []rune) int {
+	if len(rs) >= 3 && rs[1] != '\\' && rs[2] == '\'' {
+		return 3
+	}
+	if len(rs) >= 4 && rs[1] == '\\' {
+		for j := 3; j < len(rs) && j < 12; j++ {
+			if rs[j] == '\'' {
+				return j + 1
+			}
+		}
+	}
+	return 0
 }

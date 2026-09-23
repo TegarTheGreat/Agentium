@@ -35,7 +35,7 @@ func openMemory(cfg config.Config, cwd string) *memCtl {
 	if !memoryWanted(cfg) {
 		return nil
 	}
-	s, err := memory.Open(config.Home(), cwd)
+	s, err := memory.Open(config.Home(), config.ProjectRoot(cwd))
 	if err != nil {
 		return nil
 	}

@@ -425,7 +425,7 @@ func run(args []string) error {
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
 		MaxCost: *maxCost,
-		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate, Vision: res.Vision()},
+		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate, Vision: res.Vision(), CodeCache: codeCache(cwd)},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,

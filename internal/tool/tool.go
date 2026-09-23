@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tegarthegreat/agentium/internal/codemap"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
@@ -34,11 +35,15 @@ type Env struct {
 	// BeforeMutate, if set, runs once per turn before the first edit or
 	// bash call. It is used to checkpoint the workspace for undo.
 	BeforeMutate func()
+	// CodeCache is where the code index is cached ("" = memory only).
+	CodeCache string
 
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
 	mutOnce *sync.Once
 	seen    map[string]stamp
+	cix     *codemap.Index
+	cixMu   sync.Mutex // serializes index updates
 }
 
 // stamp identifies a file version the model has seen.
