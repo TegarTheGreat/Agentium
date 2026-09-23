@@ -64,6 +64,9 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 		if !denied && (r.IsError || c.Name == "bash" && failedExit.MatchString(r.Text)) {
 			failed = true
 		}
+		if c.Name == "bash" && strings.Contains(string(c.Args), `"job"`) {
+			continue // polling a background job repeats by design
+		}
 		h := sha256.Sum256([]byte(c.Name + "\x00" + canonical(c.Args) + "\x00" + r.Text))
 		sig := hex.EncodeToString(h[:8])
 		rs.sigs = append(rs.sigs, sig)
