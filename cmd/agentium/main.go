@@ -47,6 +47,7 @@ Usage:
   agentium undo                 revert the file changes of the last turn here
   agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
   agentium skills [list|show|add|remove]   manage SKILL.md skills (add: dir, git URL or owner/repo, pinned + reviewed)
+  agentium acp [-m model]       serve the Agent Client Protocol on stdio (Zed, JetBrains)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
 
@@ -103,6 +104,9 @@ func main() {
 			return
 		case "skills":
 			exit(cmdSkills(os.Args[2:]))
+			return
+		case "acp":
+			exit(cmdACP(os.Args[2:]))
 			return
 		}
 	}
