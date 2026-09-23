@@ -112,6 +112,7 @@ Urutan berubah: **keamanan dan keandalan dulu, baru fitur.**
 | **v0.4 Ingat** | Memori berlapis + auto-recall FTS5 + decision log | P2 #15 |
 | **v0.5 Luas** | models.dev, reasoning/thinking, `max_completion_tokens`, Gemini native, OAuth ChatGPT/Copilot/OpenRouter, Bedrock/Vertex/Azure, fallback model, keychain | P1 #10, #12, P2 #16, #21 |
 | **v0.6 Terbukti** | Adaptor Terminal-Bench 2.1 + SWE-bench Pro dengan isolasi tes, `--best-of N`, `--json` headless, release binary | P2 #17, #19, #20, #23 |
+| **v0.7 Cerdas & Bisa Diperluas** | Plan mode read-only, skills `SKILL.md` + manager yang aman, code map (outline + cari simbol), input gambar, render markdown | Plan-first (Junie, Copilot, Cline), repo map (Aider), ekosistem skill bersama Claude Code/Codex |
 
 Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 
@@ -132,7 +133,7 @@ Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 
 ---
 
-## D. Status tiap item (v0.6.0)
+## D. Status tiap item (v0.7.0)
 
 | # | Item | Status |
 |---|---|---|
@@ -153,11 +154,15 @@ Sumber: laporan riset di bagian A (tautan lengkap di bawah).
 | P2-15 | Memori | ✅ Snapshot USER/MEMORY, log keputusan, journal, recall BM25 otomatis, `tidy`, penyamaran secret, dan filter injeksi. |
 | P2-16 | Login luas | ✅ models.dev (180+ provider), OAuth OpenRouter, GitHub Models, Azure, Bedrock (SigV4), Vertex, keychain OS. ❌ OAuth ChatGPT/Copilot (butuh client ID resmi). Protokol Gemini native diganti endpoint kompatibel + thought signature. |
 | P2-17 | Headless | ✅ `--json` (JSON Lines), exit code 0/1/2/130, `--max-cost`. |
-| P2-18 | UX terminal | ✅ Line editor, riwayat, paste, `/sessions`, `/resume`, pembersihan sesi. ❌ Render markdown (sengaja tetap polos dulu). |
+| P2-18 | UX terminal | ✅ Line editor, riwayat, paste, `/sessions`, `/resume`, pembersihan sesi, render markdown saat streaming (hanya di terminal; pipe tetap mentah). |
 | P2-19 | Benchmark sungguhan | ✅ Adaptor Harbor untuk Terminal-Bench 2.x (isolasi jawaban ditangani Harbor). ❌ Belum dijalankan. |
 | P2-20 | Distribusi | ✅ goreleaser + workflow rilis + `install.sh` (dengan checksum). ❌ LICENSE (keputusan pemilik repo). |
 | P2-21 | Kredensial plaintext | ✅ Keychain OS kalau tersedia. |
 | P2-22 | Ekstensi | ✅ Hook `post_edit` / `stop`, MCP stdio (tool `mcp__server__tool`). |
 | P2-23 | Paralel untuk tugas besar | ✅ `--best-of N --check CMD` di git worktree. |
+| v0.7-a | Plan mode | ✅ `--plan`, `/plan`, `/go`. Edit ditolak; dengan sandbox workspace jadi read-only sehingga perintah apa pun yang tidak merusak tetap bisa jalan; tanpa sandbox hanya allowlist perintah baca. Catatan plan masuk ke pesan user supaya system prompt tetap ter-cache. |
+| v0.7-b | Skills / plugin | ✅ Format `SKILL.md` (sama dengan Claude Code dan Codex). Hanya indeks satu baris per skill di prompt; `/nama` menjalankan skill. `agentium skills add` mengambil tanpa menjalankan apa pun, mengunci commit, menampilkan script, dan baru memasang setelah dikonfirmasi. Tanpa marketplace. |
+| v0.7-c | Code map | ✅ `read {outline:true}` untuk file dan direktori, `search {symbol:…}`. Go lewat `go/parser`, bahasa lain lewat pola baris. |
+| v0.7-d | Input gambar | ✅ `read` pada gambar dan `@file.png` di prompt, untuk model yang mendukung gambar (models.dev, atau keluarga model multimodal yang dikenal). |
 
 **Langkah berikutnya yang paling berdampak:** uji nyata dengan API key (`agentium bench -m …`), lalu jalankan Terminal-Bench 2.x dan bandingkan dengan Codex CLI / Claude Code / Pi pada model yang sama.

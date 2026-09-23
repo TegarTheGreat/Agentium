@@ -31,7 +31,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.6.0"
+var version = "0.7.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -170,7 +170,8 @@ type ui struct {
 	mu      sync.Mutex
 	quiet   bool
 	color   bool
-	midLine bool // stdout has text without a trailing newline
+	midLine bool      // stdout has text without a trailing newline
+	md      *mdStream // renders Markdown when stdout is a terminal
 }
 
 func (u *ui) dim(s string) string {
@@ -183,6 +184,11 @@ func (u *ui) dim(s string) string {
 func (u *ui) text(d string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if u.md != nil {
+		u.md.Write(d)
+		u.midLine = u.md.Pending()
+		return
+	}
 	os.Stdout.WriteString(d)
 	if d != "" {
 		u.midLine = !strings.HasSuffix(d, "\n")
@@ -190,6 +196,11 @@ func (u *ui) text(d string) {
 }
 
 func (u *ui) endLine() {
+	if u.md != nil && u.md.Pending() {
+		u.md.Flush()
+		u.midLine = false
+		return
+	}
 	if u.midLine {
 		os.Stdout.WriteString("\n")
 		u.midLine = false
@@ -361,6 +372,9 @@ func run(args []string) error {
 		*quiet = true
 	}
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
+	if !*asJSON && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" && os.Getenv("AGENTIUM_RAW") == "" {
+		u.md = newMD(os.Stdout)
+	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
 	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}

@@ -20,10 +20,10 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 
 | | Agentium (measured, `agentium bench`) |
 |---|---|
-| Binary | 7.8 MB, static, no runtime |
-| Startup | ~3 ms |
-| Memory | ~7 MB RSS |
-| Prompt + tool schemas | ~750 tokens (memory rules included) |
+| Binary | 8.1 MB, static, no runtime |
+| Startup | ~4 ms |
+| Memory | ~8 MB RSS |
+| Prompt + tool schemas | ~810 tokens (memory rules included) |
 | Tools | `read` `edit` `bash` `search` `fetch` (+ MCP tools if configured) |
 
 ## What it does
@@ -33,6 +33,8 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 - Tool calls in the same turn run in parallel. Edits to the same file are serialized.
 - The system prompt and tool list are fixed for the session, and Anthropic cache breakpoints are set automatically. Cost is shown per turn.
 - Output is clipped head+tail with a hint on how to see the rest.
+- **Code map.** `read {outline:true}` shows a file's definitions with line numbers, or a map of a whole directory, for a fraction of the tokens of a full read. `search {symbol:"Type.Method"}` jumps to a definition. Go is parsed exactly; Python, JS/TS, Rust, Java, Kotlin, C#, Swift, PHP, C/C++, Ruby and more use line patterns.
+- Markdown replies are rendered in the terminal while they stream (bold, `code`, bullets, fenced code untouched). Pipes get raw Markdown.
 
 **Reliable**
 - **Lint-gated edits.** An edit that would break a file that parsed before (Go, JSON, Python, shell, JS) is rejected and the file stays untouched. The edit tool tolerates CRLF, trailing-whitespace and indentation differences, and re-indents to the file's style.
@@ -48,6 +50,7 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 - `fetch` refuses localhost, private networks and cloud metadata addresses, including on redirects.
 - **Checkpoints.** Every turn that changes something is snapshotted in a shadow git repository (your `.git` is untouched). `/undo` or `agentium undo` reverts it, including changes made by shell commands.
 - Edits refuse to blindly overwrite an existing file, or to write a file changed on disk since the model read it.
+- **Plan mode.** `--plan` or `/plan`: the agent investigates and answers with a plan, and cannot change anything. With the sandbox the workspace is mounted read-only, so any non-destructive command can still run; without it only read-only commands pass. `/go` carries the plan out.
 
 **Remembers**
 - `USER.md` (your preferences) and `MEMORY.md` (per project) are small, capped files injected as a frozen snapshot, together with active decisions from `DECISIONS.md`.
@@ -58,6 +61,7 @@ Popular agents are slow and wordy. Claude Code sends about 33k tokens of prompt 
 **Any provider**
 - Two wire protocols (OpenAI Chat Completions and Anthropic Messages) plus Bedrock and Vertex clients cover the built-ins and every compatible provider in the [models.dev](https://models.dev) registry (180+).
 - Built in: `anthropic`, `openai`, `gemini`, `openrouter`, `groq`, `cerebras`, `deepseek`, `xai`, `mistral`, `together`, `fireworks`, `moonshot`, `zai`, `github` (GitHub Models), `azure`, `bedrock`, `vertex`, `ollama`, `lmstudio`.
+- **Images.** `read` on a PNG/JPEG/GIF/WebP shows it to the model, and `@screenshot.png` in a prompt attaches it, for models that accept images (from models.dev, else known multimodal families).
 - **Reasoning.** Adaptive thinking and `--effort` on Claude (signed thinking blocks are replayed exactly as the API requires), `reasoning_effort` on OpenAI-compatible models, reasoning replay for DeepSeek-style models, and Gemini thought signatures. `--fast` uses Claude's fast mode where available.
 
 ## Install
@@ -69,6 +73,11 @@ go install github.com/tegarthegreat/agentium/cmd/agentium@latest
 # or from a clone
 make build
 ```
+
+**Extensible**
+- **Skills.** A skill is a folder with a `SKILL.md` (the format Claude Code and Codex use). Skills in `~/.agentium/skills`, `~/.claude/skills` and each `.agentium/skills` or `.claude/skills` of the project are listed in one line each; the model reads a skill when a task matches it, and `/name [task]` runs one directly.
+- `agentium skills add <dir | git URL | owner/repo[#ref]>` fetches without running anything, pins the commit, lists bundled scripts, and installs only after you confirm. There is no marketplace to trust: you choose the source. Also `skills list|show|remove`.
+- **MCP** stdio servers (tools appear as `mcp__server__tool`) and **hooks** (`post_edit`, `stop`).
 
 ## Use
 
@@ -83,13 +92,15 @@ agentium --effort xhigh --fast "…"    # more thinking, faster output
 agentium --json "…"                   # JSON Lines events for CI; exit 0/1/2/130
 agentium --best-of 3 --check "go test ./..." "fix the flaky test"
 agentium --max-cost 0.50 "…"          # stop at 50 cents
+agentium --plan "how would we add OAuth?"   # read-only; answers with a plan
+agentium "why does @screenshot.png look broken?"
 ```
 
 In a session:
-- **Commands:** `/undo`, `/sessions`, `/resume <n>`, `/clear`, `/model <provider/model>`, `/mode ask|auto|yolo`, `/usage`, `/exit`.
+- **Commands:** `/plan`, `/go`, `/<skill> [task]`, `/skills`, `/undo`, `/sessions`, `/resume <n>`, `/clear`, `/model <provider/model>`, `/mode ask|auto|yolo|plan`, `/usage`, `/exit`.
 - **Keys:** ↑/↓ history, Ctrl-A/E/U/K/W. Pastes keep their newlines. End a line with `\` for a newline. Ctrl-C interrupts a running turn.
 
-Other commands: `agentium providers`, `agentium models [provider] [--refresh]`, `agentium login [--oauth] <provider>`, `agentium logout <provider>`, `agentium undo`, `agentium tidy`, `agentium bench [-m model]`.
+Other commands: `agentium providers`, `agentium models [provider] [--refresh]`, `agentium login [--oauth] <provider>`, `agentium logout <provider>`, `agentium undo`, `agentium tidy`, `agentium skills`, `agentium bench [-m model]`. Set `AGENTIUM_RAW=1` (or `NO_COLOR`) for unrendered output.
 
 ## Login
 
@@ -138,7 +149,7 @@ For Terminal-Bench 2.x via Harbor, see [bench/terminalbench](bench/terminalbench
 
 ## Status
 
-v0.6.0. Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux and macOS. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
+v0.7.0. Everything above is implemented and covered by unit and end-to-end tests: fake model servers for every protocol, a fake MCP server, and real pty tests for the line editor. Landlock confinement is tested on Linux, and CI runs Linux and macOS. **Not yet exercised against real model APIs or a real Terminal-Bench run.** Please report what breaks.
 
 ## Develop
 
