@@ -69,6 +69,9 @@ type Agent struct {
 	Note string
 	// Attach holds images for the next Run's user message.
 	Attach []provider.Image
+	// Ledger is the harness-kept working state (files, commands, errors,
+	// todos) that survives compaction.
+	Ledger Ledger
 }
 
 // Stats summarizes one Run.
@@ -117,6 +120,7 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		input = "[" + a.Note + "]\n\n" + input
 		a.Note = ""
 	}
+	a.Ledger.startTurn()
 	if a.Env != nil {
 		a.Env.StartTurn()
 		if a.Env.Gate != nil && a.Env.Gate.GetMode() == policy.Plan {
@@ -304,6 +308,7 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 				tctx, images := tool.WithImageSink(ctx)
 				res, err = safeRun(tctx, t, a.Env, c.Args)
 				imgs = images()
+				a.Ledger.record(c.Name, c.Args, res, err)
 			}
 			if a.Events.ToolDone != nil {
 				a.Events.ToolDone(c, res, err, time.Since(t0))

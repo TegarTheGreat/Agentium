@@ -25,7 +25,7 @@ Rules:
 // memoryRules is added only when memory is enabled.
 const memoryRules = `
 
-Memory: <memory> holds notes from past sessions; <recall> may bring relevant past context. To save something for future sessions, put a line in your reply: "@remember <project fact>", "@prefer <user preference>", "@decide <decision> — <why>" (add "supersedes D-xxx" when replacing one), "@forget <text>". Save only durable, non-obvious facts (conventions, commands, lessons from mistakes, user preferences), never secrets.`
+Memory: <memory> holds notes from past sessions; <recall> may bring relevant past context. To save something for future sessions, put a line in your reply: "@remember <project fact>", "@prefer <user preference>", "@decide <decision> — <why>" (add "supersedes D-xxx" when replacing one), "@forget <text>". Save only durable, non-obvious facts (conventions, commands, lessons from mistakes, user preferences), never secrets. Name the file a fact is about (e.g. "see Makefile") so it can be checked later. Before debugging an error, search {memory} for it: it may have been solved before.`
 
 const maxContextFile = 12 * 1024
 

@@ -37,6 +37,8 @@ type Env struct {
 	BeforeMutate func()
 	// CodeCache is where the code index is cached ("" = memory only).
 	CodeCache string
+	// Recall searches long-term memory (search {memory}); nil when off.
+	Recall func(query string) string
 
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex

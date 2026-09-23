@@ -518,3 +518,58 @@ func TestImagesFlowAndElide(t *testing.T) {
 		t.Fatalf("image not elided: %q", toolMsg.Text)
 	}
 }
+
+func TestLedgerTodoAndCompactionState(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "todo", `{"items":[{"text":"fix parser","status":"in_progress"},{"text":"add test","status":"pending"}]}`)),
+		calls(tc("2", "bash", `{"cmd":"echo boom >&2; exit 3"}`), tc("3", "read", `{"path":"a.txt"}`)),
+	}}
+	a := newAgent(t, s)
+	a.Tools = append(a.Tools, a.TodoTool())
+	os.WriteFile(filepath.Join(a.Env.Root, "a.txt"), []byte("hi"), 0o644)
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	st := a.Ledger.Render()
+	for _, want := range []string{"1. [~] fix parser", "2. [ ] add test", "Files read: a.txt", "echo boom >&2; exit 3 (exit 3)", "Latest unresolved error:\nbash echo boom", "boom"} {
+		if !strings.Contains(st, want) {
+			t.Errorf("ledger missing %q:\n%s", want, st)
+		}
+	}
+	if errs := a.Ledger.TurnErrors(); len(errs) != 1 || !strings.Contains(errs[0], "boom") {
+		t.Fatalf("turn errors: %v", errs)
+	}
+	// The same command passing clears the unresolved error.
+	a.Ledger.record("bash", json.RawMessage(`{"cmd":"echo boom >&2; exit 3"}`), "ok", nil)
+	if strings.Contains(a.Ledger.Render(), "unresolved") {
+		t.Fatal("error should clear once the command passes")
+	}
+	// Fetch marks the turn untrusted; a new turn resets it.
+	a.Ledger.record("fetch", json.RawMessage(`{"url":"https://x"}`), "page", nil)
+	if !a.Ledger.Untrusted() {
+		t.Fatal("fetch should mark the turn untrusted")
+	}
+	a.Ledger.startTurn()
+	if a.Ledger.Untrusted() || len(a.Ledger.TurnErrors()) != 0 {
+		t.Fatal("per-turn state not reset")
+	}
+
+	// Compaction carries the ledger verbatim.
+	fast := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "Goal: fix parser."}, nil
+		},
+	}}
+	a.ContextTokens, a.MaxTokens = 20000, 1000
+	a.Fast, a.FastModel = fast, "fast"
+	big := strings.Repeat("y", 9000)
+	for i := 0; i < 8; i++ {
+		a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: big}, provider.Message{Role: provider.RoleAssistant, Text: big})
+	}
+	if _, err := a.Run(context.Background(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	if first := a.Messages[0].Text; !strings.Contains(first, "Goal: fix parser.") || !strings.Contains(first, "<session-state") || !strings.Contains(first, "1. [~] fix parser") {
+		t.Fatalf("compacted state: %q", first)
+	}
+}
