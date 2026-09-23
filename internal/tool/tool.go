@@ -103,6 +103,16 @@ func (e *Env) markSeen(p string) {
 	}
 }
 
+// Child returns an Env for a sub-agent: same workspace, sandbox and
+// settings, its own view of what was read (it has its own context) and
+// its own jobs. gate may differ (read-only exploration). Checkpointing
+// goes through the parent so a turn stays one undo step.
+func (e *Env) Child(gate *policy.Gate) *Env {
+	return &Env{Root: e.Root, Gate: gate, Vision: e.Vision, AllowPrivateNet: e.AllowPrivateNet, Sandbox: e.Sandbox,
+		Net: e.Net, PassEnv: e.PassEnv, PostEdit: e.PostEdit, CodeCache: e.CodeCache, Recall: e.Recall,
+		BeforeMutate: e.mutate}
+}
+
 // ForgetReads tells the tools that earlier read results are no longer
 // in the conversation (elided, compacted, cleared), so re-reads must
 // return full content again.
