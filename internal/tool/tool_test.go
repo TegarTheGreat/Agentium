@@ -711,3 +711,95 @@ func TestUnchangedRereadAndAtomicWrite(t *testing.T) {
 		}
 	}
 }
+
+func TestGitGuardVariants(t *testing.T) {
+	e := env(t)
+	exec.Command("git", "init", "-q", e.Root).Run()
+	cases := []string{
+		`printf '[core] fsmonitor = "touch pwned"\n' >> .git/config`,
+		`git config diff.external 'touch pwned'`,
+		`git config pager.log 'touch pwned'`,
+		`git config alias.st '!touch pwned'`,
+		`mkdir -p .git/modules/sub && printf 'ref: refs/heads/main\n' > .git/modules/sub/HEAD && printf '[core]\n' > .git/modules/sub/config && true`,
+	}
+	for _, c := range cases[:4] {
+		out, _ := call(t, bashTool, e, fmt.Sprintf(`{"cmd":%q}`, c))
+		if !strings.Contains(out, "undid") {
+			t.Errorf("%s: not undone: %q", c, out)
+		}
+	}
+	// Submodule git dirs are guarded too.
+	call(t, bashTool, e, fmt.Sprintf(`{"cmd":%q}`, cases[4]))
+	out, _ := call(t, bashTool, e, `{"cmd":"git config -f .git/modules/sub/config core.fsmonitor 'touch pwned'"}`)
+	if !strings.Contains(out, "undid .git/modules/sub/config") {
+		t.Errorf("submodule config: %q", out)
+	}
+	// A background change after the command returns is caught next time.
+	call(t, bashTool, e, `{"cmd":"(sleep 0.3; git config core.sshCommand 'touch pwned') >/dev/null 2>&1 &"}`)
+	time.Sleep(600 * time.Millisecond)
+	out, _ = call(t, bashTool, e, `{"cmd":"true"}`)
+	if !strings.Contains(out, "undid .git/config") {
+		t.Errorf("late change: %q", out)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(e.Root, ".git", "config"))
+	if strings.Contains(string(cfg), "pwned") {
+		t.Fatalf("config still has a planted command:\n%s", cfg)
+	}
+	// Ordinary git work is untouched.
+	out, _ = call(t, bashTool, e, `{"cmd":"git remote add origin https://example.com/x.git && git config user.name T"}`)
+	if strings.Contains(out, "undid") {
+		t.Errorf("false positive: %q", out)
+	}
+}
+
+func TestReadFIFOAndLargeBinary(t *testing.T) {
+	e := env(t)
+	fifo := filepath.Join(e.Root, "pipe")
+	if err := syscallMkfifo(fifo); err != nil {
+		t.Skip("no mkfifo:", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := call(t, readTool, e, `{"path":"pipe"}`); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("fifo: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("read on a FIFO hung")
+	}
+	big := make([]byte, 9<<20)
+	big[10] = 0
+	os.WriteFile(filepath.Join(e.Root, "blob.bin"), big, 0o644)
+	if out, _ := call(t, readTool, e, `{"path":"blob.bin"}`); !strings.HasPrefix(out, "(binary file") {
+		t.Fatalf("large binary: %.80q", out)
+	}
+}
+
+func TestSearchSkipsDotEnv(t *testing.T) {
+	e := env(t)
+	for _, n := range []string{".env.staging", ".envrc", ".env.example"} {
+		os.WriteFile(filepath.Join(e.Root, n), []byte("SECRET_VALUE=zzz-marker\n"), 0o644)
+	}
+	out, _ := call(t, searchTool, e, `{"pattern":"zzz-marker"}`)
+	if strings.Contains(out, ".env.staging") || strings.Contains(out, ".envrc") || !strings.Contains(out, ".env.example") {
+		t.Fatalf("search: %q", out)
+	}
+}
+
+func TestEditKeepsHardLinks(t *testing.T) {
+	e := env(t)
+	p := filepath.Join(e.Root, "a.txt")
+	os.WriteFile(p, []byte("one\n"), 0o644)
+	link := filepath.Join(e.Root, "b.txt")
+	if err := os.Link(p, link); err != nil {
+		t.Skip("no hard links:", err)
+	}
+	call(t, readTool, e, `{"path":"a.txt"}`)
+	if _, err := call(t, editTool, e, `{"path":"a.txt","old":"one","new":"two"}`); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(link); string(b) != "two\n" {
+		t.Fatalf("hard link split: %q", b)
+	}
+}

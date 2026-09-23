@@ -235,7 +235,9 @@ func (r Reasoning) NextEffort() string {
 	order := []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 	supported := r.Efforts
 	if len(supported) == 0 {
-		if !r.Budget {
+		if !r.Budget || r.Effort == "" {
+			// No levels, or thinking is off on a budget_tokens model:
+			// switching it on mid tool-loop is not allowed by the API.
 			return ""
 		}
 		supported = order // budget_tokens models: any level maps to a budget

@@ -207,14 +207,14 @@ func (m *mdStream) inline(out *strings.Builder, r rune) {
 
 // resolveStars decides what held '*'s were once the next rune is known.
 // "**" opens bold only at a word start (after a space or opening
-// bracket, before a letter, digit or `) and closes only after a
-// non-space; anything else — a ** b, src/**/*.go — stays literal.
+// bracket, before a non-space) and closes only after a non-space;
+// anything else — a ** b, src/**/*.go — stays literal.
 func (m *mdStream) resolveStars(out *strings.Builder, next rune) {
 	n := m.stars
 	m.stars = 0
-	if n == 2 {
+	if n == 2 || n == 3 { // ***x*** renders bold (italics are not styled)
 		opens := !m.bold && (m.before == 0 || strings.ContainsRune(" \t([{\"'", m.before)) &&
-			(unicode.IsLetter(next) || unicode.IsDigit(next) || next == '`')
+			next != '\n' && !unicode.IsSpace(next)
 		closes := m.bold && m.before != 0 && !unicode.IsSpace(m.before)
 		if opens || closes {
 			m.bold = !m.bold

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/policy"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -104,7 +105,24 @@ func runRipgrep(ctx context.Context, rg, root, dir, pattern, glob string, icase 
 		}
 		return "", err
 	}
-	return capLines(relativize(string(out), root), searchMaxLines), nil
+	return capLines(relativize(dropDotEnv(string(out)), root), searchMaxLines), nil
+}
+
+// dropDotEnv removes results from .env files: their values are secrets,
+// and reading them needs approval.
+func dropDotEnv(out string) string {
+	lines := strings.Split(out, "\n")
+	kept := lines[:0]
+	for _, l := range lines {
+		path := l
+		if i := strings.IndexByte(l, ':'); i > 0 {
+			path = l[:i]
+		}
+		if !policy.DotEnv(path) {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func relativize(s, root string) string {
@@ -159,7 +177,10 @@ func walkSearch(ctx context.Context, root, dir, pattern, glob string, icase bool
 		}
 		rel, _ := filepath.Rel(root, p)
 		switch d.Name() {
-		case ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".env", ".env.local", ".env.production", ".env.development":
+		case ".netrc", ".npmrc", ".pypirc", ".git-credentials":
+			return nil
+		}
+		if policy.DotEnv(d.Name()) {
 			return nil
 		}
 		if glob != "" && !globMatch(glob, rel) {

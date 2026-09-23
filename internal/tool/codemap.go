@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/tegarthegreat/agentium/internal/codemap"
+	"github.com/tegarthegreat/agentium/internal/policy"
 )
 
 const (
@@ -33,7 +34,7 @@ func listFiles(ctx context.Context, dir string, keep func(string) bool) []string
 		cmd := exec.CommandContext(ctx, rg, append(args, dir)...)
 		out, _ := cmd.Output()
 		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if l != "" && keep(l) {
+			if l != "" && keep(l) && !policy.DotEnv(l) {
 				files = append(files, l)
 			}
 		}
@@ -49,7 +50,10 @@ func listFiles(ctx context.Context, dir string, keep func(string) bool) []string
 				return nil
 			}
 			switch d.Name() {
-			case ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".env", ".env.local", ".env.production", ".env.development":
+			case ".netrc", ".npmrc", ".pypirc", ".git-credentials":
+				return nil
+			}
+			if policy.DotEnv(d.Name()) {
 				return nil
 			}
 			if keep(p) {
@@ -106,7 +110,7 @@ func underPrefix(rel, prefix string) bool {
 
 func readSource(p string) ([]byte, bool) {
 	st, err := os.Stat(p)
-	if err != nil || st.Size() > outlineMaxFile {
+	if err != nil || !st.Mode().IsRegular() || st.Size() > outlineMaxFile {
 		return nil, false
 	}
 	b, err := os.ReadFile(p)

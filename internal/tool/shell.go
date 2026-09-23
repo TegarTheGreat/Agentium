@@ -84,12 +84,25 @@ var bashTool = Tool{
 		if t > bashMaxTimeout {
 			t = bashMaxTimeout
 		}
+		guarded := env.Gate == nil || env.Gate.GetMode() != policy.Yolo
+		var late string
+		if guarded {
+			env.mu.Lock()
+			prev := env.gitg
+			env.mu.Unlock()
+			late = prev.check() // a background process may have changed git since
+		}
 		var guard *gitGuard
-		if env.Gate == nil || env.Gate.GetMode() != policy.Yolo {
+		if guarded {
 			guard = snapGit(env.Root)
 		}
 		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box, env.PassEnv)
-		out += guard.check()
+		out += late + guard.check()
+		if guarded {
+			env.mu.Lock()
+			env.gitg = snapGit(env.Root)
+			env.mu.Unlock()
+		}
 		if box != nil && err == nil && sandboxHint.MatchString(out) {
 			if box.Network || box.NetworkUnenforced {
 				out += "\n[sandbox: writes outside the workspace are blocked]"

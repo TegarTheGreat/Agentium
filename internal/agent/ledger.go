@@ -118,9 +118,6 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 	if err != nil {
 		text = strings.TrimSpace(out + "\n" + err.Error())
 	}
-	if name != "bash" {
-		l.errCmd = ""
-	}
 	l.lastError = fmt.Sprintf("%s %s:\n%s", name, oneLine(firstArg(name, a), 120), tailLines(text, errorTailLines, errorTailBytes))
 	l.errLine = errorLine(text)
 	l.turnErrors = append(l.turnErrors, fmt.Sprintf("%s %s → %s", name, oneLine(firstArg(name, a), 80), oneLine(errorLine(text), 160)))
