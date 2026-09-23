@@ -63,11 +63,17 @@ func (b *Bedrock) Stream(ctx context.Context, req Request, onText func(string)) 
 	if err != nil {
 		return Response{}, err
 	}
-	u := b.endpoint() + "/model/" + url.PathEscape(req.Model) + "/invoke-with-response-stream"
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(buf))
+	// Send the model id percent-encoded (":" → %3A) like the AWS SDKs do,
+	// so the path we sign is the path the server sees.
+	path := "/model/" + req.Model + "/invoke-with-response-stream"
+	rawPath := "/model/" + awsURIEncode(req.Model, true) + "/invoke-with-response-stream"
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, b.endpoint()+rawPath, bytes.NewReader(buf))
 	if err != nil {
 		return Response{}, err
 	}
+	hreq.URL.Path, hreq.URL.RawPath = path, rawPath
 	hreq.Header.Set("Content-Type", "application/json")
 	hreq.Header.Set("Accept", "application/vnd.amazon.eventstream")
 	if b.Bearer != "" {
@@ -83,6 +89,7 @@ func (b *Bedrock) Stream(ctx context.Context, req Request, onText func(string)) 
 	if err != nil {
 		return Response{}, err
 	}
+	watchIdle(resp, cancel)
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -123,6 +130,9 @@ func (b *Bedrock) Stream(ctx context.Context, req Request, onText func(string)) 
 	}
 	if err == nil && !done && out.StopReason == "" {
 		err = ErrIncomplete
+	}
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrStalled) {
+		err = ctx.Err()
 	}
 	// Reuse the Anthropic assembler for text/tool calls/raw blocks.
 	assembled := assembleAnthropic(blocks, order)
@@ -174,6 +184,13 @@ func parseESHeaders(b []byte) map[string]string {
 		name := string(b[1 : 1+n])
 		typ := b[1+n]
 		b = b[2+n:]
+		skip := func(n int) bool {
+			if len(b) < n {
+				return false
+			}
+			b = b[n:]
+			return true
+		}
 		switch typ {
 		case 7: // string
 			if len(b) < 2 {
@@ -187,20 +204,29 @@ func parseESHeaders(b []byte) map[string]string {
 			b = b[2+l:]
 		case 0, 1: // bool true/false
 		case 2:
-			b = b[1:]
-		case 3:
-			b = b[2:]
-		case 4:
-			b = b[4:]
-		case 5, 8:
-			b = b[8:]
-		case 6: // bytes
-			if len(b) < 2 {
+			if !skip(1) {
 				return h
 			}
-			b = b[2+int(binary.BigEndian.Uint16(b)):]
+		case 3:
+			if !skip(2) {
+				return h
+			}
+		case 4:
+			if !skip(4) {
+				return h
+			}
+		case 5, 8:
+			if !skip(8) {
+				return h
+			}
+		case 6: // bytes
+			if len(b) < 2 || !skip(2+int(binary.BigEndian.Uint16(b))) {
+				return h
+			}
 		case 9: // uuid
-			b = b[16:]
+			if !skip(16) {
+				return h
+			}
 		default:
 			return h
 		}
@@ -261,6 +287,9 @@ func awsURIEncode(s string, encodeSlash bool) string {
 	return sb.String()
 }
 
+// canonicalHook lets tests inspect the canonical request.
+var canonicalHook func(string)
+
 // signV4 adds AWS Signature Version 4 headers to req.
 func signV4(req *http.Request, body []byte, region, service string, c AWSCreds, t time.Time) {
 	t = t.UTC()
@@ -317,6 +346,9 @@ func signV4(req *http.Request, body []byte, region, service string, c AWSCreds, 
 		}
 	}
 	canonical := strings.Join([]string{req.Method, canonPath, strings.Join(cq, "&"), canonHeaders.String(), signed, payloadHash}, "\n")
+	if canonicalHook != nil {
+		canonicalHook(canonical)
+	}
 	scope := date + "/" + region + "/" + service + "/aws4_request"
 	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + sha256Hex([]byte(canonical))
 	k := hmacSHA256([]byte("AWS4"+c.SecretKey), date)

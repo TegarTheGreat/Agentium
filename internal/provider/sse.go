@@ -108,6 +108,13 @@ func postStream(ctx context.Context, url string, headers map[string]string, body
 		cancel()
 		return nil, &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b)), RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
+	watchIdle(resp, cancel)
+	return resp, nil
+}
+
+// watchIdle makes resp.Body fail with ErrStalled (and cancel the request)
+// when no bytes arrive for StreamIdleTimeout.
+func watchIdle(resp *http.Response, cancel context.CancelFunc) {
 	ib := &idleBody{ReadCloser: resp.Body, idle: StreamIdleTimeout, cancel: cancel}
 	ib.timer = time.AfterFunc(StreamIdleTimeout, func() {
 		ib.mu.Lock()
@@ -116,7 +123,6 @@ func postStream(ctx context.Context, url string, headers map[string]string, body
 		cancel()
 	})
 	resp.Body = ib
-	return resp, nil
 }
 
 // readSSE calls fn for each event with its event name and data payload.

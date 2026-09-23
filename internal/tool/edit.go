@@ -34,7 +34,7 @@ func runEdit(_ context.Context, env *Env, raw json.RawMessage) (string, error) {
 	if a.Path == "" {
 		return "", errors.New("path is required")
 	}
-	p := env.abs(a.Path)
+	p := real(env.abs(a.Path))
 	if env.Gate != nil {
 		if ok, why := env.Gate.Write(p); !ok {
 			return "", fmt.Errorf("denied (%s); choose another approach or ask the user", why)

@@ -33,7 +33,7 @@ var readTool = Tool{
 		if a.Path == "" {
 			return "", errors.New("path is required")
 		}
-		p := env.abs(a.Path)
+		p := real(env.abs(a.Path))
 		if env.Gate != nil {
 			if ok, why := env.Gate.Read(p); !ok {
 				return "", fmt.Errorf("denied (%s)", why)
@@ -107,7 +107,13 @@ func sliceLines(s string, offset, limit int) string {
 	var sb strings.Builder
 	for i := start; i < end; i++ {
 		if sb.Len()+len(lines[i]) > readMaxBytes {
-			end = i
+			if sb.Len() == 0 {
+				// A single huge line (minified code): show its start.
+				sb.WriteString(strings.ToValidUTF8(lines[i][:readMaxBytes], "") + "…[line truncated]\n")
+				end = i + 1
+			} else {
+				end = i
+			}
 			break
 		}
 		sb.WriteString(lines[i])

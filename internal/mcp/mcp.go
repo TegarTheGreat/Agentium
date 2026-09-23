@@ -6,6 +6,8 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -271,11 +273,19 @@ func (c *Client) Close() {
 
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
-// ToolName is the model-facing name: mcp__<server>__<tool>, at most 64 chars.
+// ToolName is the model-facing name: mcp__<server>__<tool>, at most 64
+// chars. Sanitizing or shortening a name adds a short hash of the
+// original so distinct tools never collide.
 func ToolName(server, tool string) string {
+	raw := "mcp__" + server + "__" + tool
 	n := "mcp__" + unsafeName.ReplaceAllString(server, "_") + "__" + unsafeName.ReplaceAllString(tool, "_")
-	if len(n) > 64 {
-		n = n[:64]
+	if n == raw && len(n) <= 64 {
+		return n
 	}
-	return n
+	h := sha256.Sum256([]byte(raw))
+	suffix := "_" + hex.EncodeToString(h[:3])
+	if len(n)+len(suffix) > 64 {
+		n = n[:64-len(suffix)]
+	}
+	return n + suffix
 }

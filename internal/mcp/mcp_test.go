@@ -101,7 +101,15 @@ func TestClient(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if ToolName("my server", "do.thing") != "mcp__my_server__do_thing" {
-		t.Fatal(ToolName("my server", "do.thing"))
+	if ToolName("gh", "list_issues") != "mcp__gh__list_issues" {
+		t.Fatal(ToolName("gh", "list_issues"))
+	}
+	a, b := ToolName("my server", "do.thing"), ToolName("my server", "do_thing")
+	if a == b || !strings.HasPrefix(a, "mcp__my_server__do_thing_") {
+		t.Fatalf("sanitized names must not collide: %s %s", a, b)
+	}
+	long := strings.Repeat("x", 80)
+	if l1, l2 := ToolName("s", long+"1"), ToolName("s", long+"2"); l1 == l2 || len(l1) > 64 {
+		t.Fatalf("long names: %s %s", l1, l2)
 	}
 }

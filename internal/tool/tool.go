@@ -130,6 +130,24 @@ func (e *Env) abs(p string) string {
 	return filepath.Clean(p)
 }
 
+// real resolves symlinks in p (or, for a path that does not exist yet,
+// in its nearest existing parent), so policy checks see where a write or
+// read actually lands: a symlink in the workspace must not be a door out.
+func real(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	dir, rest := filepath.Dir(p), filepath.Base(p)
+	for i := 0; i < 64 && dir != filepath.Dir(dir); i++ {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(r, rest)
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = filepath.Dir(dir)
+	}
+	return p
+}
+
 // Tool is one callable tool.
 type Tool struct {
 	Def provider.ToolDef

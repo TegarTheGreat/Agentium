@@ -80,6 +80,14 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 	}
 
 	cands := make([]*candidate, n)
+	defer func() {
+		for _, c := range cands {
+			if c != nil {
+				_, _ = git(top, "worktree", "remove", "--force", c.dir)
+			}
+		}
+		_, _ = git(top, "worktree", "prune")
+	}()
 	for i := range cands {
 		dir, err := os.MkdirTemp("", fmt.Sprintf("agentium-try%d-", i+1))
 		if err != nil {
@@ -92,12 +100,6 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 		dir, _ = filepath.EvalSymlinks(dir)
 		cands[i] = &candidate{n: i + 1, dir: dir, work: filepath.Join(dir, rel)}
 	}
-	defer func() {
-		for _, c := range cands {
-			_, _ = git(top, "worktree", "remove", "--force", c.dir)
-		}
-		_, _ = git(top, "worktree", "prune")
-	}()
 
 	u.line(fmt.Sprintf("· best of %d: running %d attempts in parallel, then `%s`", n, n, check))
 	var wg sync.WaitGroup
@@ -195,10 +197,16 @@ func runCheck(ctx context.Context, dir, check string, box *sandbox.Config) (stri
 		if err != nil {
 			return "", err
 		}
-		cmd = c
+		cmd = exec.CommandContext(ctx, c.Path, c.Args[1:]...)
+		cmd.Env = c.Env
 	} else {
-		cmd = exec.Command("/bin/sh", "-c", check)
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", check)
 	}
+	// On timeout or Ctrl-C kill the whole process group, and don't wait
+	// forever on children that keep the output pipe open.
+	setPgid(cmd)
+	cmd.Cancel = func() error { return killGroup(cmd) }
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {

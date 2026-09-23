@@ -44,6 +44,7 @@ func (f *Fallback) Stream(ctx context.Context, req Request, onText func(string))
 				onText(s)
 			}
 		})
+		resp.Model = r.Model
 		if err == nil || !Retryable(err) || streamed || ctx.Err() != nil {
 			if err == nil && idx != start {
 				f.mu.Lock()
