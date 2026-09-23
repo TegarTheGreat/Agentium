@@ -24,14 +24,15 @@ const (
 
 var bashTool = Tool{
 	Def: providerDef("bash",
-		"Run a shell command in the workspace; output clipped head+tail. Writes outside the workspace and network are blocked unless net=true (installs, downloads, git push). background=true for servers/watchers/REPLs returns a job id: {job} reads new output (waits up to timeout s), {job,stdin} sends input, {job,kill} stops; {} lists jobs.",
-		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"},"net":{"type":"boolean"},"background":{"type":"boolean"},"job":{"type":"integer"},"stdin":{"type":"string"},"kill":{"type":"boolean"}}}`),
+		"Run a shell command in the workspace; output clipped head+tail. Writes outside the workspace and network are blocked unless net=true (installs, downloads, git push). background=true for servers/watchers/REPLs returns a job id: {job} reads new output (waits up to timeout s), {job,stdin} sends input (control chars ok, e.g. \\u0003), {job,kill} stops; {} lists jobs. tty=true gives the job a terminal (REPLs, prompts, ssh).",
+		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"},"net":{"type":"boolean"},"background":{"type":"boolean"},"tty":{"type":"boolean"},"job":{"type":"integer"},"stdin":{"type":"string"},"kill":{"type":"boolean"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
 			Cmd        string `json:"cmd"`
 			Timeout    int    `json:"timeout"`
 			Net        bool   `json:"net"`
 			Background bool   `json:"background"`
+			TTY        bool   `json:"tty"`
 			Job        int    `json:"job"`
 			Stdin      string `json:"stdin"`
 			Kill       bool   `json:"kill"`
@@ -91,7 +92,7 @@ var bashTool = Tool{
 			env.mutate()
 		}
 		if a.Background {
-			return env.startJob(a.Cmd, box)
+			return env.startJob(a.Cmd, box, a.TTY)
 		}
 		t := a.Timeout
 		if t <= 0 {

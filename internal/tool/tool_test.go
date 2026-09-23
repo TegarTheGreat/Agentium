@@ -884,3 +884,50 @@ func TestWebSearch(t *testing.T) {
 		t.Fatal("a query carrying a secret must be refused")
 	}
 }
+
+func TestTTYJobs(t *testing.T) {
+	if _, _, err := openPTY(); err != nil {
+		t.Skip(err)
+	}
+	e := env(t)
+	defer e.KillJobs()
+	out, _ := call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY || echo NO_TTY","background":true,"tty":true}`)
+	if !strings.Contains(out, "IS_TTY") {
+		t.Fatalf("tty: %q", out)
+	}
+	out, _ = call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY || echo NO_TTY","background":true}`)
+	if !strings.Contains(out, "NO_TTY") {
+		t.Fatalf("pipe job should not have a tty: %q", out)
+	}
+	if _, err := exec.LookPath("python3"); err == nil {
+		// Python shows its interactive prompt only on a terminal.
+		out, _ = call(t, bashTool, e, `{"cmd":"python3 -q","background":true,"tty":true}`)
+		if !strings.Contains(out, ">>>") {
+			t.Fatalf("python prompt: %q", out)
+		}
+		id := strings.Fields(out)[1]
+		out, _ = call(t, bashTool, e, fmt.Sprintf(`{"job":%s,"stdin":"print(6*7)\n"}`, id))
+		if !strings.Contains(out, "42") || strings.Contains(out, "\x1b") {
+			t.Fatalf("repl: %q", out)
+		}
+	}
+	// Ctrl-C through the terminal stops a foreground program.
+	out, _ = call(t, bashTool, e, `{"cmd":"sleep 30","background":true,"tty":true}`)
+	id := strings.Fields(out)[1]
+	call(t, bashTool, e, fmt.Sprintf(`{"job":%s,"stdin":"\u0003"}`, id))
+	time.Sleep(500 * time.Millisecond)
+	if out, _ := call(t, bashTool, e, fmt.Sprintf(`{"job":%s}`, id)); !strings.Contains(out, "exited") {
+		t.Fatalf("ctrl-c: %q", out)
+	}
+	if sandbox.Probe().Available {
+		e.Sandbox = &sandbox.Config{Write: sandbox.DefaultWrite(e.Root)}
+		out, _ := call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY; touch /etc/agentium-x 2>&1 | head -1","background":true,"tty":true}`)
+		if !strings.Contains(out, "IS_TTY") || !strings.Contains(strings.ToLower(out), "denied") && !strings.Contains(strings.ToLower(out), "read-only") {
+			t.Fatalf("sandboxed tty job: %q", out)
+		}
+		e.Sandbox = nil
+	}
+	if cleanTTY("\x1b[31mred\x1b[0m\r\nline\rprogress 50%\rprogress 100%") != "red\nprogress 100%" {
+		t.Fatalf("cleanTTY: %q", cleanTTY("\x1b[31mred\x1b[0m\r\nline\rprogress 50%\rprogress 100%"))
+	}
+}
