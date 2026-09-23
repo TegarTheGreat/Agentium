@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,11 +23,18 @@ import (
 	"time"
 )
 
-// Config describes one stdio server (config.json "mcp" entries).
+// Config describes one server (config.json "mcp" entries): a local
+// command (stdio), or a remote URL (Streamable HTTP, or legacy SSE with
+// Type "sse").
 type Config struct {
-	Command string            `json:"command"`
+	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Type    string            `json:"type,omitempty"` // "", "stdio", "http", "sse"
+	Headers map[string]string `json:"headers,omitempty"`
+	// LogPath receives a stdio server's stderr ("" = discard).
+	LogPath string `json:"-"`
 }
 
 // Tool is a tool offered by a server.
@@ -36,18 +44,23 @@ type Tool struct {
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
+// transport moves JSON-RPC messages; replies reach Client.dispatch.
+type transport interface {
+	send(ctx context.Context, msg []byte) error
+	close()
+}
+
 // Client is a running server connection.
 type Client struct {
 	Name  string
 	Tools []Tool
 
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	wmu    sync.Mutex
+	tr     transport
 	nextID atomic.Int64
 	mu     sync.Mutex
 	wait   map[int64]chan response
 	closed chan struct{}
+	once   sync.Once
 	err    error
 }
 
@@ -69,33 +82,27 @@ type message struct {
 
 const protocolVersion = "2025-06-18"
 
-// Start launches the server, performs the handshake and lists its tools.
+// Start connects to the server, performs the handshake and lists its tools.
 func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, error) {
-	if cfg.Command == "" {
-		return nil, fmt.Errorf("mcp %s: no command", name)
+	c := &Client{Name: name, wait: map[int64]chan response{}, closed: make(chan struct{})}
+	switch {
+	case cfg.URL != "" && cfg.Type == "sse":
+		tr, err := startSSE(ctx, c, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("mcp %s: %w", name, err)
+		}
+		c.tr = tr
+	case cfg.URL != "":
+		c.tr = &httpTransport{c: c, url: cfg.URL, headers: expand(cfg.Headers)}
+	case cfg.Command != "":
+		tr, err := startStdio(c, cfg, dir)
+		if err != nil {
+			return nil, fmt.Errorf("mcp %s: %w", name, err)
+		}
+		c.tr = tr
+	default:
+		return nil, fmt.Errorf("mcp %s: needs a command or a url", name)
 	}
-	cmd := exec.Command(cfg.Command, cfg.Args...)
-	cmd.Dir = dir
-	// A server gets the secrets named in its own config, not every key of
-	// the session.
-	cmd.Env = policy.ScrubEnv(os.Environ(), nil)
-	for k, v := range cfg.Env {
-		cmd.Env = append(cmd.Env, k+"="+os.ExpandEnv(v))
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("mcp %s: %w", name, err)
-	}
-	c := &Client{Name: name, cmd: cmd, stdin: stdin, wait: map[int64]chan response{}, closed: make(chan struct{})}
-	go c.read(stdout)
 
 	var init struct {
 		ProtocolVersion string `json:"protocolVersion"`
@@ -103,10 +110,15 @@ func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, e
 	if err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "agentium", "version": "0.6"},
+		"clientInfo":      map[string]any{"name": "agentium", "version": "0.10"},
 	}, &init); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("mcp %s: initialize: %w", name, err)
+		return nil, fmt.Errorf("mcp %s: initialize: %w%s", name, err, logTail(cfg.LogPath))
+	}
+	if h, ok := c.tr.(*httpTransport); ok && init.ProtocolVersion != "" {
+		h.mu.Lock()
+		h.proto = init.ProtocolVersion
+		h.mu.Unlock()
 	}
 	_ = c.notify("notifications/initialized", nil)
 	cursor := ""
@@ -131,46 +143,74 @@ func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, e
 	return c, nil
 }
 
-func (c *Client) read(r io.Reader) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 32*1024*1024)
-	for sc.Scan() {
-		var m message
-		if json.Unmarshal(sc.Bytes(), &m) != nil {
-			continue
-		}
-		switch {
-		case m.Method != "" && len(m.ID) > 0:
-			// Server-to-client request (ping, roots/list, sampling ...).
-			if m.Method == "ping" {
-				c.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{}})
-			} else {
-				c.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32601, "message": "not supported"}})
-			}
-		case m.Method != "":
-			// Notification: ignored.
-		default:
-			var id int64
-			if json.Unmarshal(m.ID, &id) != nil {
-				continue
-			}
-			c.mu.Lock()
-			ch := c.wait[id]
-			delete(c.wait, id)
-			c.mu.Unlock()
-			if ch != nil {
-				ch <- m.response
-			}
-		}
+func expand(h map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range h {
+		out[k] = os.ExpandEnv(v)
 	}
-	c.mu.Lock()
-	c.err = errors.New("server exited")
-	for id, ch := range c.wait {
-		close(ch)
+	return out
+}
+
+// logTail returns the last lines of a server's stderr log, to explain a
+// failed start.
+func logTail(p string) string {
+	if p == "" {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil || len(strings.TrimSpace(string(b))) == 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) > 5 {
+		lines = lines[len(lines)-5:]
+	}
+	return "\n  server stderr (" + p + "):\n  " + strings.Join(lines, "\n  ")
+}
+
+// dispatch handles one message from the server.
+func (c *Client) dispatch(raw []byte) {
+	var m message
+	if json.Unmarshal(raw, &m) != nil {
+		return
+	}
+	switch {
+	case m.Method != "" && len(m.ID) > 0:
+		// Server-to-client request (ping, roots/list, sampling ...).
+		if m.Method == "ping" {
+			c.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{}})
+		} else {
+			c.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32601, "message": "not supported"}})
+		}
+	case m.Method != "":
+		// Notification: ignored.
+	default:
+		var id int64
+		if json.Unmarshal(m.ID, &id) != nil {
+			return
+		}
+		c.mu.Lock()
+		ch := c.wait[id]
 		delete(c.wait, id)
+		c.mu.Unlock()
+		if ch != nil {
+			ch <- m.response
+		}
 	}
-	c.mu.Unlock()
-	close(c.closed)
+}
+
+// shutdown marks the connection dead and fails pending calls.
+func (c *Client) shutdown(why string) {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.err = errors.New(why)
+		for id, ch := range c.wait {
+			close(ch)
+			delete(c.wait, id)
+		}
+		c.mu.Unlock()
+		close(c.closed)
+	})
 }
 
 func (c *Client) send(v any) error {
@@ -178,10 +218,88 @@ func (c *Client) send(v any) error {
 	if err != nil {
 		return err
 	}
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
-	_, err = c.stdin.Write(append(b, '\n'))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	return c.tr.send(ctx, b)
+}
+
+// --- stdio ---
+
+type stdioTransport struct {
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	wmu   sync.Mutex
+	log   *os.File
+}
+
+func startStdio(c *Client, cfg Config, dir string) (*stdioTransport, error) {
+	cmd := exec.Command(cfg.Command, cfg.Args...)
+	cmd.Dir = dir
+	// A server gets the secrets named in its own config, not every key of
+	// the session.
+	cmd.Env = policy.ScrubEnv(os.Environ(), nil)
+	for k, v := range cfg.Env {
+		cmd.Env = append(cmd.Env, k+"="+os.ExpandEnv(v))
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	t := &stdioTransport{cmd: cmd, stdin: stdin}
+	cmd.Stderr = io.Discard
+	if cfg.LogPath != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.LogPath), 0o700); err == nil {
+			if f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
+				t.log = f
+				cmd.Stderr = f
+			}
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go func() {
+		r := bufio.NewReaderSize(stdout, 64*1024)
+		for {
+			line, err := r.ReadBytes('\n')
+			if len(line) > 0 {
+				c.dispatch(line)
+			}
+			if err != nil {
+				break
+			}
+		}
+		c.shutdown("server exited")
+	}()
+	return t, nil
+}
+
+func (t *stdioTransport) send(_ context.Context, b []byte) error {
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
+	_, err := t.stdin.Write(append(b, '\n'))
 	return err
+}
+
+func (t *stdioTransport) close() {
+	_ = t.stdin.Close()
+	done := make(chan struct{})
+	go func() { t.cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		if t.cmd.Process != nil {
+			_ = t.cmd.Process.Kill()
+		}
+		<-done
+	}
+	if t.log != nil {
+		t.log.Close()
+	}
 }
 
 func (c *Client) notify(method string, params any) error {
@@ -202,7 +320,14 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	}
 	c.wait[id] = ch
 	c.mu.Unlock()
-	if err := c.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+	b, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	if err != nil {
+		return err
+	}
+	if err := c.tr.send(ctx, b); err != nil {
+		c.mu.Lock()
+		delete(c.wait, id)
+		c.mu.Unlock()
 		return err
 	}
 	select {
@@ -261,17 +386,10 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	return strings.TrimSpace(sb.String()), res.IsError, nil
 }
 
-// Close stops the server.
+// Close disconnects from (or stops) the server.
 func (c *Client) Close() {
-	_ = c.stdin.Close()
-	select {
-	case <-c.closed:
-	case <-time.After(2 * time.Second):
-		if c.cmd.Process != nil {
-			_ = c.cmd.Process.Kill()
-		}
-	}
-	_ = c.cmd.Wait()
+	c.tr.close()
+	c.shutdown("closed")
 }
 
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
