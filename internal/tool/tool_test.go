@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -924,6 +925,28 @@ func TestTTYJobs(t *testing.T) {
 		out, _ := call(t, bashTool, e, `{"cmd":"[ -t 0 ] && echo IS_TTY; touch /etc/agentium-x 2>&1 | head -1","background":true,"tty":true}`)
 		if !strings.Contains(out, "IS_TTY") || !strings.Contains(strings.ToLower(out), "denied") && !strings.Contains(strings.ToLower(out), "read-only") {
 			t.Fatalf("sandboxed tty job: %q", out)
+		}
+		// Stopping an interactive shell also stops the jobs it started
+		// in process groups of their own.
+		out, _ = call(t, bashTool, e, `{"cmd":"bash --norc -i","background":true,"tty":true}`)
+		id := strings.Fields(out)[1]
+		out, _ = call(t, bashTool, e, fmt.Sprintf(`{"job":%s,"stdin":"sleep 300 & echo PID=$!\n"}`, id))
+		m := regexp.MustCompile(`PID=(\d+)`).FindStringSubmatch(out)
+		if m == nil {
+			t.Fatalf("shell job: %q", out)
+		}
+		call(t, bashTool, e, fmt.Sprintf(`{"job":%s,"kill":true}`, id))
+		gone := false
+		for range 20 {
+			st, _ := exec.Command("ps", "-o", "stat=", "-p", m[1]).Output()
+			if s := strings.TrimSpace(string(st)); s == "" || strings.HasPrefix(s, "Z") {
+				gone = true
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !gone {
+			t.Fatalf("pid %s from the stopped shell is still running", m[1])
 		}
 		e.Sandbox = nil
 	}

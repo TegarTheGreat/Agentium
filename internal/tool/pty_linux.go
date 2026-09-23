@@ -5,6 +5,8 @@ package tool
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -44,4 +46,27 @@ func ioctl(fd, req, arg uintptr) error {
 func setWinsize(f *os.File, rows, cols uint16) {
 	ws := [4]uint16{rows, cols, 0, 0}
 	_ = ioctl(f.Fd(), syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
+}
+
+// sessionPIDs lists the live processes in session sid.
+func sessionPIDs(sid int) []int {
+	ents, _ := os.ReadDir("/proc")
+	var pids []int
+	for _, e := range ents {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid pgrp session ...; comm may hold spaces.
+		s := string(b)
+		f := strings.Fields(s[strings.LastIndexByte(s, ')')+1:])
+		if len(f) > 3 && f[0] != "Z" && f[3] == strconv.Itoa(sid) {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }

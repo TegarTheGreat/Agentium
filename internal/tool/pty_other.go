@@ -13,3 +13,5 @@ func openPTY() (master, slave *os.File, err error) {
 }
 
 func ttyAttr(*exec.Cmd) {}
+
+func killSession(cmd *exec.Cmd) { killProcessGroup(cmd) }
