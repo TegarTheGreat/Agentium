@@ -49,6 +49,15 @@ var risky = []struct {
 	{regexp.MustCompile(`\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b`), "publishes a package"},
 	{regexp.MustCompile(`\bdocker\s+system\s+prune\b|\bkubectl\s+delete\b|\bterraform\s+(destroy|apply)\b`), "destroys or changes infrastructure"},
 	{regexp.MustCompile(`\bDROP\s+(TABLE|DATABASE)\b`), "drops data"},
+	{regexp.MustCompile(`\bfind\b.*\s-(delete|exec\s+rm)\b`), "bulk delete"},
+	{regexp.MustCompile(`\bxargs\b.*\brm\b`), "bulk delete"},
+	{regexp.MustCompile(`\bgit\s+push\b.*\s\+\S`), "force push"},
+	{regexp.MustCompile(`\b(truncate|shred|wipefs)\s`), "destroys file contents"},
+	{regexp.MustCompile(`\bchmod\s+(-R\s+)?0*00\b|\bchmod\s+[0-7]*\s+-R\b.*`), "changes permissions recursively"},
+	{regexp.MustCompile(`(~|\$HOME|\$\{HOME\}|/home/[^/\s]+|/root)/\.(ssh|aws|gnupg|kube|docker|netrc|npmrc|pypirc|git-credentials|config/gcloud|config/gh|agentium/auth)`), "touches credentials"},
+	{regexp.MustCompile(`/etc/(shadow|sudoers)`), "touches system secrets"},
+	{regexp.MustCompile(`\b(shutil\.rmtree|os\.remove|os\.unlink|fs\.rmSync|rimraf|unlink\s+glob)\b`), "deletes files from a script"},
+	{regexp.MustCompile(`\b(nc|ncat|socat|telnet)\s+\S+\s+\d+`), "raw network connection"},
 }
 
 // RiskyCommand returns a reason if cmd looks destructive, else "".
@@ -167,4 +176,16 @@ func (g *Gate) Net(cmd string, p NetPolicy) (bool, string) {
 		return true, ""
 	}
 	return g.ask("network: "+cmd, "needs network access"), "needs network access"
+}
+
+var secretPath = regexp.MustCompile(`/\.(ssh|aws|gnupg|kube|docker|netrc|npmrc|pypirc|git-credentials|config/gcloud|config/gh|agentium/auth\.json)(/|$)|^/etc/(shadow|gshadow|sudoers)`)
+
+// Read reports whether path may be read. Credential stores (SSH keys,
+// cloud credentials, ...) need approval: their content would be sent to
+// the model provider.
+func (g *Gate) Read(path string) (bool, string) {
+	if g.GetMode() == Yolo || !secretPath.MatchString(filepath.ToSlash(path)) {
+		return true, ""
+	}
+	return g.ask("read: "+path, "credential file"), "credential file"
 }

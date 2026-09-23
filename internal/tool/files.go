@@ -36,6 +36,11 @@ var readTool = Tool{
 			return "", errors.New("path is required")
 		}
 		p := env.abs(a.Path)
+		if env.Gate != nil {
+			if ok, why := env.Gate.Read(p); !ok {
+				return "", fmt.Errorf("denied (%s)", why)
+			}
+		}
 		st, err := os.Stat(p)
 		if err != nil {
 			return "", err
