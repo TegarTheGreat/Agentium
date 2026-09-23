@@ -49,12 +49,16 @@ func (a *Agent) size() int {
 
 // manageContext keeps the conversation within the model's window:
 // first elide old tool output and old edit payloads (no LLM call, done
-// in one batch so the cached prefix changes rarely), then, if still too
-// big, summarize the older part.
-func (a *Agent) manageContext(ctx context.Context) {
+// in one batch with headroom so it rarely re-runs and the cached prefix
+// stays stable), then, if still too big, summarize the older part.
+// Routine elision runs only at turn boundaries.
+func (a *Agent) manageContext(ctx context.Context, boundary bool) {
 	elideAt, compactAt := a.budgets()
-	if elideAt > 0 && a.size() > elideAt {
+	if boundary && elideAt > 0 && a.size() > elideAt {
 		a.elide(keepRecentTools)
+		if a.size() > elideAt*80/100 {
+			a.elide(2) // leave headroom so the next turns don't re-elide
+		}
 	}
 	if compactAt > 0 && a.size() > compactAt {
 		if err := a.compact(ctx); err != nil {
@@ -96,13 +100,26 @@ func (a *Agent) elide(keep int) {
 	}
 }
 
-// invalidateFrom drops provider-native content (signed thinking blocks)
-// from message i onward: those blocks are bound to the exact history
-// before them, which was just edited. The messages keep their text and
-// tool calls, so nothing the model needs is lost.
+// invalidateFrom drops signed thinking blocks that an edit at message i
+// invalidated: only models that bind blocks to the conversation prefix
+// are affected. The in-flight assistant turn (the last assistant message
+// when a tool round is open) keeps its blocks, since the API expects them
+// on the turn it is continuing; on the Claude API, drop_block covers it.
+// Messages keep their text and tool calls, so the model loses nothing.
 func (a *Agent) invalidateFrom(i int) {
+	inflight := -1
+	if n := len(a.Messages); n > 0 && a.Messages[n-1].Role != provider.RoleUser {
+		for j := n - 1; j >= 0; j-- {
+			if a.Messages[j].Role == provider.RoleAssistant {
+				inflight = j
+				break
+			}
+		}
+	}
 	for j := i; j < len(a.Messages); j++ {
-		a.Messages[j].Raw = nil
+		if j != inflight && a.Messages[j].Raw != nil && provider.PreservedThinking(a.Messages[j].RawModel) {
+			a.Messages[j].Raw = nil
+		}
 	}
 }
 
@@ -143,6 +160,9 @@ func (a *Agent) compact(ctx context.Context) error {
 	keepBudget := compactAt * 35 / 100
 	// Walk back to find where the kept tail starts: at a real user message
 	// (not a tool result), so tool calls and results stay paired.
+	// The kept tail may start at a real user message or at an assistant
+	// message (its tool results follow it, so calls stay paired); this
+	// also works inside one long run with a single user message.
 	split, kept := -1, 0
 	for i := len(a.Messages) - 1; i > 0; i-- {
 		m := a.Messages[i]
@@ -150,7 +170,10 @@ func (a *Agent) compact(ctx context.Context) error {
 		for _, c := range m.ToolCalls {
 			kept += len(c.Args)
 		}
-		if m.Role == provider.RoleUser {
+		if m.Role == provider.RoleUser || m.Role == provider.RoleAssistant {
+			if i == len(a.Messages)-1 {
+				continue // keep at least one full exchange in the tail
+			}
 			split = i
 			if kept >= keepBudget {
 				break

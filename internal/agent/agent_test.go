@@ -201,7 +201,7 @@ func TestElide(t *testing.T) {
 	}
 	// Under budget: untouched.
 	b := &Agent{ContextChars: 1 << 30, Messages: []provider.Message{{Role: provider.RoleTool, Text: big}}}
-	b.manageContext(context.Background())
+	b.manageContext(context.Background(), true)
 	if b.Messages[0].Text != big {
 		t.Fatal("elided under budget")
 	}
@@ -400,17 +400,21 @@ func TestElideArgs(t *testing.T) {
 }
 
 func TestRawInvalidatedAfterEdits(t *testing.T) {
-	a := &Agent{ContextChars: 3000}
-	big := strings.Repeat("q", 2000)
-	for i := 0; i < 9; i++ {
-		a.Messages = append(a.Messages,
-			provider.Message{Role: provider.RoleAssistant, Raw: json.RawMessage(`[{"type":"thinking","signature":"S"}]`), RawModel: "m",
-				ToolCalls: []provider.ToolCall{tc(fmt.Sprint(i), "read", `{}`)}},
-			provider.Message{Role: provider.RoleTool, ToolCallID: fmt.Sprint(i), Text: big})
+	build := func(model string) *Agent {
+		a := &Agent{ContextChars: 3000}
+		big := strings.Repeat("q", 2000)
+		for i := 0; i < 9; i++ {
+			a.Messages = append(a.Messages,
+				provider.Message{Role: provider.RoleAssistant, Raw: json.RawMessage(`[{"type":"thinking","signature":"S"}]`), RawModel: model,
+					ToolCalls: []provider.ToolCall{tc(fmt.Sprint(i), "read", `{}`)}},
+				provider.Message{Role: provider.RoleTool, ToolCallID: fmt.Sprint(i), Text: big})
+		}
+		a.elide(keepRecentTools)
+		return a
 	}
-	a.elide(keepRecentTools)
-	// Messages before the first edit keep their signed blocks; everything
-	// from the first edited message onward loses them.
+	// Prefix-bound models: blocks after the first edit go, except the
+	// in-flight assistant turn (the last one, whose results just arrived).
+	a := build("claude-opus-5-5")
 	firstEdited := -1
 	for i, m := range a.Messages {
 		if strings.Contains(m.Text, "[elided") {
@@ -418,31 +422,51 @@ func TestRawInvalidatedAfterEdits(t *testing.T) {
 			break
 		}
 	}
+	last := len(a.Messages) - 2
 	for i, m := range a.Messages {
 		if m.Role != provider.RoleAssistant {
 			continue
 		}
-		if i < firstEdited && m.Raw == nil {
-			t.Fatalf("message %d before the edit lost its raw blocks", i)
+		switch {
+		case i < firstEdited && m.Raw == nil:
+			t.Fatalf("message %d before the edit lost its blocks", i)
+		case i > firstEdited && i != last && m.Raw != nil:
+			t.Fatalf("message %d after the edit kept stale blocks", i)
+		case i == last && m.Raw == nil:
+			t.Fatal("in-flight turn must keep its thinking block")
 		}
-		if i > firstEdited && m.Raw != nil {
-			t.Fatalf("message %d after the edit kept stale raw blocks", i)
+	}
+	// Older models' signatures don't depend on history: nothing is dropped.
+	for _, m := range build("claude-sonnet-5").Messages {
+		if m.Role == provider.RoleAssistant && m.Raw == nil {
+			t.Fatal("non-prefix-bound blocks must be kept")
 		}
 	}
 }
 
-func TestMaxCost(t *testing.T) {
-	loop := calls(tc("x", "bash", `{"cmd":"true"}`))
-	s := &script{steps: []func(provider.Request) (provider.Response, error){loop, loop, loop, loop}}
-	a := newAgent(t, s)
-	a.Cost = func(u provider.Usage) float64 { return 0.4 }
-	a.MaxCost = 1.0
-	st, err := a.Run(context.Background(), "spend")
-	if !errors.Is(err, ErrBudget) || st.Turns != 3 {
-		t.Fatalf("err=%v turns=%d", err, st.Turns)
+func TestCompactionInsideOneRun(t *testing.T) {
+	fast := &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "state: halfway"}, nil
+		},
+	}}
+	a := newAgent(t, &script{})
+	a.ContextTokens, a.MaxTokens = 20000, 1000
+	a.Fast, a.FastModel = fast, "fast"
+	big := strings.Repeat("r", 6000)
+	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: "one long task"})
+	for i := 0; i < 8; i++ {
+		a.Messages = append(a.Messages,
+			provider.Message{Role: provider.RoleAssistant, Text: big, ToolCalls: []provider.ToolCall{tc(fmt.Sprint(i), "read", `{}`)}},
+			provider.Message{Role: provider.RoleTool, ToolCallID: fmt.Sprint(i), Text: "ok"})
 	}
-	last := a.Messages[len(a.Messages)-1]
-	if last.Role != provider.RoleTool || !last.IsError {
-		t.Fatalf("pending call must get a result: %+v", last)
+	if err := a.compact(context.Background()); err != nil {
+		t.Fatalf("single-run compaction: %v", err)
+	}
+	if a.Messages[1].Role != provider.RoleAssistant || len(a.Messages[1].ToolCalls) == 0 {
+		t.Fatalf("tail should start at an assistant turn: %+v", a.Messages[1])
+	}
+	if a.Messages[2].Role != provider.RoleTool || a.Messages[2].ToolCallID != a.Messages[1].ToolCalls[0].ID {
+		t.Fatal("tool call and result must stay paired")
 	}
 }

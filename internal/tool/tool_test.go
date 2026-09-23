@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -416,5 +417,73 @@ func TestPostEditHook(t *testing.T) {
 	out, _ = call(t, editTool, e, `{"path":"n.txt","old":"forbidden item","new":"forbidden thing"}`)
 	if !strings.Contains(out, "lint: forbidden word") {
 		t.Fatalf("failing hook output should reach the model: %q", out)
+	}
+}
+
+func TestSymlinkEscapeAndSecretSearch(t *testing.T) {
+	e := env(t)
+	outside, _ := filepath.EvalSymlinks(t.TempDir())
+	os.WriteFile(filepath.Join(outside, "victim.txt"), []byte("safe"), 0o644)
+	os.Symlink(outside, filepath.Join(e.Root, "h"))
+	if _, err := call(t, editTool, e, `{"path":"h/victim.txt","old":"safe","new":"pwned"}`); err == nil || !strings.Contains(err.Error(), "outside workspace") {
+		t.Fatalf("symlinked write must be treated as outside: %v", err)
+	}
+	if _, err := call(t, editTool, e, `{"path":"h/new.txt","new":"x"}`); err == nil {
+		t.Fatal("new file through symlink must be denied")
+	}
+	if b, _ := os.ReadFile(filepath.Join(outside, "victim.txt")); string(b) != "safe" {
+		t.Fatal("file outside workspace modified")
+	}
+	// Credential stores: search refuses them and skips them inside wider searches.
+	home := filepath.Join(e.Root, "home")
+	os.MkdirAll(filepath.Join(home, ".ssh"), 0o700)
+	os.WriteFile(filepath.Join(home, ".ssh", "id_rsa"), []byte("PRIVATE KEY material"), 0o600)
+	if _, err := call(t, searchTool, e, `{"pattern":"PRIVATE","path":"home/.ssh"}`); err == nil {
+		t.Fatal("search in .ssh must need approval")
+	}
+	if out, _ := call(t, searchTool, e, `{"pattern":"PRIVATE","path":"home"}`); strings.Contains(out, "material") {
+		t.Fatalf("wide search leaked a key: %q", out)
+	}
+	if out, _ := walkSearch(context.Background(), e.Root, home, "PRIVATE", "", false); strings.Contains(out, "material") {
+		t.Fatalf("fallback search leaked a key: %q", out)
+	}
+	// A single huge line is shown truncated rather than as nothing.
+	write(t, e, "min.js", strings.Repeat("x", readMaxBytes+500))
+	out, _ := call(t, readTool, e, `{"path":"min.js"}`)
+	if !strings.Contains(out, "line truncated") || len(out) < readMaxBytes {
+		t.Fatalf("huge line: len=%d", len(out))
+	}
+}
+
+func TestSafeDialAllowsConfiguredProxy(t *testing.T) {
+	// A local forward proxy (corporate or sandbox proxies) must stay
+	// reachable even though it is on loopback; targets are still checked
+	// by checkHost before the request and on redirects.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	addr := ln.Addr().String()
+	if _, err := safeDial(context.Background(), "tcp", addr); err == nil {
+		t.Fatal("loopback must be blocked when it is not the proxy")
+	}
+	t.Setenv("HTTPS_PROXY", "http://"+addr)
+	c, err := safeDial(context.Background(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("configured proxy must be dialable: %v", err)
+	}
+	c.Close()
+	if err := checkHost(context.Background(), "127.0.0.1"); err == nil {
+		t.Fatal("private targets stay blocked behind a proxy")
 	}
 }

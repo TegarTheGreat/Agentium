@@ -42,12 +42,12 @@ func TestBedrockStream(t *testing.T) {
 	}))
 	defer srv.Close()
 	b := &Bedrock{Region: "us-east-1", Endpoint: srv.URL, Creds: AWSCreds{AccessKey: "AK", SecretKey: "SK"}}
-	resp, err := b.Stream(context.Background(), Request{Model: "us.anthropic.claude-sonnet-5", System: "s",
+	resp, err := b.Stream(context.Background(), Request{Model: "us.anthropic.claude-sonnet-5-v1:0", System: "s",
 		Messages: []Message{{Role: RoleUser, Text: "hello"}}}, nil)
 	if err != nil || resp.Text != "hi from bedrock" || resp.Usage.Input != 7 || resp.Usage.Output != 3 {
 		t.Fatalf("resp=%+v err=%v", resp, err)
 	}
-	if gotPath != "/model/us.anthropic.claude-sonnet-5/invoke-with-response-stream" || !strings.HasPrefix(gotAuth, "AWS4-HMAC-SHA256 Credential=AK/") {
+	if gotPath != "/model/us.anthropic.claude-sonnet-5-v1%3A0/invoke-with-response-stream" || !strings.HasPrefix(gotAuth, "AWS4-HMAC-SHA256 Credential=AK/") {
 		t.Fatalf("path=%s auth=%s", gotPath, gotAuth)
 	}
 	if !strings.Contains(gotBody, `"anthropic_version":"bedrock-2023-05-31"`) || strings.Contains(gotBody, `"model"`) || strings.Contains(gotBody, `"stream"`) {
@@ -62,5 +62,20 @@ func TestBedrockStream(t *testing.T) {
 	_, err = (&Bedrock{Region: "us-east-1", Endpoint: srv2.URL, Bearer: "BK"}).Stream(context.Background(), Request{Model: "m"}, nil)
 	if gotAuth != "Bearer BK" || !Retryable(err) {
 		t.Fatalf("auth=%s err=%v", gotAuth, err)
+	}
+}
+
+// The canonical request must encode the already-encoded path once more,
+// as AWS does for non-S3 services: ":" is sent as %3A and signed as %253A.
+func TestSignV4EncodesPathTwice(t *testing.T) {
+	req, _ := http.NewRequest("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/a.b-v1%3A0/invoke", nil)
+	req.URL.RawPath = "/model/a.b-v1%3A0/invoke"
+	var canon string
+	old := canonicalHook
+	canonicalHook = func(c string) { canon = c }
+	defer func() { canonicalHook = old }()
+	signV4(req, nil, "us-east-1", "bedrock", AWSCreds{AccessKey: "A", SecretKey: "S"}, time.Unix(0, 0))
+	if !strings.Contains(canon, "/model/a.b-v1%253A0/invoke\n") {
+		t.Fatalf("canonical request:\n%s", canon)
 	}
 }

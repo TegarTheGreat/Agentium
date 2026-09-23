@@ -128,7 +128,10 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		return st, err
 	}
 	for st.Turns < maxTurns {
-		a.manageContext(ctx)
+		// Routine elision happens only at the start of a user turn, when no
+		// tool round is in flight (its thinking block must stay intact);
+		// mid-round only the emergency compaction threshold applies.
+		a.manageContext(ctx, st.Turns == 0)
 		resp, err := a.call(ctx, provider.Request{
 			Model: a.Model, System: a.System, Messages: a.Messages, Tools: defs, MaxTokens: a.MaxTokens,
 			Reasoning: a.Reasoning, Fast: a.FastMode,
@@ -151,8 +154,12 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		if truncated {
 			resp.ToolCalls = validCalls(resp.ToolCalls)
 		}
+		served := a.Model
+		if resp.Model != "" {
+			served = resp.Model
+		}
 		msg := provider.Message{Role: provider.RoleAssistant, Text: resp.Text, ToolCalls: resp.ToolCalls,
-			Raw: resp.Raw, RawModel: a.Model, Reasoning: resp.Reasoning}
+			Raw: resp.Raw, RawModel: served, Reasoning: resp.Reasoning}
 		if truncated {
 			msg.Raw = nil // it may hold a cut-off tool call we dropped
 		}

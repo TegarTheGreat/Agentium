@@ -4,6 +4,8 @@ package provider
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,6 +108,9 @@ type Response struct {
 	StopReason string
 	Raw        json.RawMessage // provider-native assistant content, see Message.Raw
 	Reasoning  string
+	// Model is the model that actually served the reply when it differs
+	// from the request (fallback); "" means the requested model.
+	Model string
 }
 
 // ClosestEffort maps want onto the values a model supports.
@@ -177,8 +182,22 @@ func Retryable(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED) {
 		return true
 	}
+	// Permanent network failures: bad certificates, unknown hosts.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
+	}
+	var certErr *tls.CertificateVerificationError
+	var authErr x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	if errors.As(err, &certErr) || errors.As(err, &authErr) || errors.As(err, &hostErr) {
+		return false
+	}
 	var ne net.Error
-	if errors.As(err, &ne) {
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	if errors.Is(err, io.EOF) { // server closed the connection before replying
 		return true
 	}
 	msg := err.Error()

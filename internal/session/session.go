@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/config"
@@ -113,6 +112,8 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 	}
 	// IDs are timestamps, so name order is time order.
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	// Same encoding as the saved file (json escapes &, <, >).
+	quotedCwd, _ := json.Marshal(cwd)
 	var out []*Session
 	for _, n := range names {
 		b, err := os.ReadFile(filepath.Join(dir(), n))
@@ -120,7 +121,7 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 			continue
 		}
 		// Cheap pre-check before a full decode of a large file.
-		if !bytes.Contains(b[:min(len(b), 4096)], []byte(strconv.Quote(cwd))) {
+		if !bytes.Contains(b[:min(len(b), 4096)], quotedCwd) {
 			continue
 		}
 		var s Session

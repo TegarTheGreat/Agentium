@@ -64,9 +64,10 @@ func (c *Anthropic) official() bool {
 	return c.URL == "" && (c.BaseURL == "" || strings.Contains(c.BaseURL, "api.anthropic.com"))
 }
 
-// preservedThinking reports models whose thinking blocks are bound to the
-// exact conversation prefix (history edits invalidate them).
-func preservedThinking(model string) bool {
+// PreservedThinking reports models whose thinking blocks are bound to the
+// exact conversation prefix (history edits invalidate them). Older
+// models' signatures cover only the block itself.
+func PreservedThinking(model string) bool {
 	for _, m := range []string{"opus-5-5", "fable-5-1", "mythos-5-1"} {
 		if strings.Contains(model, m) {
 			return true
@@ -175,7 +176,7 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 	switch {
 	case len(r.Efforts) > 0: // adaptive-thinking models (4.6+)
 		th := map[string]any{"type": "adaptive"}
-		if c.official() && preservedThinking(req.Model) {
+		if c.official() && PreservedThinking(req.Model) {
 			// If history was edited (elision/compaction), drop the now-stale
 			// thinking blocks instead of failing the request.
 			th["block_binding"] = map[string]any{"prefix_mismatch_behavior": "drop_block"}

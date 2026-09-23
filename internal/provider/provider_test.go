@@ -2,13 +2,16 @@ package provider
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -466,5 +469,22 @@ func TestFallback(t *testing.T) {
 	f2 := &Fallback{Chain: []Resolved{{Model: "x", Client: c}, {Model: "y", Client: d}}}
 	if _, err := f2.Stream(context.Background(), Request{}, nil); err == nil || d.calls != 0 {
 		t.Fatal("400 must not fall back")
+	}
+}
+
+func TestRetryableClassification(t *testing.T) {
+	cases := map[error]bool{
+		&net.DNSError{Err: "no such host", Name: "x.invalid", IsNotFound: true}: false,
+		&net.DNSError{Err: "timeout", Name: "x", IsTimeout: true}:               true,
+		x509.UnknownAuthorityError{}:                                            false,
+		&net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}:                     true,
+		fmt.Errorf("wrap: %w", io.ErrUnexpectedEOF):                             true,
+		&HTTPError{Status: 404}:                                                 false,
+		context.Canceled:                                                        false,
+	}
+	for err, want := range cases {
+		if got := Retryable(err); got != want {
+			t.Errorf("Retryable(%T %v) = %v, want %v", err, err, got, want)
+		}
 	}
 }

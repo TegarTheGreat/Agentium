@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -65,9 +67,41 @@ func checkHost(ctx context.Context, host string) error {
 	return nil
 }
 
+// proxyAddrs are the configured HTTP(S) proxies. Connecting to them is
+// allowed even when they are local; the target host is still checked
+// by checkHost before the request and on every redirect.
+func proxyAddrs() map[string]bool {
+	m := map[string]bool{}
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		v := os.Getenv(k)
+		if v == "" {
+			continue
+		}
+		if !strings.Contains(v, "://") {
+			v = "http://" + v
+		}
+		u, err := url.Parse(v)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		host, port := u.Hostname(), u.Port()
+		if port == "" {
+			port = map[string]string{"https": "443"}[u.Scheme]
+			if port == "" {
+				port = "80"
+			}
+		}
+		m[net.JoinHostPort(host, port)] = true
+	}
+	return m
+}
+
 // safeDial resolves, checks and dials the checked IP, so DNS rebinding
 // between check and connect is not possible when dialing directly.
 func safeDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	if proxyAddrs()[addr] {
+		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
+	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
