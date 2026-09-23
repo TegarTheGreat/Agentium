@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Config describes one confinement.
@@ -55,6 +56,29 @@ func DefaultWrite(root string) []string {
 		}
 	}
 	return uniqueExisting(paths)
+}
+
+// ReadOnly drops from write every path that is root, inside root, or
+// contains root, so the workspace becomes read-only (plan mode). Scratch
+// and cache directories elsewhere stay writable.
+func ReadOnly(write []string, root string) []string {
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	var out []string
+	for _, p := range write {
+		if within(p, root) || within(root, p) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// within reports whether path is dir or below it.
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 func uniqueExisting(paths []string) []string {

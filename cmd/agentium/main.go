@@ -51,8 +51,9 @@ Flags:
   -m provider/model   model to use (env AGENTIUM_MODEL, config "model")
   -p prompt           one-shot prompt
   -c                  continue the latest session in this directory
-  --mode ask|auto|yolo  approvals: every action | risky only (default) | never
+  --mode ask|auto|yolo|plan  approvals: every action | risky only (default) | never
   --yolo              same as --mode yolo
+  --plan              plan mode: read-only investigation that ends in a plan (same as --mode plan)
   --no-sandbox        run shell commands unconfined
   --effort LEVEL      reasoning effort: low|medium|high|xhigh|max (model default if unset)
   --fast              provider fast mode where available (Claude Opus: up to 2.5x output speed)
@@ -62,7 +63,7 @@ Flags:
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
 
-In a session: /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
+In a session: /plan  /go  /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
 Keys: ↑/↓ history · Ctrl-A/E/U/K/W · paste keeps newlines · end a line with \ for a newline
 `
 
@@ -289,6 +290,7 @@ func run(args []string) error {
 	cont := fs.Bool("c", false, "")
 	mode := fs.String("mode", "", "")
 	yolo := fs.Bool("yolo", false, "")
+	plan := fs.Bool("plan", false, "")
 	quiet := fs.Bool("q", false, "")
 	maxTurns := fs.Int("max-turns", 0, "")
 	noSandbox := fs.Bool("no-sandbox", false, "")
@@ -343,6 +345,9 @@ func run(args []string) error {
 	m := policy.ParseMode(firstNonEmpty(*mode, cfg.Mode))
 	if *yolo {
 		m = policy.Yolo
+	}
+	if *plan {
+		m = policy.Plan
 	}
 	if *asJSON && *prompt == "" {
 		return errors.New("--json needs a prompt (argument, -p, or stdin)")
@@ -625,10 +630,20 @@ func run(args []string) error {
 	if lineEditing && isTTY(os.Stderr) {
 		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
 	}
+	// afterPlan is the mode /go switches to.
+	afterPlan := policy.Auto
+	if m := gate.GetMode(); m != policy.Plan {
+		afterPlan = m
+	}
 	for {
 		var line string
 		var err error
+		ps := "› "
+		if gate.GetMode() == policy.Plan {
+			ps = "plan› "
+		}
 		if ed != nil {
+			ed.prompt = ps
 			fmt.Fprint(os.Stderr, "\n")
 			line, err = ed.readLine()
 			if errors.Is(err, errInterrupt) || errors.Is(err, errEOF) {
@@ -639,7 +654,7 @@ func run(args []string) error {
 				continue
 			}
 		} else {
-			fmt.Fprint(os.Stderr, "\n› ")
+			fmt.Fprint(os.Stderr, "\n"+ps)
 			line, err = in.ReadString('\n')
 			if err != nil && line == "" {
 				fmt.Fprintln(os.Stderr)
@@ -649,6 +664,30 @@ func run(args []string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
+		}
+		switch f := strings.Fields(line); f[0] {
+		case "/plan":
+			if m := gate.GetMode(); m != policy.Plan {
+				afterPlan = m
+			}
+			gate.SetMode(policy.Plan)
+			fmt.Fprintln(os.Stderr, u.dim("· plan mode: read-only; the agent investigates and proposes a plan. /go to carry it out"))
+			if len(f) == 1 {
+				continue
+			}
+			line = strings.TrimSpace(strings.TrimPrefix(line, "/plan"))
+		case "/go":
+			if gate.GetMode() != policy.Plan {
+				fmt.Fprintln(os.Stderr, u.dim("· not in plan mode"))
+				continue
+			}
+			gate.SetMode(afterPlan)
+			fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("· %s mode: carrying out the plan", afterPlan)))
+			extra := strings.TrimSpace(strings.TrimPrefix(line, "/go"))
+			line = "Carry out the plan above, then verify it."
+			if extra != "" {
+				line += "\n\n" + extra
+			}
 		}
 		if strings.HasPrefix(line, "/") {
 			if done := slash(line, a, gate, cfg, auth, sess, store); done {
@@ -749,7 +788,7 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
 	default:
-		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
+		fmt.Fprintln(os.Stderr, "· commands: /undo /sessions /resume <n> /clear /model <ref> /mode <ask|auto|yolo|plan> /plan /go /usage /exit")
 	}
 	return false
 }

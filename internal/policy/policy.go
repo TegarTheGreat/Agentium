@@ -16,6 +16,7 @@ const (
 	Ask  Mode = "ask"  // approve every bash command and every write
 	Auto Mode = "auto" // approve only risky actions (default)
 	Yolo Mode = "yolo" // never ask
+	Plan Mode = "plan" // read-only: investigate and propose, never change files
 )
 
 // ParseMode maps a string to a Mode, defaulting to Auto.
@@ -25,6 +26,8 @@ func ParseMode(s string) Mode {
 		return Ask
 	case Yolo:
 		return Yolo
+	case Plan:
+		return Plan
 	}
 	return Auto
 }
@@ -70,6 +73,108 @@ func RiskyCommand(cmd string) string {
 	return ""
 }
 
+// readOnlyCmds are commands that only inspect. Used in plan mode when no
+// sandbox can enforce read-only execution.
+var readOnlyCmds = map[string]bool{
+	"ls": true, "cat": true, "head": true, "tail": true, "wc": true, "grep": true, "rg": true, "egrep": true,
+	"fgrep": true, "find": true, "fd": true, "tree": true, "file": true, "stat": true, "du": true, "df": true,
+	"pwd": true, "echo": true, "printf": true, "which": true, "type": true, "uname": true,
+	"date": true, "sort": true, "uniq": true, "cut": true, "tr": true, "nl": true, "diff": true, "cmp": true,
+	"basename": true, "dirname": true, "realpath": true, "readlink": true, "true": true, "jq": true,
+	"column": true, "md5sum": true, "sha256sum": true,
+}
+
+// readOnlySub lists read-only subcommands for tools that also mutate.
+var readOnlySub = map[string]map[string]bool{
+	"git": {"status": true, "log": true, "diff": true, "show": true, "blame": true, "grep": true,
+		"ls-files": true, "rev-parse": true, "branch": true, "remote": true, "describe": true, "shortlog": true},
+	"go":  {"list": true, "vet": true, "doc": true, "version": true, "env": true},
+	"npm": {"ls": true, "view": true},
+}
+
+var (
+	unsafeShell      = regexp.MustCompile("`|\\$\\(|<\\(|>\\(")
+	harmlessRedirect = regexp.MustCompile(`\d?>&\d|\d?>\s*/dev/null`)
+	cmdSep           = regexp.MustCompile(`\|\||&&|[|;&\n]`)
+)
+
+// ReadOnlyCommand reports whether every part of a shell pipeline only
+// reads. It is conservative: anything it does not recognise is not read-only.
+func ReadOnlyCommand(cmd string) bool {
+	if strings.TrimSpace(cmd) == "" || unsafeShell.MatchString(cmd) || RiskyCommand(cmd) != "" {
+		return false
+	}
+	// Allow harmless redirections, reject any other.
+	c := harmlessRedirect.ReplaceAllString(cmd, " ")
+	if strings.ContainsAny(c, ">") {
+		return false
+	}
+	for _, part := range cmdSep.Split(c, -1) {
+		f := strings.Fields(part)
+		if len(f) == 0 {
+			continue
+		}
+		name := filepath.Base(f[0])
+		switch {
+		case readOnlyCmds[name]:
+			if (name == "sort" || name == "tree") && hasPrefix(f[1:], "-o") || name == "rg" && hasPrefix(f[1:], "--pre") {
+				return false
+			}
+			if name == "find" && hasFlag(f[1:], "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls") {
+				return false
+			}
+		case readOnlySub[name] != nil:
+			if len(f) < 2 || !readOnlySub[name][f[1]] {
+				return false
+			}
+			if hasPrefix(f[2:], "--output") || name == "git" && hasFlag(f[2:], "-O", "--ext-diff") || name == "git" && hasPrefix(f[2:], "--open-files-in-pager") {
+				return false
+			}
+			if name == "go" && (hasFlag(f[2:], "-w", "-u") || hasPrefix(f[2:], "-toolexec") || hasPrefix(f[2:], "-vettool") || hasPrefix(f[2:], "-exec")) {
+				return false
+			}
+			if name == "git" && f[1] == "branch" && !onlyFlags(f[2:], "-a", "-r", "-v", "-vv", "--list", "--show-current", "--all", "--remotes") {
+				return false
+			}
+			if name == "git" && f[1] == "remote" && len(f) > 2 && f[2] != "-v" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func hasFlag(args []string, flags ...string) bool {
+	for _, a := range args {
+		for _, f := range flags {
+			if a == f {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func onlyFlags(args []string, flags ...string) bool {
+	for _, a := range args {
+		if !hasFlag(flags, a) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasPrefix(args []string, prefix string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Outside reports whether path resolves outside root.
 func Outside(root, path string) bool {
 	if !filepath.IsAbs(path) {
@@ -113,11 +218,25 @@ func (g *Gate) ask(action, reason string) bool {
 	return g.Approve(action, reason)
 }
 
-// Bash reports whether cmd may run.
+// PlanNote tells the model what plan mode means; it is added to the user
+// message (not the system prompt, which must stay cacheable).
+const PlanNote = "[plan mode: read-only. Investigate as needed, then reply with a short numbered plan: files to change, what changes, how to verify. Do not try to edit files.]"
+
+// planReason is given when plan mode blocks a change.
+const planReason = "plan mode is read-only; propose the change in your plan instead"
+
+// Bash reports whether cmd may run. In plan mode only read-only commands
+// pass; the shell tool relaxes that when a sandbox enforces read-only.
 func (g *Gate) Bash(cmd string) (bool, string) {
 	mode := g.GetMode()
 	if mode == Yolo {
 		return true, ""
+	}
+	if mode == Plan {
+		if ReadOnlyCommand(cmd) {
+			return true, ""
+		}
+		return false, planReason
 	}
 	reason := RiskyCommand(cmd)
 	if reason == "" && mode == Ask {
@@ -134,6 +253,9 @@ func (g *Gate) Write(path string) (bool, string) {
 	mode := g.GetMode()
 	if mode == Yolo {
 		return true, ""
+	}
+	if mode == Plan {
+		return false, planReason
 	}
 	reason := ""
 	if Outside(g.Root, path) {
@@ -190,11 +312,15 @@ func (g *Gate) Read(path string) (bool, string) {
 	return g.ask("read: "+path, "credential file"), "credential file"
 }
 
-// External reports whether an external (MCP) tool may run. Only ask mode
-// gates them; in auto mode the user opted in by configuring the server.
+// External reports whether an external (MCP) tool may run. Ask mode gates
+// them; in auto mode the user opted in by configuring the server. Plan
+// mode asks too, since an MCP tool may change things.
 func (g *Gate) External(name string) (bool, string) {
-	if g.GetMode() != Ask {
-		return true, ""
+	switch g.GetMode() {
+	case Ask:
+		return g.ask("mcp: "+name, "ask mode"), "ask mode"
+	case Plan:
+		return g.ask("mcp: "+name, "plan mode"), "plan mode"
 	}
-	return g.ask("mcp: "+name, "ask mode"), "ask mode"
+	return true, ""
 }

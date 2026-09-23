@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
@@ -116,6 +117,9 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 	}
 	if a.Env != nil {
 		a.Env.StartTurn()
+		if a.Env.Gate != nil && a.Env.Gate.GetMode() == policy.Plan {
+			input += "\n\n" + policy.PlanNote
+		}
 	}
 	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input})
 	maxTurns := a.MaxTurns
