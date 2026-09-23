@@ -194,3 +194,7 @@ v0.10.0. Linux and macOS are fully supported. On Windows, commands run in Git Ba
 make test    # go vet + go test -race
 make cross   # linux/darwin/windows binaries in dist/
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
