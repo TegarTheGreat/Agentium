@@ -34,6 +34,8 @@ type Config struct {
 	// Verify reminds the model to run a check after changing code
 	// (default on).
 	Verify *bool `json:"verify,omitempty"`
+	// Memory enables cross-session memory and recall (default on).
+	Memory *bool `json:"memory,omitempty"`
 	// ContextTokens overrides the model's context window.
 	ContextTokens int                     `json:"context_tokens,omitempty"`
 	Providers     map[string]ProviderConf `json:"providers,omitempty"`

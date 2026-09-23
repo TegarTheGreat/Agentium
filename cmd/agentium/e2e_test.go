@@ -239,3 +239,71 @@ func TestUndo(t *testing.T) {
 		t.Fatalf("undo note not delivered: %s", b)
 	}
 }
+
+func TestMemoryAcrossSessions(t *testing.T) {
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		json.Unmarshal(b, &body)
+		rec.add(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		reply := "Noted.\n@remember deploys run scripts/ship.sh from the repo root\n@decide indent with tabs — matches gofmt"
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", reply)
+	}))
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+
+	_, stderr, err := runBin(t, home, dir, "", "-m", "fakeoai/m", "remember how we deploy the ship script")
+	if err != nil || !strings.Contains(stderr, "remembered: deploys run scripts/ship.sh") || !strings.Contains(stderr, "decision D-001") {
+		t.Fatalf("first session: %v\n%s", err, stderr)
+	}
+	// A brand-new session (no -c) sees the memory snapshot in its system
+	// prompt and gets the earlier exchange recalled for a related question.
+	before := len(rec.all())
+	_, stderr, err = runBin(t, home, dir, "", "-m", "fakeoai/m", "which ship script deploys?")
+	if err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	b, _ := json.Marshal(rec.all()[before])
+	req := string(b)
+	for _, want := range []string{"scripts/ship.sh", "D-001", "@remember", "\\u003crecall"} {
+		if !strings.Contains(req, want) {
+			t.Errorf("second session request missing %q", want)
+		}
+	}
+	if !strings.Contains(stderr, "recalled") {
+		t.Errorf("recall notice missing: %s", stderr)
+	}
+	// Memory can be switched off.
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(fmt.Sprintf(`{"memory":false,"providers":{"fakeoai":{"base_url":%q,"api_key_env":"FAKE_KEY"}}}`, srv.URL+"/v1")), 0o600)
+	before = len(rec.all())
+	runBin(t, home, dir, "", "-m", "fakeoai/m", "which ship script deploys?")
+	b, _ = json.Marshal(rec.all()[before])
+	if strings.Contains(string(b), "scripts/ship.sh") {
+		t.Error("memory disabled but still injected")
+	}
+}
+
+func TestTidy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		out := "=== USER.md\n- prefers short answers\n=== MEMORY.md\n- deploy with scripts/ship.sh\n- tests: make test"
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", out)
+	}))
+	defer srv.Close()
+	home := setupHome(t, srv.URL)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	_, stderr, err := runBin(t, home, dir, "", "tidy", "--yes", "-m", "fakeoai/m")
+	if err != nil || !strings.Contains(stderr, "+ - deploy with scripts/ship.sh") || !strings.Contains(stderr, "memory updated") {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "USER.md")); !strings.Contains(string(b), "short answers") {
+		t.Fatalf("USER.md = %q", b)
+	}
+	_, stderr, _ = runBin(t, home, dir, "", "tidy", "--yes", "-m", "fakeoai/m")
+	if !strings.Contains(stderr, "already tidy") {
+		t.Fatalf("second tidy: %s", stderr)
+	}
+}

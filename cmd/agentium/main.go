@@ -19,6 +19,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/memory"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
@@ -37,6 +38,7 @@ Usage:
   agentium logout <provider>
   agentium providers            list providers and credential status
   agentium undo                 revert the file changes of the last turn here
+  agentium tidy [--yes]         consolidate long-term memory (shows a diff first)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
   agentium version
 
@@ -74,6 +76,9 @@ func main() {
 			return
 		case "undo":
 			exit(cmdUndo())
+			return
+		case "tidy":
+			exit(cmdTidy(os.Args[2:]))
 			return
 		case "bench":
 			exit(cmdBench(os.Args[2:]))
@@ -282,8 +287,13 @@ func run(args []string) error {
 	gate.Approve = ap.ask
 
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
+	mem := openMemory(cfg, cwd)
+	snapshot := ""
+	if mem != nil {
+		snapshot = mem.store.Snapshot()
+	}
 	a := &agent.Agent{
-		Client: res.Client, Model: res.Model, System: agent.SystemPrompt(cwd),
+		Client: res.Client, Model: res.Model, System: agent.SystemPrompt(cwd, mem != nil, snapshot),
 		Tools: tool.All(), Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate},
 		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
 		ContextTokens: firstPositive(cfg.ContextTokens, provider.ContextWindow(res.Model)),
@@ -307,6 +317,16 @@ func run(args []string) error {
 	if !boxStatus.Available && !*quiet && !*noSandbox && sandboxWanted(cfg) {
 		fmt.Fprintln(os.Stderr, u.dim("· "+boxStatus.Detail))
 	}
+	if mem != nil {
+		mem.skip = sess.ID
+		go mem.buildIndex()
+		a.OnRemember = func(fact string) {
+			for _, r := range mem.store.Apply([]memory.Directive{{Kind: "remember", Text: fact}}) {
+				u.line("· " + r)
+			}
+		}
+	}
+	var replies, edited []string
 	store := openCheckpoints(cfg, cwd)
 	var curPrompt string
 	if store != nil {
@@ -331,6 +351,21 @@ func run(args []string) error {
 			u.line(fmt.Sprintf("  retrying in %s: %s", wait, firstLine(err.Error())))
 		},
 		Notice: func(msg string) { u.line("· " + msg) },
+		TurnFinish: func(r provider.Response) {
+			if r.Text != "" {
+				replies = append(replies, r.Text)
+			}
+			for _, c := range r.ToolCalls {
+				if c.Name == "edit" {
+					var m map[string]any
+					if jsonUnmarshal(c.Args, &m) == nil {
+						if p, ok := m["path"].(string); ok {
+							edited = appendUnique(edited, p)
+						}
+					}
+				}
+			}
+		},
 	}
 
 	var active atomic.Pointer[context.CancelFunc]
@@ -351,9 +386,20 @@ func run(args []string) error {
 
 	turn := func(input string) error {
 		curPrompt = input
+		replies, edited = nil, nil
+		send := input
+		if mem != nil {
+			if block, n := mem.recall(input); n > 0 {
+				send = block + "\n\n" + input
+				u.line(fmt.Sprintf("· recalled %d item%s from memory", n, plural(n)))
+			}
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		active.Store(&cancel)
-		st, err := a.Run(ctx, input)
+		st, err := a.Run(ctx, send)
+		if mem != nil {
+			mem.afterTurn(input, replies, edited, u.line)
+		}
 		active.Store(nil)
 		cancel()
 		sess.Messages = a.Messages
@@ -448,6 +494,15 @@ func slash(line string, a *agent.Agent, gate *policy.Gate, cfg config.Config, au
 		fmt.Fprintln(os.Stderr, "· commands: /undo /clear /model <ref> /mode <ask|auto|yolo> /usage /exit")
 	}
 	return false
+}
+
+func appendUnique(xs []string, x string) []string {
+	for _, y := range xs {
+		if y == x {
+			return xs
+		}
+	}
+	return append(xs, x)
 }
 
 func firstNonEmpty(ss ...string) string {
