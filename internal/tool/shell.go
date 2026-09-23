@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"sync"
@@ -83,9 +84,14 @@ var bashTool = Tool{
 		if t > bashMaxTimeout {
 			t = bashMaxTimeout
 		}
-		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box)
+		var guard *gitGuard
+		if env.Gate == nil || env.Gate.GetMode() != policy.Yolo {
+			guard = snapGit(env.Root)
+		}
+		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box, env.PassEnv)
+		out += guard.check()
 		if box != nil && err == nil && sandboxHint.MatchString(out) {
-			if box.Network {
+			if box.Network || box.NetworkUnenforced {
 				out += "\n[sandbox: writes outside the workspace are blocked]"
 			} else {
 				out += "\n[sandbox: writes outside the workspace and network are blocked; retry with net=true if network is needed]"
@@ -126,7 +132,7 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config) (string, error) {
+func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config, passEnv []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.Command(shellPath(), "-c", cmdline)
@@ -137,6 +143,10 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 		}
 		cmd = c
 	}
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = policy.ScrubEnv(cmd.Env, passEnv)
 	cmd.Dir = dir
 	setProcessGroup(cmd)
 	// Background children (e.g. `server &`) may keep the pipe open; don't

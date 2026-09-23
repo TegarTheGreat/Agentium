@@ -40,6 +40,11 @@ func Stage(src string) (*Staged, error) {
 		return &Staged{Dir: abs, Source: abs}, nil
 	}
 	url, ref, _ := strings.Cut(src, "#")
+	// Anything starting with "-" would reach git as an option
+	// (--upload-pack=... runs a command) before the user reviews anything.
+	if strings.HasPrefix(url, "-") || strings.HasPrefix(ref, "-") {
+		return nil, fmt.Errorf("%s: a source or ref cannot start with '-'", src)
+	}
 	if !strings.Contains(url, "://") && !strings.HasPrefix(url, "git@") {
 		if strings.Count(url, "/") != 1 {
 			return nil, fmt.Errorf("%s: not a directory, git URL, or owner/repo", src)
@@ -56,7 +61,7 @@ func Stage(src string) (*Staged, error) {
 	st := &Staged{Dir: tmp, Source: url, cleanup: func() { os.RemoveAll(tmp) }}
 	for _, args := range [][]string{
 		{"init", "-q"},
-		{"fetch", "-q", "--depth", "1", url, ref},
+		{"fetch", "-q", "--depth", "1", "--", url, ref},
 		{"-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"},
 	} {
 		if _, err := git(tmp, args...); err != nil {

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/policy"
 	"io"
 	"os"
 	"os/exec"
@@ -75,7 +76,9 @@ func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, e
 	}
 	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	// A server gets the secrets named in its own config, not every key of
+	// the session.
+	cmd.Env = policy.ScrubEnv(os.Environ(), nil)
 	for k, v := range cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+os.ExpandEnv(v))
 	}

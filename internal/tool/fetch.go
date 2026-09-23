@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 )
 
@@ -164,6 +165,13 @@ var fetchTool = Tool{
 		}
 		if !strings.HasPrefix(a.URL, "http://") && !strings.HasPrefix(a.URL, "https://") {
 			return "", errors.New("url must start with http:// or https://")
+		}
+		if env.Gate != nil {
+			if ok, why := env.Gate.Fetch(a.URL); !ok {
+				return "", fmt.Errorf("denied (%s)", why)
+			}
+		} else if policy.CarriesSecret(a.URL) {
+			return "", errors.New("denied (the URL contains a credential)")
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
 		if err != nil {

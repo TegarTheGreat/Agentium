@@ -49,7 +49,7 @@ func listFiles(ctx context.Context, dir string, keep func(string) bool) []string
 				return nil
 			}
 			switch d.Name() {
-			case ".netrc", ".npmrc", ".pypirc", ".git-credentials":
+			case ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".env", ".env.local", ".env.production", ".env.development":
 				return nil
 			}
 			if keep(p) {

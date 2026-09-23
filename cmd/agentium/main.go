@@ -461,7 +461,8 @@ func run(args []string) error {
 		}
 	}
 	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
-	if !boxStatus.Available && !*quiet && !*noSandbox && sandboxWanted(cfg) {
+	if !*quiet && !*noSandbox && sandboxWanted(cfg) && (!boxStatus.Available || !boxStatus.Network) {
+		// Say plainly what is not enforced (e.g. network on kernels < 6.7).
 		fmt.Fprintln(os.Stderr, u.dim("· "+boxStatus.Detail))
 	}
 	if mem != nil {

@@ -3,6 +3,7 @@
 package policy
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -61,6 +62,12 @@ var risky = []struct {
 	{regexp.MustCompile(`/etc/(shadow|sudoers)`), "touches system secrets"},
 	{regexp.MustCompile(`\b(shutil\.rmtree|os\.remove|os\.unlink|fs\.rmSync|rimraf|unlink\s+glob)\b`), "deletes files from a script"},
 	{regexp.MustCompile(`\b(nc|ncat|socat|telnet)\s+\S+\s+\d+`), "raw network connection"},
+	// These hand a command to an already-running process outside the
+	// sandbox (tmux server, container daemon, init system, desktop).
+	{regexp.MustCompile(`\b(tmux|screen)\b.*\b(run-shell|send-keys|new-window|new-session|split-window|-X\s+stuff)\b`), "runs a command outside the sandbox"},
+	{regexp.MustCompile(`\b(docker|podman|nerdctl)\s+(run|exec|create|start|compose|build)\b`), "runs a container (outside the sandbox)"},
+	{regexp.MustCompile(`\b(systemd-run|launchctl|osascript|crontab)\s|(^|[;&|]\s*)(at|batch)\s`), "schedules or runs a command outside the sandbox"},
+	{regexp.MustCompile(`\b(xdg-open|gio\s+open)\b|(^|[;&|]\s*)open\s+-a\b`), "opens a program outside the sandbox"},
 }
 
 // RiskyCommand returns a reason if cmd looks destructive, else "".
@@ -81,25 +88,76 @@ var readOnlyCmds = map[string]bool{
 	"pwd": true, "echo": true, "printf": true, "which": true, "type": true, "uname": true,
 	"date": true, "sort": true, "uniq": true, "cut": true, "tr": true, "nl": true, "diff": true, "cmp": true,
 	"basename": true, "dirname": true, "realpath": true, "readlink": true, "true": true, "jq": true,
-	"column": true, "md5sum": true, "sha256sum": true,
-}
-
-// readOnlySub lists read-only subcommands for tools that also mutate.
-var readOnlySub = map[string]map[string]bool{
-	"git": {"status": true, "log": true, "diff": true, "show": true, "blame": true, "grep": true,
-		"ls-files": true, "rev-parse": true, "branch": true, "remote": true, "describe": true, "shortlog": true},
-	"go":  {"list": true, "vet": true, "doc": true, "version": true, "env": true},
-	"npm": {"ls": true, "view": true},
+	"column": true, "md5sum": true, "sha256sum": true, "sha1sum": true,
 }
 
 var (
-	unsafeShell      = regexp.MustCompile("`|\\$\\(|<\\(|>\\(")
+	// Command substitution and variables could smuggle arguments past
+	// the checks below.
+	unsafeShell      = regexp.MustCompile("`|\\$|<\\(|>\\(")
 	harmlessRedirect = regexp.MustCompile(`\d?>&\d|\d?>\s*/dev/null`)
 	cmdSep           = regexp.MustCompile(`\|\||&&|[|;&\n]`)
+	unquote          = strings.NewReplacer("'", "", `"`, "", `\`, "")
 )
 
+// argCheck vetoes arguments that make an otherwise read-only command
+// write files or run programs.
+var argCheck = map[string]func(args []string) bool{
+	"sort": func(a []string) bool {
+		return !hasPrefix(a, "--output") && !hasPrefix(a, "--compress-program") && !shortFlag(a, 'o')
+	},
+	"tree":   func(a []string) bool { return !hasPrefix(a, "--output") && !shortFlag(a, 'o') },
+	"uniq":   func(a []string) bool { return positional(a) <= 1 }, // uniq IN OUT writes OUT
+	"rg":     func(a []string) bool { return !hasPrefix(a, "--pre") && !hasPrefix(a, "--hostname-bin") },
+	"file":   func(a []string) bool { return !hasFlag(a, "-C", "--compile") },
+	"date":   func(a []string) bool { return !hasPrefix(a, "-s") && !hasPrefix(a, "--set") },
+	"find":   func(a []string) bool { return !anyPrefix(a, "-exec", "-ok", "-delete", "-fprint", "-fls") },
+	"fd":     func(a []string) bool { return !anyPrefix(a, "-x", "-X", "--exec") },
+	"jq":     func([]string) bool { return true },
+	"git":    gitReadOnly,
+	"go":     goReadOnly,
+	"npm":    func(a []string) bool { return len(a) > 0 && (a[0] == "ls" || a[0] == "view") },
+	"shasum": func([]string) bool { return true },
+}
+
+func gitReadOnly(a []string) bool {
+	if len(a) == 0 {
+		return false
+	}
+	sub, args := a[0], a[1:]
+	if anyPrefix(args, "-O", "--open-files-in-pager", "--output", "--ext-diff", "--exec") {
+		return false
+	}
+	switch sub {
+	case "status", "log", "diff", "show", "blame", "grep", "ls-files", "rev-parse", "describe", "shortlog":
+		return true
+	case "branch":
+		return onlyFlags(args, "-a", "-r", "-v", "-vv", "--list", "--show-current", "--all", "--remotes")
+	case "remote":
+		return len(args) == 0 || len(args) == 1 && args[0] == "-v"
+	}
+	return false
+}
+
+func goReadOnly(a []string) bool {
+	if len(a) == 0 {
+		return false
+	}
+	args := a[1:]
+	switch a[0] {
+	case "version", "doc":
+		return true
+	case "env":
+		return !hasFlag(args, "-w", "-u")
+	case "list", "vet":
+		return !anyPrefix(args, "-toolexec", "-vettool", "-exec", "--toolexec", "--vettool", "--exec")
+	}
+	return false
+}
+
 // ReadOnlyCommand reports whether every part of a shell pipeline only
-// reads. It is conservative: anything it does not recognise is not read-only.
+// reads. It is conservative: anything it does not recognise is not
+// read-only, and quoting cannot hide a flag from the checks.
 func ReadOnlyCommand(cmd string) bool {
 	if strings.TrimSpace(cmd) == "" || unsafeShell.MatchString(cmd) || RiskyCommand(cmd) != "" {
 		return false
@@ -110,40 +168,51 @@ func ReadOnlyCommand(cmd string) bool {
 		return false
 	}
 	for _, part := range cmdSep.Split(c, -1) {
-		f := strings.Fields(part)
+		f := strings.Fields(unquote.Replace(part))
 		if len(f) == 0 {
 			continue
 		}
 		name := filepath.Base(f[0])
+		check, special := argCheck[name]
 		switch {
-		case readOnlyCmds[name]:
-			if (name == "sort" || name == "tree") && hasPrefix(f[1:], "-o") || name == "rg" && hasPrefix(f[1:], "--pre") {
+		case special:
+			if !check(f[1:]) {
 				return false
 			}
-			if name == "find" && hasFlag(f[1:], "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls") {
-				return false
-			}
-		case readOnlySub[name] != nil:
-			if len(f) < 2 || !readOnlySub[name][f[1]] {
-				return false
-			}
-			if hasPrefix(f[2:], "--output") || name == "git" && hasFlag(f[2:], "-O", "--ext-diff") || name == "git" && hasPrefix(f[2:], "--open-files-in-pager") {
-				return false
-			}
-			if name == "go" && (hasFlag(f[2:], "-w", "-u") || hasPrefix(f[2:], "-toolexec") || hasPrefix(f[2:], "-vettool") || hasPrefix(f[2:], "-exec")) {
-				return false
-			}
-			if name == "git" && f[1] == "branch" && !onlyFlags(f[2:], "-a", "-r", "-v", "-vv", "--list", "--show-current", "--all", "--remotes") {
-				return false
-			}
-			if name == "git" && f[1] == "remote" && len(f) > 2 && f[2] != "-v" {
-				return false
-			}
-		default:
+		case !readOnlyCmds[name]:
 			return false
 		}
 	}
 	return true
+}
+
+// shortFlag reports a single-dash flag group containing c (-o, -uo).
+func shortFlag(args []string, c byte) bool {
+	for _, a := range args {
+		if len(a) > 1 && a[0] == '-' && a[1] != '-' && strings.IndexByte(a[1:], c) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func positional(args []string) int {
+	n := 0
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			n++
+		}
+	}
+	return n
+}
+
+func anyPrefix(args []string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if hasPrefix(args, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasFlag(args []string, flags ...string) bool {
@@ -306,7 +375,7 @@ var secretPath = regexp.MustCompile(`/\.(ssh|aws|gnupg|kube|docker|netrc|npmrc|p
 // cloud credentials, ...) need approval: their content would be sent to
 // the model provider.
 func (g *Gate) Read(path string) (bool, string) {
-	if g.GetMode() == Yolo || !secretPath.MatchString(filepath.ToSlash(path)) {
+	if g.GetMode() == Yolo || !secretPath.MatchString(filepath.ToSlash(path)) && !dotEnv(path) {
 		return true, ""
 	}
 	return g.ask("read: "+path, "credential file"), "credential file"
@@ -323,4 +392,75 @@ func (g *Gate) External(name string) (bool, string) {
 		return g.ask("mcp: "+name, "plan mode"), "plan mode"
 	}
 	return true, ""
+}
+
+// secretEnv matches environment variable names that usually hold
+// credentials. Child processes (shell commands, MCP servers) do not get
+// them: a prompt-injected `env` or `printenv` would otherwise hand the
+// model — and anything it can reach — every API key of the session.
+var secretEnv = regexp.MustCompile(`(?i)(API_?KEY|_KEY$|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|ACCESS_KEY|SESSION_KEY|AUTH)`)
+
+// ScrubEnv returns env without credential-looking variables, except the
+// names in allow (config "sandbox.pass_env").
+func ScrubEnv(env []string, allow []string) []string {
+	keep := map[string]bool{}
+	for _, a := range allow {
+		keep[a] = true
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if secretEnv.MatchString(k) && !keep[k] && k != "SSH_AUTH_SOCK" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// secretValue matches strings shaped like credentials (API keys, tokens,
+// private keys).
+var secretValue = regexp.MustCompile(`\b(sk|pk|rk)-[A-Za-z0-9_-]{16,}|\bsk-ant-[A-Za-z0-9_-]{16,}|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abpr]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY`)
+
+// CarriesSecret reports whether s (e.g. a URL about to be fetched)
+// contains a credential: something shaped like one, or the value of a
+// credential-looking environment variable of this process. Sending it
+// anywhere would leak it.
+func CarriesSecret(s string) bool {
+	if secretValue.MatchString(s) {
+		return true
+	}
+	for _, kv := range os.Environ() {
+		k, v, _ := strings.Cut(kv, "=")
+		if len(v) >= 12 && secretEnv.MatchString(k) && strings.Contains(s, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// Fetch reports whether url may be fetched. A URL carrying a credential
+// is always refused; ask mode asks for every fetch.
+func (g *Gate) Fetch(url string) (bool, string) {
+	if CarriesSecret(url) {
+		return false, "the URL contains a credential"
+	}
+	if g.GetMode() == Ask {
+		return g.ask("fetch: "+url, "ask mode"), "ask mode"
+	}
+	return true, ""
+}
+
+// dotEnv reports .env files holding real values (.env, .env.local,
+// .env.production), not templates (.env.example, .env.sample).
+func dotEnv(path string) bool {
+	b := filepath.Base(path)
+	if b != ".env" && !strings.HasPrefix(b, ".env.") {
+		return false
+	}
+	switch strings.TrimPrefix(b, ".env.") {
+	case "example", "sample", "template", "dist", "defaults":
+		return false
+	}
+	return true
 }

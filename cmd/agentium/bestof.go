@@ -37,8 +37,11 @@ type candidate struct {
 	removed  int
 }
 
+// git runs git for agentium's own bookkeeping with repository-configured
+// programs (fsmonitor, hooks) disabled, so nothing an agent planted in
+// .git runs outside the sandbox through us.
 func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
 	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -175,7 +178,7 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 		fmt.Fprintf(os.Stderr, "attempt %d passes without changes; nothing to apply\n", win.n)
 		return nil
 	}
-	cmd := exec.Command("git", "apply", "--whitespace=nowarn", "-")
+	cmd := exec.Command("git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "apply", "--whitespace=nowarn", "-")
 	cmd.Dir = top
 	cmd.Stdin = bytes.NewReader(win.patch)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -200,9 +203,10 @@ func runCheck(ctx context.Context, dir, check string, box *sandbox.Config) (stri
 			return "", err
 		}
 		cmd = exec.CommandContext(ctx, c.Path, c.Args[1:]...)
-		cmd.Env = c.Env
+		cmd.Env = policy.ScrubEnv(c.Env, nil)
 	} else {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", check)
+		cmd.Env = policy.ScrubEnv(os.Environ(), nil)
 	}
 	// On timeout or Ctrl-C kill the whole process group, and don't wait
 	// forever on children that keep the output pipe open.

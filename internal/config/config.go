@@ -73,6 +73,9 @@ type SandboxConf struct {
 	Enabled *bool    `json:"enabled,omitempty"` // default true
 	Network string   `json:"network,omitempty"` // ask (default) | allow | deny
 	Write   []string `json:"write,omitempty"`   // extra writable directories
+	// PassEnv lists credential-looking environment variables commands
+	// may still see (e.g. "GITHUB_TOKEN"); all others are removed.
+	PassEnv []string `json:"pass_env,omitempty"`
 }
 
 // Home returns the Agentium state directory.
