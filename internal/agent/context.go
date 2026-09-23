@@ -245,8 +245,11 @@ func (a *Agent) compact(ctx context.Context) error {
 	}
 	summary = strings.TrimSpace(strings.Join(kept2, "\n"))
 	tail := append([]provider.Message(nil), a.Messages[split:]...)
-	a.Messages = append([]provider.Message{{Role: provider.RoleUser,
-		Text: "[Summary of the earlier conversation]\n" + summary}}, tail...)
+	text := "[Summary of the earlier conversation]\n" + summary
+	if st := a.Ledger.Render(); st != "" {
+		text += "\n\n" + st
+	}
+	a.Messages = append([]provider.Message{{Role: provider.RoleUser, Text: text}}, tail...)
 	a.invalidateFrom(0)
 	return nil
 }

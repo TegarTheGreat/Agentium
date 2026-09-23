@@ -615,3 +615,14 @@ func TestRefsTreeAndIndexCache(t *testing.T) {
 		t.Fatalf("tree: %q %v", out, err)
 	}
 }
+
+func TestSearchMemory(t *testing.T) {
+	e := env(t)
+	if out, _ := call(t, searchTool, e, `{"memory":"flaky test"}`); out != "(memory is off)" {
+		t.Fatalf("no recall: %q", out)
+	}
+	e.Recall = func(q string) string { return "hit for " + q }
+	if out, _ := call(t, searchTool, e, `{"memory":"flaky test"}`); out != "hit for flaky test" {
+		t.Fatalf("recall: %q", out)
+	}
+}

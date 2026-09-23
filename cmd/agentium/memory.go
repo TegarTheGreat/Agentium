@@ -75,6 +75,16 @@ func (m *memCtl) buildIndex() {
 	m.once.Do(func() { close(m.ready) })
 }
 
+// Recall is pushed only when it is likely relevant: low-precision
+// context injected automatically is neutral or harmful (CodeGrep,
+// VibeMemBench, 2026). The model can pull more with search {memory}.
+const (
+	recallMinTerms    = 2   // distinct query terms a hit must contain
+	recallMinCoverage = 0.5 // and at least this share of them
+	recallMaxHits     = 2
+	recallChars       = 700
+)
+
 // recall returns a <recall> block for input and the number of hits.
 func (m *memCtl) recall(input string) (string, int) {
 	// The first index build runs in the background from startup; give it
@@ -84,22 +94,56 @@ func (m *memCtl) recall(input string) (string, int) {
 	case <-time.After(150 * time.Millisecond):
 	}
 	ix := m.ix.Load()
-	if ix == nil {
+	if ix == nil || len(strings.Fields(input)) < 3 {
 		return "", 0
 	}
 	var hits []memory.Hit
-	for _, h := range ix.Search(input, 4) {
-		if h.Score >= 1.5 {
-			hits = append(hits, h)
+	for _, h := range ix.Search(input, 8) {
+		if h.Matched < recallMinTerms || h.Coverage < recallMinCoverage {
+			continue
+		}
+		// Keep a second hit only when it is nearly as strong as the first.
+		if len(hits) > 0 && h.Score < 0.6*hits[0].Score {
+			break
+		}
+		hits = append(hits, h)
+		if len(hits) == recallMaxHits {
+			break
 		}
 	}
-	return memory.Format(hits, 1500), len(hits)
+	return memory.Format(hits, recallChars), len(hits)
+}
+
+// search answers search {memory:"..."}: past decisions, journal entries
+// (including errors hit before) and past sessions, verbatim.
+func (m *memCtl) search(q string) string {
+	select {
+	case <-m.ready:
+	case <-time.After(2 * time.Second):
+	}
+	ix := m.ix.Load()
+	if ix == nil {
+		return "(memory index not ready)"
+	}
+	hits := ix.Search(q, 6)
+	if len(hits) == 0 {
+		return "(nothing in memory matches; try other words)"
+	}
+	return memory.Format(hits, 2400)
 }
 
 // afterTurn applies memory directives from the replies and journals the
-// turn (deterministically, no LLM call), then refreshes the index.
-func (m *memCtl) afterTurn(prompt string, replies, files []string, report func(string)) {
-	for _, r := range m.store.Apply(memory.Parse(strings.Join(replies, "\n"))) {
+// turn (deterministically, no LLM call), then refreshes the index. When
+// the turn read web or MCP content, directives are held for review.
+func (m *memCtl) afterTurn(prompt string, replies, files, errs []string, untrusted bool, report func(string)) {
+	ds := memory.Parse(strings.Join(replies, "\n"))
+	var reps []string
+	if untrusted {
+		reps = m.store.Hold(ds)
+	} else {
+		reps = m.store.Apply(ds)
+	}
+	for _, r := range reps {
 		report("· " + r)
 	}
 	last := ""
@@ -109,6 +153,10 @@ func (m *memCtl) afterTurn(prompt string, replies, files []string, report func(s
 	entry := "user: " + oneLine(memory.Redact(prompt), 240)
 	if len(files) > 0 {
 		entry += "\nfiles: " + strings.Join(limitList(files, 12), ", ")
+	}
+	if len(errs) > 0 {
+		// Errors and what fixed them are the lessons worth recalling.
+		entry += "\nerrors: " + memory.Redact(strings.Join(limitList(errs, 4), " | "))
 	}
 	if last != "" {
 		entry += "\nresult: " + oneLine(memory.Redact(last), 320)
@@ -131,7 +179,8 @@ Rules:
 - Merge duplicates and near-duplicates; drop facts that are obsolete, contradicted by newer entries or decisions, or trivial.
 - Promote durable facts from the journal (conventions, commands, lessons from mistakes, "@pending" entries) when worth keeping.
 - USER.md holds user-wide preferences only; MEMORY.md holds facts about this project.
-- One fact per line, starting with "- ". USER.md at most 1100 characters, MEMORY.md at most 2300.
+- One fact per line, starting with "- ". USER.md at most 900 characters, MEMORY.md at most 1800.
+- Keep a trailing "(YYYY-MM-DD · path)" suffix as it is; drop entries listed as stale unless they are still true.
 - Never include secrets.
 
 Reply with exactly this format and nothing else:
@@ -159,7 +208,7 @@ func cmdTidy(args []string) error {
 	if r, err := filepath.EvalSymlinks(cwd); err == nil {
 		cwd = r
 	}
-	st, err := memory.Open(config.Home(), cwd)
+	st, err := memory.Open(config.Home(), config.ProjectRoot(cwd))
 	if err != nil {
 		return err
 	}
@@ -173,6 +222,9 @@ func cmdTidy(args []string) error {
 	fmt.Fprintf(&in, "=== USER.md (current)\n%s\n=== MEMORY.md (current)\n%s\n=== DECISIONS\n", user, mem)
 	for _, d := range st.Decisions() {
 		fmt.Fprintf(&in, "%s %s [%s] %s\n", d.ID, d.Date, d.Status, d.Text)
+	}
+	if stale := st.Stale(); len(stale) > 0 {
+		in.WriteString("=== STALE (hidden from the agent)\n" + strings.Join(stale, "\n") + "\n")
 	}
 	in.WriteString("=== JOURNAL (recent)\n")
 	entries := st.JournalEntries()

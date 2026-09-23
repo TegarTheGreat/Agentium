@@ -19,8 +19,8 @@ const searchMaxLines = 200
 
 var searchTool = Tool{
 	Def: providerDef("search",
-		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob; symbol = where a function/type/class is defined (Name or Type.Name); refs = where it is used, with the enclosing function. Respects .gitignore.",
-		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"},"symbol":{"type":"string"},"refs":{"type":"string"}}}`),
+		"Find files and text. pattern = regex to grep (file:line:text); omit pattern to list files matching glob; symbol = where a function/type/class is defined (Name or Type.Name); refs = where it is used, with the enclosing function; memory = past decisions, errors and sessions. Respects .gitignore.",
+		`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"e.g. *.go or src/**/*.ts"},"ignore_case":{"type":"boolean"},"symbol":{"type":"string"},"refs":{"type":"string"},"memory":{"type":"string"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
 			Pattern    string `json:"pattern"`
@@ -29,12 +29,19 @@ var searchTool = Tool{
 			IgnoreCase bool   `json:"ignore_case"`
 			Symbol     string `json:"symbol"`
 			Refs       string `json:"refs"`
+			Memory     string `json:"memory"`
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
 		}
-		if a.Pattern == "" && a.Glob == "" && a.Symbol == "" && a.Refs == "" {
-			return "", errors.New("give pattern, glob, symbol or refs")
+		if a.Pattern == "" && a.Glob == "" && a.Symbol == "" && a.Refs == "" && a.Memory == "" {
+			return "", errors.New("give pattern, glob, symbol, refs or memory")
+		}
+		if a.Memory != "" {
+			if env.Recall == nil {
+				return "(memory is off)", nil
+			}
+			return env.Recall(a.Memory), nil
 		}
 		dir := env.Root
 		if a.Path != "" {

@@ -430,6 +430,13 @@ func run(args []string) error {
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
+	a.Tools = append(a.Tools, a.TodoTool())
+	if mem != nil {
+		a.Env.Recall = mem.search
+		if stale := mem.store.Stale(); len(stale) > 0 && !*quiet {
+			fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("· memory: %d stale note(s) hidden (cited files gone or unconfirmed for months); `agentium tidy` reviews them", len(stale))))
+		}
+	}
 	if cfg.FastModel != "" {
 		if fr, err := provider.Resolve(cfg.FastModel, cfg, auth); err == nil {
 			a.Fast, a.FastModel = fr.Client, fr.Model
@@ -561,7 +568,7 @@ func run(args []string) error {
 		}
 		if mem != nil {
 			if block, n := mem.recall(input); n > 0 {
-				send = block + "\n\n" + input
+				send = block + "\n\n" + send
 				u.line(fmt.Sprintf("· recalled %d item%s from memory", n, plural(n)))
 			}
 		}
@@ -569,7 +576,7 @@ func run(args []string) error {
 		active.Store(&cancel)
 		st, err := a.Run(ctx, send)
 		if mem != nil {
-			mem.afterTurn(input, replies, edited, u.line)
+			mem.afterTurn(input, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Untrusted(), u.line)
 		}
 		runStopHooks(stopHooks, cwd)
 		active.Store(nil)
