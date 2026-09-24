@@ -29,7 +29,9 @@ type Result struct {
 	Msg     string // first error(s), when not OK
 }
 
-const timeout = 5 * time.Second
+// timeout allows a cold start of node or python on a busy machine: a
+// check that times out is skipped, which would let a broken edit through.
+const timeout = 20 * time.Second
 
 // Check parses content as the language implied by path.
 func Check(path string, content []byte) Result {
