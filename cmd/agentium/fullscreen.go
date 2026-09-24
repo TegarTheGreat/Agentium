@@ -87,6 +87,8 @@ type fullscreen struct {
 
 	done     chan struct{}
 	readDone chan struct{}
+	drawDone chan struct{}
+	dropped  int // vterm lines trimmed, as last seen
 	stdout   *os.File
 	stderr   *os.File
 	restore  func()
@@ -125,7 +127,7 @@ func enterFullscreen(mouse bool) (*fullscreen, error) {
 		return nil, err
 	}
 	f := &fullscreen{tty: os.Stderr, pr: pr, pw: pw, stdout: os.Stdout, stderr: os.Stderr, office: newOffice(),
-		truecolor: truecolorTerm(), done: make(chan struct{}), readDone: make(chan struct{}), lastFrame: -1}
+		truecolor: truecolorTerm(), done: make(chan struct{}), readDone: make(chan struct{}), drawDone: make(chan struct{}), lastFrame: -1}
 	f.rows, f.cols = termRows(f.tty), termWidth(f.tty)
 	f.vt = newVterm(f.transcriptWidth())
 	// Keys are not echoed by the terminal (they would land in the middle
@@ -135,7 +137,9 @@ func enterFullscreen(mouse bool) (*fullscreen, error) {
 	}
 	// Alternate screen, hidden cursor, mouse wheel reporting (SGR).
 	f.mouse = mouse
-	f.tty.WriteString("\x1b[?1049h\x1b[?25l" + f.mouseOn() + "\x1b[H\x1b[2J")
+	// Bracketed paste stays on: the editor's own mode switches go into
+	// the pipe, which the vterm ignores.
+	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?2004h" + f.mouseOn() + "\x1b[H\x1b[2J")
 	os.Stdout, os.Stderr = pw, pw
 	fsMu.Lock()
 	fs = f
@@ -160,6 +164,7 @@ func enterFullscreen(mouse bool) (*fullscreen, error) {
 	winch := make(chan os.Signal, 1)
 	notifyResize(winch)
 	go func() {
+		defer close(f.drawDone)
 		t := time.NewTicker(33 * time.Millisecond)
 		defer t.Stop()
 		defer signal.Stop(winch)
@@ -199,6 +204,10 @@ func (f *fullscreen) leave() {
 	f.closed = true
 	f.mu.Unlock()
 	close(f.done)
+	select { // no frame may land on the normal screen
+	case <-f.drawDone:
+	case <-time.After(time.Second):
+	}
 	os.Stdout, os.Stderr = f.stdout, f.stderr
 	fsMu.Lock()
 	fs = nil
@@ -363,13 +372,13 @@ func padTo(s string, w int) string {
 func (f *fullscreen) suspend() {
 	f.mu.Lock()
 	f.suspended = true
-	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l")
+	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l")
 	f.mu.Unlock()
 }
 
 func (f *fullscreen) resume() {
 	f.mu.Lock()
-	f.tty.WriteString("\x1b[?1049h\x1b[?25l" + f.mouseOn() + "\x1b[H\x1b[2J")
+	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?2004h" + f.mouseOn() + "\x1b[H\x1b[2J")
 	f.suspended, f.prev, f.dirty = false, nil, true
 	f.mu.Unlock()
 }
@@ -377,8 +386,12 @@ func (f *fullscreen) resume() {
 // draw composes the screen and writes the rows that changed; the caller
 // holds f.mu.
 func (f *fullscreen) draw() {
-	if f.suspended {
+	if f.suspended || f.closed {
 		return
+	}
+	if d := f.vt.dropped - f.dropped; d > 0 { // the scrollback was trimmed
+		f.maxEnd = max(f.maxEnd-d, 0)
+		f.dropped = f.vt.dropped
 	}
 	mainW := f.mainWidth()
 	h := f.transcriptRows()
@@ -493,7 +506,7 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 				break
 			}
 			q = truncate(strings.ReplaceAll(q, "\n", "↵"), inner-12)
-			rows = append(rows, border+"│\x1b[0m "+padTo(sgr(cDim)+"↳ queued: "+q+"\x1b[0m", inner)+" "+border+"│\x1b[0m")
+			rows = append(rows, border+"│\x1b[0m "+padTo(sgr(cDim)+"↳ "+q+"\x1b[0m", inner)+" "+border+"│\x1b[0m")
 		}
 	}
 	var line string
@@ -507,12 +520,12 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 		}
 		line = sgr(cInk) + "❯\x1b[0m " + t + sgr(cDim) + "▏\x1b[0m"
 	case f.busy:
-		line = sgr(cGray) + "❯ type to queue a message for when this turn ends\x1b[0m"
+		line = sgr(cGray) + "❯ type to steer: enter sends at the next step · tab queues for after\x1b[0m"
 	}
 	rows = append(rows, border+"│\x1b[0m "+padTo(line, inner)+" "+border+"│\x1b[0m")
 	hint := "enter send · ctrl+j new line · / commands · pgup scroll"
 	if f.busy {
-		hint = "enter queue · esc stop · pgup scroll"
+		hint = "enter steer · tab queue · ↑ take back · esc stop"
 	}
 	if f.cols >= sideMinW {
 		hint += " · ctrl+t panel"

@@ -16,6 +16,7 @@ import (
 type stepOutput struct {
 	title string
 	lines []string
+	diff  bool // color as a unified diff
 }
 
 const keptOutputs = 20
@@ -127,6 +128,9 @@ func (p *pager) rows(w, h int) []string {
 	numW := len(fmt.Sprint(len(o.lines)))
 	for i := p.top; i < len(o.lines) && len(rows) < h; i++ {
 		l := truncate(o.lines[i], w-numW-3)
+		if o.diff {
+			l = (&ui{color: true}).diffLineColor(l)
+		}
 		rows = append(rows, padTo(" "+sgr(cGray)+fmt.Sprintf("%*d", numW, i+1)+"\x1b[0m "+l, w))
 	}
 	for len(rows) < h {

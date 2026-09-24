@@ -115,7 +115,10 @@ var helpRows = [][2]string{
 	{"/effort", "reasoning effort: low · medium · high · xhigh · max"},
 	{"/plan  /go", "investigate read-only, then carry out the plan"},
 	{"/undo  /rewind", "revert the last turn, or back to an earlier one (esc esc)"},
-	{"/copy", "copy the last reply to the clipboard"},
+	{"/copy  /diff", "copy the last reply · show what changed"},
+	{"/context  /compact", "what fills the context · summarize to free it"},
+	{"/btw <question>", "a side question, not added to the conversation"},
+	{"/theme", "auto · dark · light"},
 	{"/sessions  /resume", "list and continue saved conversations"},
 	{"/clear", "start a new conversation"},
 	{"/skills", "list skills; /<skill> [task] runs one"},
@@ -125,7 +128,9 @@ var helpRows = [][2]string{
 }
 
 var keyRows = [][2]string{
-	{"enter", "send · while a turn runs: queue it for after"},
+	{"enter", "send · while a turn runs: steer it at the next step"},
+	{"tab  ↑", "while a turn runs: queue for after · take a message back"},
+	{"!command", "run a shell command yourself (the agent sees it)"},
 	{"ctrl+j  shift+enter", "new line (or end a line with \\)"},
 	{"/  @", "commands · mention a file (tab or enter picks)"},
 	{"esc", "stop the running turn · esc esc: rewind"},
@@ -658,6 +663,9 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 	}
 	// A file change shows what would change.
 	if kind, path, _ := strings.Cut(action, ": "); kind == "write" {
+		// Only when exactly one pending edit targets the file: with two,
+		// the preview could show the other one.
+		var match []*liveTool
 		for _, t := range u.tools {
 			if t.call.Name != "edit" {
 				continue
@@ -669,11 +677,17 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 				p = filepath.Join(u.cwd, p)
 			}
 			if filepath.Clean(p) == filepath.Clean(path) || u.relative(p) == u.relative(path) {
-				for _, l := range u.diffCard(t.call.Args, termWidth(os.Stderr)-1) {
-					body.WriteString(l + "\n")
-				}
-				break
+				match = append(match, t)
 			}
+		}
+		switch len(match) {
+		case 1:
+			for _, l := range u.diffCardAt(match[0].call.Args, termWidth(os.Stderr)-1, true) {
+				body.WriteString(l + "\n")
+			}
+		case 0:
+		default:
+			body.WriteString("  " + u.paint(cYellow, fmt.Sprintf("%d changes to this file are pending; each is asked for separately", len(match))) + "\n")
 		}
 	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",

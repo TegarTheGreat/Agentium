@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tegarthegreat/agentium/internal/provider"
 )
@@ -141,10 +142,20 @@ func (u *ui) drawLive() {
 	spin := spinFrames[u.frame%len(spinFrames)]
 	var lines []string
 	f := activeFS()
+	if f != nil && !(u.thinking || len(u.tools) > 0 || u.keys != nil) {
+		f = nil // between turns: nothing is running
+	}
 	if f != nil {
 		// Full screen: what is happening goes in the composer's border,
 		// type-ahead in the composer itself.
-		f.setBusy(true, u.stripText(spin), string(u.typing), u.queued)
+		var pending []string
+		for _, q := range u.steer {
+			pending = append(pending, "→ next step: "+q)
+		}
+		for _, q := range u.queued {
+			pending = append(pending, "queued: "+q)
+		}
+		f.setBusy(true, u.stripText(spin), string(u.typing), pending)
 	}
 	if u.thinking && len(u.tools) == 0 && f == nil {
 		lines = append(lines, "  "+u.paint(cAccent, spin)+" "+u.paint(cDim, "Thinking… "+elapsed(time.Since(u.thinkT))))
@@ -152,12 +163,12 @@ func (u *ui) drawLive() {
 	for _, t := range u.tools {
 		secs := " " + elapsed(time.Since(t.start))
 		detail := truncate(t.detail, width-strWidth(t.name)-strWidth(secs)-6)
-		lines = append(lines, "  "+u.paint(cAccent, spin)+" "+u.paint(cBold, t.name)+" "+detail+u.paint(cDim, secs))
+		lines = append(lines, "  "+u.paint(cAccent, spin)+" "+u.chip(t.call.Name)+" "+detail+u.paint(cDim, secs))
 		for _, l := range t.lines() {
-			lines = append(lines, u.paint(cDim, "    │ "+truncate(l, width-6)))
+			lines = append(lines, "    "+u.paint(cGray, "│")+" "+u.paint(cDim, truncate(l, width-6)))
 		}
 	}
-	if f == nil && (len(lines) > 0 || len(u.typing) > 0 || len(u.queued) > 0) {
+	if f == nil && (len(lines) > 0 || len(u.typing) > 0 || len(u.queued)+len(u.steer) > 0) {
 		lines = append(lines, u.typeaheadLines(width)...)
 	}
 	if len(lines) == 0 {
@@ -171,6 +182,26 @@ func (u *ui) drawLive() {
 	}
 	os.Stderr.WriteString(strings.Join(lines, "\n"))
 	u.drawn = len(lines)
+}
+
+// takeSteer hands the messages typed during the turn to the agent and
+// shows them in the transcript.
+func (u *ui) takeSteer() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	msgs := u.steer
+	u.steer = nil
+	if len(msgs) == 0 {
+		return nil
+	}
+	u.clearLive()
+	u.endLine()
+	for _, m := range msgs {
+		os.Stderr.WriteString(strings.ReplaceAll(u.userMessage(m), "\r\n", "\n"))
+	}
+	u.afterTool = true
+	u.drawLive()
+	return msgs
 }
 
 // stripText says what is happening, for the composer's top border.
@@ -202,7 +233,8 @@ func elapsed(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-// truncate cuts s to w display columns, adding "…".
+// truncate cuts s to w display columns, adding "…". Escape sequences
+// take no width and are kept whole; a cut styled string is reset.
 func truncate(s string, w int) string {
 	if w < 1 {
 		return ""
@@ -211,16 +243,30 @@ func truncate(s string, w int) string {
 		return s
 	}
 	var sb strings.Builder
-	n := 0
-	for _, r := range s {
+	n, styled := 0, false
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b {
+			if loc := ansiRE.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
+				sb.WriteString(s[i : i+loc[1]])
+				i += loc[1]
+				styled = true
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
 		rw := runeWidth(r)
 		if n+rw > w-1 {
 			break
 		}
 		sb.WriteRune(r)
 		n += rw
+		i += size
 	}
-	return sb.String() + "…"
+	sb.WriteString("…")
+	if styled {
+		sb.WriteString("\033[0m")
+	}
+	return sb.String()
 }
 
 // permanent prints a finished line above the live area. While an
@@ -271,7 +317,7 @@ func (u *ui) officeTool(c provider.ToolCall) {
 // subAgentTool shows a sub-agent's tool call: at its desk, and as a line
 // marked in its color.
 func (u *ui) subAgentTool(task string, c provider.ToolCall) {
-	mark := u.paint(cDim, "↳")
+	mark, who := u.paint(cDim, "↳"), ""
 	if f := activeFS(); f != nil {
 		f.office.staffDo(task, actFor(c.Name), u.detail(c))
 		if c.Name == "edit" {
@@ -281,14 +327,16 @@ func (u *ui) subAgentTool(task string, c provider.ToolCall) {
 				f.addChange(u.relative(path), add, del)
 			}
 		}
-		if col, ok := f.office.staffColor(task); ok {
-			mark = fgColor(col, f.truecolor) + "↳\x1b[0m"
+		if col, name, ok := f.office.staffOf(task); ok {
+			mark = fgColor(col, f.truecolor) + "▍\x1b[0m"
+			who = fgColor(col, f.truecolor) + name + "\x1b[0m "
 		}
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.lastKey = ""
-	u.permanent("    " + mark + u.paint(cDim, " "+toolLabel(c.Name)+" "+truncate(u.detail(c), termWidth(os.Stderr)-22)))
+	label := u.kindColor(c.Name, styleFor(c.Name).label)
+	u.permanent("    " + mark + who + label + " " + u.paint(cDim, truncate(u.detail(c), termWidth(os.Stderr)-30)))
 }
 
 func (u *ui) beginTurn() {
@@ -410,10 +458,10 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 		}
 		u.clearLive()
 		os.Stderr.WriteString("\033[1A\r\033[2K")
-		fmt.Fprintln(os.Stderr, "  "+icon+" "+u.paint(cBold, name)+" "+detail+u.paint(cDim, fmt.Sprintf(" ×%d", u.lastCount)+total))
+		fmt.Fprintln(os.Stderr, "  "+icon+" "+u.chip(c.Name)+" "+detail+u.paint(cDim, fmt.Sprintf(" ×%d", u.lastCount)+total))
 		u.drawLive()
 	} else {
-		line := "  " + icon + " " + u.paint(cBold, name) + " " + detail + u.paint(cDim, dur)
+		line := "  " + icon + " " + u.chip(c.Name) + " " + detail + u.paint(cDim, dur)
 		if fail != "" {
 			line += "  " + u.paint(cRed, fail)
 		}

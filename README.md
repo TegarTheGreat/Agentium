@@ -108,6 +108,7 @@ On first run Agentium asks for a provider and key, then saves them. Environment 
 On Linux and macOS, `agentium` opens a full-screen workspace; Windows uses the inline interface. The design comes from a study of the leading agent CLIs.
 
 - **Conversation.**
+  - Every kind of step has its own colored label: Read, Search, Edit, Run, Web, Staff, Plan. Output sits in a gutter under its step, and Agentium's own notes are marked ℹ. Steps a sub-agent takes carry its name and color.
   - Your messages carry an ink `▌` bar.
   - Agentium's replies open with an amber `◆`.
   - Every step is one line, and edits show a diff card with line numbers.
@@ -131,9 +132,10 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 
 | | |
 |---|---|
-| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/update` `/exit` |
+| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/diff` `/context` `/compact` `/btw` `/theme` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/update` `/exit` |
 | **Typing** | `/` shows commands with what they do · `@` fuzzy-finds project files · big pastes become `[Pasted text #1 +40 lines]` chips · `Ctrl-J`, `Shift-Enter` or a trailing `\` for a new line · `Ctrl-R` searches earlier messages · `Ctrl-G` writes the message in `$EDITOR` · `↑`/`↓` history |
-| **While it works** | `Esc` stops the turn · typing queues a message for when it ends · `Ctrl-O` shows the full output of recent steps |
+| **While it works** | `Enter` steers: your message reaches the agent at its next step · `Tab` queues it for after the turn · `↑` takes a pending message back · `Esc` stops the turn · `Ctrl-O` shows the full output of recent steps |
+| **More commands** | `!command` runs a shell command yourself (the agent sees the output with your next message) · `/diff` shows what changed · `/context` shows what fills the context window · `/compact` summarizes older conversation · `/btw <question>` asks on the side without adding to the conversation · `/theme` switches the palette |
 | **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds file changes to an earlier turn · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
 
 ### Subcommands
@@ -323,7 +325,7 @@ make cross   # binaries for Linux, macOS and Windows in dist/
 
 Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
 
-> **Status:** v0.15.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
+> **Status:** v0.16.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
 
 ## License
 

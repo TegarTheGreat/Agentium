@@ -77,7 +77,7 @@ func applyTheme(pref string) {
 // detectLight reports a light terminal background, from an OSC 11 reply
 // or COLORFGBG; dark when unknown.
 func detectLight() bool {
-	if r, g, b, ok := queryBackground(150 * time.Millisecond); ok {
+	if r, g, b, ok := queryBackground(time.Second); ok {
 		return 0.2126*float64(r)+0.7152*float64(g)+0.0722*float64(b) > 140
 	}
 	if v := os.Getenv("COLORFGBG"); v != "" {
@@ -99,12 +99,16 @@ func queryBackground(timeout time.Duration) (r, g, b uint8, ok bool) {
 		return 0, 0, 0, false
 	}
 	defer restore()
-	os.Stderr.WriteString("\x1b]11;?\x07")
+	// The background query, then Device Attributes, which every terminal
+	// answers: once that reply is in, nothing late can leak into the
+	// input (a terminal without OSC 11 support answers only the second).
+	os.Stderr.WriteString("\x1b]11;?\x07\x1b[c")
 	var reply []byte
 	deadline := time.Now().Add(timeout)
 	buf := make([]byte, 64)
-	for time.Now().Before(deadline) && len(reply) < 64 {
-		if !inputReady(os.Stdin, time.Until(deadline)) {
+	for len(reply) < 256 {
+		wait := time.Until(deadline)
+		if wait <= 0 || !inputReady(os.Stdin, wait) {
 			break
 		}
 		n, err := os.Stdin.Read(buf)
@@ -112,11 +116,18 @@ func queryBackground(timeout time.Duration) (r, g, b uint8, ok bool) {
 			break
 		}
 		reply = append(reply, buf[:n]...)
-		if strings.ContainsAny(string(reply), "\x07\\") {
+		if da1Done(reply) {
 			break
 		}
 	}
 	return parseOSC11(string(reply))
+}
+
+// da1Done reports whether the Device Attributes reply (ESC [ ? … c) has
+// arrived.
+func da1Done(b []byte) bool {
+	i := strings.Index(string(b), "\x1b[?")
+	return i >= 0 && strings.Contains(string(b[i:]), "c")
 }
 
 // parseOSC11 reads "…rgb:RRRR/GGGG/BBBB…".

@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestApprovalTitle(t *testing.T) {
@@ -116,5 +117,50 @@ func TestVtermBasics(t *testing.T) {
 	v.Write([]byte("\xb8\xad"))
 	if v.plain(3) != "ababG中" {
 		t.Fatalf("split sequences: %q", v.plain(3))
+	}
+}
+
+func TestVtermRunawayEscapesDoNotHang(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		v := newVterm(40)
+		v.Write([]byte("\x1b[" + strings.Repeat("─", 30)))
+		v.Write([]byte("\x1b]" + strings.Repeat("x", 600)))
+		v.Write([]byte("\x1b["))
+		for i := 0; i < 70; i++ {
+			v.Write([]byte("1"))
+		}
+		v.Write([]byte("ok"))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("vterm hangs on a runaway escape sequence")
+	}
+}
+
+func TestTruncateKeepsEscapes(t *testing.T) {
+	s := "\x1b[38;2;1;2;3m◆ agentium\x1b[0m · model · mode"
+	got := truncate(s, 12)
+	if strWidth(got) != 12 || !strings.HasPrefix(got, "\x1b[38;2;1;2;3m◆ agentium") || !strings.HasSuffix(got, "…\033[0m") {
+		t.Fatalf("got %q (width %d)", got, strWidth(got))
+	}
+	if truncate("short", 10) != "short" {
+		t.Fatal("short strings are unchanged")
+	}
+}
+
+func TestDA1Done(t *testing.T) {
+	if da1Done([]byte("\x1b]11;rgb:1e1e/1e1e/1e1e\x07")) || !da1Done([]byte("\x1b]11;rgb:0/0/0\x07\x1b[?62;22c")) {
+		t.Fatal("da1Done")
+	}
+}
+
+func TestEditorAcceptClampsStaleStart(t *testing.T) {
+	e := &editor{buf: []rune("hi"), pos: 2, sugg: []suggestion{{insert: "@file.go "}}, suggStart: 8}
+	e.accept() // a hook replaced the text under an open popup
+	if string(e.buf) != "hi@file.go " {
+		t.Fatalf("got %q", string(e.buf))
 	}
 }

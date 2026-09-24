@@ -304,3 +304,19 @@ func clipHead(s string, n int) string {
 	}
 	return "[earlier part omitted]\n" + strings.ToValidUTF8(s[len(s)-n:], "")
 }
+
+// Compact summarizes the older part of the conversation now (the /compact
+// command); the recent exchange is kept verbatim.
+func (a *Agent) Compact(ctx context.Context) error { return a.compact(ctx) }
+
+// ContextBreakdown estimates, in tokens, what the next request carries:
+// the system prompt, the tool definitions and the conversation.
+func (a *Agent) ContextBreakdown() (system, tools, conversation int) {
+	system = len(a.System) / charsPerToken
+	for _, t := range a.Tools {
+		tools += len(t.Def.Name) + len(t.Def.Description) + len(t.Def.Schema)
+	}
+	tools /= charsPerToken
+	conversation = max(a.size()/charsPerToken-system-tools, 0)
+	return system, tools, conversation
+}

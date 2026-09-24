@@ -202,16 +202,16 @@ func (o *office) render(width int, truecolor bool) []string {
 	return rows
 }
 
-// staffColor is the color of the staff member working on task.
-func (o *office) staffColor(task string) (rgb, bool) {
+// staffOf is the color and name of the staff member working on task.
+func (o *office) staffOf(task string) (rgb, string, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for _, s := range o.staff {
 		if s.key == task {
-			return s.shirt, true
+			return s.shirt, s.name, true
 		}
 	}
-	return rgb{}, false
+	return rgb{}, "", false
 }
 
 // leadState returns what Agentium is doing.

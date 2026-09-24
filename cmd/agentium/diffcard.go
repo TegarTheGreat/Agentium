@@ -93,16 +93,29 @@ func splitLines(s string) []string {
 // editDiff returns the diff of an edit call and the line number where the
 // new text starts in the file (1 when unknown).
 func editDiff(root string, args []byte) (path string, lines []diffLine, start int) {
+	return editDiffAt(root, args, false)
+}
+
+// editDiffAt is editDiff; with preview (before the edit runs) a whole-file
+// write is compared with the file as it is now, so the preview shows what
+// would be deleted too.
+func editDiffAt(root string, args []byte, preview bool) (path string, lines []diffLine, start int) {
 	var a struct{ Path, Old, New string }
 	if jsonUnmarshal(args, &a) != nil || a.Path == "" {
 		return "", nil, 0
 	}
-	lines = lineDiff(splitLines(a.Old), splitLines(a.New))
-	start = 1
 	p := a.Path
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(root, p)
 	}
+	old := a.Old
+	if preview && old == "" {
+		if b, err := os.ReadFile(p); err == nil {
+			old = string(b)
+		}
+	}
+	lines = lineDiff(splitLines(old), splitLines(a.New))
+	start = 1
 	if a.Old != "" {
 		if b, err := os.ReadFile(p); err == nil {
 			// After the edit the new text is in the file; before it (an
@@ -125,7 +138,11 @@ func editDiff(root string, args []byte) (path string, lines []diffLine, start in
 // diffCard renders an edit's diff for the transcript, indented under its
 // step.
 func (u *ui) diffCard(c []byte, width int) []string {
-	_, lines, start := editDiff(u.cwd, c)
+	return u.diffCardAt(c, width, false)
+}
+
+func (u *ui) diffCardAt(c []byte, width int, preview bool) []string {
+	_, lines, start := editDiffAt(u.cwd, c, preview)
 	if len(lines) == 0 {
 		return nil
 	}
@@ -215,15 +232,12 @@ func (u *ui) outputTail(out string, width int) []string {
 	const tail = 3
 	var rows []string
 	if len(lines) > tail {
-		rows = append(rows, "    "+u.paint(cDim, fmt.Sprintf("└ … %d earlier line%s", len(lines)-tail, plural(len(lines)-tail))))
+		rows = append(rows, u.paint(cGray, fmt.Sprintf("… %d earlier line%s · ctrl+o shows all", len(lines)-tail, plural(len(lines)-tail))))
 		lines = lines[len(lines)-tail:]
 	}
-	for i, l := range lines {
-		mark := "  "
-		if i == 0 && len(rows) == 0 {
-			mark = "└ "
-		}
-		rows = append(rows, "    "+u.paint(cDim, mark+truncate(sanitize(strings.TrimRight(l, "\r")), width-8)))
+	for _, l := range lines {
+		rows = append(rows, u.paint(cDim, truncate(sanitize(strings.TrimRight(l, "\r")), width-8)))
 	}
+	rows = u.gutter(rows)
 	return rows
 }

@@ -297,8 +297,9 @@ type Gate struct {
 	Mode    Mode
 	Root    string
 	Approve Approver // nil means deny whatever needs approval
-	// Feedback, if set, returns (once) what the user said when declining.
-	Feedback func() string
+	// Feedback, if set, returns (once) what the user said when declining
+	// action.
+	Feedback func(action string) string
 	// Protected lists more paths git runs or reads settings from (a
 	// core.hooksPath such as .husky, included config files); writing them
 	// needs approval like .git itself.
@@ -338,7 +339,7 @@ func (g *Gate) askWhy(action, reason string) (bool, string) {
 		return false, reason
 	}
 	if g.Feedback != nil {
-		if fb := strings.TrimSpace(g.Feedback()); fb != "" {
+		if fb := strings.TrimSpace(g.Feedback(action)); fb != "" {
 			return false, "the user declined and said: " + fb
 		}
 	}

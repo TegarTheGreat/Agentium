@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +21,15 @@ var StreamIdleTimeout = 120 * time.Second
 // StreamProgressTimeout aborts an event stream that sends only keep-alives
 // (SSE comments, pings) for this long. Some providers hold a queued request
 // open indefinitely that way, which would otherwise hang the turn forever.
-var StreamProgressTimeout = 10 * time.Minute
+var StreamProgressTimeout = func() time.Duration {
+	// A relay may legitimately keep a slow reasoning model alive with
+	// comments for longer; AGENTIUM_STREAM_PROGRESS_MINUTES raises the
+	// limit.
+	if m, err := strconv.Atoi(os.Getenv("AGENTIUM_STREAM_PROGRESS_MINUTES")); err == nil && m > 0 {
+		return time.Duration(m) * time.Minute
+	}
+	return 10 * time.Minute
+}()
 
 // httpClient has no overall timeout: streams can run for minutes. Callers
 // cancel through the request context.

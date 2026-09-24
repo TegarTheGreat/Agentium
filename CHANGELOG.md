@@ -2,6 +2,56 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] - 2026-09-25
+
+### Added
+
+- **Easier to read.**
+  - Every kind of step has its own colored label: Read, Search, Edit, Run, Web, Staff, Plan.
+  - Command output sits in a gutter under its step.
+  - Agentium's own notes are marked ℹ and set apart from the model's words.
+  - A sub-agent's steps carry its name and color.
+- **Steer a running turn.**
+  - Enter sends your message to the agent at its next step, as in Claude Code, Codex and Amp.
+  - Tab queues it for after the turn.
+  - ↑ takes a pending message back.
+- **More commands, from the other agent CLIs:**
+  - `!command` runs a shell command yourself; the agent sees the output with your next message.
+  - `/diff` shows the working tree's changes.
+  - `/context` shows what fills the context window.
+  - `/compact` summarizes the older conversation.
+  - `/btw` asks a side question without adding it to the conversation.
+  - `/theme` switches the palette and saves the choice.
+- **`AGENTIUM_STREAM_PROGRESS_MINUTES`** raises the 10-minute limit on streams that send only keep-alives.
+
+### Fixed
+
+From two independent audits of the new interface:
+
+- **Could freeze or crash:**
+  - The screen could freeze for good on a malformed escape sequence in the output.
+  - Ctrl-G with the suggestion popup open could crash.
+- **Paste:** multi-line pastes were split into several messages in the full screen, because bracketed paste was never switched on there.
+- **Terminal left unusable:**
+  - Ctrl-C during startup or between turns left the terminal in the full screen.
+  - SIGTERM left echo off.
+  - A frame could be drawn onto the normal screen when quitting.
+- **Approval previews:**
+  - A preview of a whole-file write now shows what it deletes.
+  - With two pending changes to one file, no preview is shown, since it could show the other change.
+- **Refusals:**
+  - Runs without a terminal no longer tell the model "the user declined".
+  - A reason given for one refusal can no longer reach another.
+- **Suggestions and startup input:**
+  - Files with non-ASCII names completed to a quoted path.
+  - Listing files could freeze typing in a huge repository.
+  - The inline popup drew over the prompt at the bottom of the screen.
+  - A slow terminal's color reply could appear as typed text.
+- **Layout:**
+  - Styled text was cut short. Among other things, the status line lost the model and mode on narrow terminals.
+  - The composer stayed "busy" after a note printed between turns.
+  - Input redrew wrongly after Ctrl-T or a resize.
+
 ## [0.15.0] - 2026-09-25
 
 A new interface, designed from a study of Claude Code, Codex CLI, Gemini CLI, opencode, Crush, Amp, Cursor CLI and Mobbin references.

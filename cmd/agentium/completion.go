@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,11 @@ var slashCommands = []slashCmd{
 	{"/undo", "revert the last turn's file changes", false},
 	{"/rewind", "revert file changes back to an earlier turn (esc esc)", false},
 	{"/copy", "copy the last reply to the clipboard", false},
+	{"/diff", "what changed in the working tree", false},
+	{"/context", "what fills the context window", false},
+	{"/compact", "summarize the older conversation to free context", false},
+	{"/btw", "ask a side question (not added to the conversation)", true},
+	{"/theme", "auto · dark · light", false},
 	{"/sessions", "list saved conversations", false},
 	{"/resume", "continue a saved conversation", true},
 	{"/clear", "start a new conversation", false},
@@ -46,10 +52,9 @@ type completer struct {
 	root   string
 	skills []skill.Skill
 
-	mu      sync.Mutex
-	files   []string
-	listed  time.Time
-	listing bool
+	mu     sync.Mutex
+	files  []string
+	listed time.Time
 }
 
 func (c *completer) complete(before []rune) ([]suggestion, int) {
@@ -155,19 +160,22 @@ func fuzzyScore(s, q string) (int, bool) {
 	return score, true
 }
 
-// projectFiles lists the project's files (git's view when available),
-// refreshed at most every 10 seconds.
+// projectFiles lists the project's files (git's view when available,
+// with a time limit so a huge repository cannot freeze typing), refreshed
+// at most every 30 seconds.
 func (c *completer) projectFiles() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Since(c.listed) < 10*time.Second && c.files != nil {
+	if time.Since(c.listed) < 30*time.Second && c.files != nil {
 		return c.files
 	}
 	c.listed = time.Now()
-	cmd := exec.Command("git", "-c", "core.fsmonitor=false", "ls-files", "--cached", "--others", "--exclude-standard")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	cmd.Dir = c.root
 	if out, err := cmd.Output(); err == nil {
-		c.files = strings.Split(strings.TrimSpace(string(out)), "\n")
+		c.files = strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
 		if len(c.files) > 20000 {
 			c.files = c.files[:20000]
 		}

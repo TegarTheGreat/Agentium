@@ -223,7 +223,7 @@ func (e *editor) render(width int) {
 			sb.WriteString("\x1b[" + itoa(promptW) + "C")
 		}
 		e.out.WriteString(sb.String())
-		e.drawPopup(width)
+		e.drawPopup(width, promptW)
 		return
 	}
 	pos := e.pos
@@ -251,7 +251,7 @@ func (e *editor) render(width int) {
 		sb.WriteString("\x1b[" + itoa(cursor) + "C")
 	}
 	e.out.WriteString(sb.String())
-	e.drawPopup(width)
+	e.drawPopup(width, cursor)
 }
 
 // suggest recomputes the popup for the text before the cursor.
@@ -271,6 +271,7 @@ func (e *editor) suggest() {
 // accept puts the selected suggestion into the input.
 func (e *editor) accept() suggestion {
 	s := e.sugg[e.sel]
+	e.suggStart = min(e.suggStart, e.pos)
 	rest := append([]rune(nil), e.buf[e.pos:]...)
 	e.buf = append(append(e.buf[:e.suggStart], []rune(s.insert)...), rest...)
 	e.pos = e.suggStart + len([]rune(s.insert))
@@ -280,8 +281,10 @@ func (e *editor) accept() suggestion {
 }
 
 // drawPopup shows the suggestions: in the full-screen composer, or under
-// the input line.
-func (e *editor) drawPopup(width int) {
+// the input line, returning the cursor to column col of the input line.
+// (Relative moves, not save/restore: drawing rows at the bottom of the
+// screen scrolls it.)
+func (e *editor) drawPopup(width, col int) {
 	if f := activeFS(); f != nil {
 		f.setPopup(e.sugg, e.sel)
 		return
@@ -291,7 +294,6 @@ func (e *editor) drawPopup(width int) {
 		return
 	}
 	var sb strings.Builder
-	sb.WriteString("\x1b7") // save the cursor
 	for _, r := range rows {
 		sb.WriteString("\r\n\x1b[2K" + r)
 	}
@@ -301,7 +303,10 @@ func (e *editor) drawPopup(width int) {
 	if n := max(len(rows), e.drawnBelow); n > 0 {
 		sb.WriteString("\x1b[" + itoa(n) + "A")
 	}
-	sb.WriteString("\x1b8") // restore it
+	sb.WriteString("\r")
+	if col > 0 {
+		sb.WriteString("\x1b[" + itoa(col) + "C")
+	}
 	e.drawnBelow = len(rows)
 	e.out.WriteString(sb.String())
 }
@@ -321,7 +326,8 @@ func popupRows(items []suggestion, sel, width int) []string {
 	var rows []string
 	for i := first; i < len(items) && i < first+show; i++ {
 		it := items[i]
-		label := truncate(it.label, labelW)
+		label := truncate(sanitize(it.label), labelW)
+		it.hint = sanitize(it.hint)
 		row := "  " + label + strings.Repeat(" ", labelW-strWidth(label)) + "  " + "\x1b[2m" + truncate(it.hint, width-labelW-6) + "\x1b[0m"
 		if i == sel {
 			row = "\x1b[" + cAccent + "m❯ \x1b[0m\x1b[1m" + label + "\x1b[0m" + strings.Repeat(" ", labelW-strWidth(label)) + "  " + "\x1b[2m" + truncate(it.hint, width-labelW-6) + "\x1b[0m"
@@ -436,6 +442,7 @@ func (e *editor) readLine() (string, error) {
 		if err != nil {
 			return "", err
 		}
+		width = termWidth(e.out) // the panel or the window may have changed
 		if pasting {
 			wasCR := lastCR
 			lastCR = k == "\r"
@@ -470,7 +477,9 @@ func (e *editor) readLine() (string, error) {
 			continue
 		}
 		if e.hook != nil && e.hook(e, k) {
+			e.pos = min(e.pos, len(e.buf))
 			if !e.autoSubmit {
+				e.suggest() // the hook may have replaced the text
 				width = termWidth(e.out)
 				e.render(width)
 				continue
@@ -518,7 +527,7 @@ func (e *editor) readLine() (string, error) {
 			}
 			line := e.text()
 			e.sugg = nil
-			e.drawPopup(width)
+			e.drawPopup(width, 0)
 			if e.echo != nil {
 				e.out.WriteString("\r\x1b[K" + e.echo(line))
 			} else {
@@ -532,7 +541,7 @@ func (e *editor) readLine() (string, error) {
 		case "\x03": // Ctrl-C
 			if len(e.buf) == 0 {
 				e.sugg = nil
-				e.drawPopup(width)
+				e.drawPopup(width, 0)
 				e.out.WriteString("\r\n")
 				return "", errInterrupt
 			}
@@ -540,7 +549,7 @@ func (e *editor) readLine() (string, error) {
 		case "\x04": // Ctrl-D
 			if len(e.buf) == 0 {
 				e.sugg = nil
-				e.drawPopup(width)
+				e.drawPopup(width, 0)
 				e.out.WriteString("\r\n")
 				return "", errEOF
 			}

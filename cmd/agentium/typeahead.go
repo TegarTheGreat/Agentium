@@ -77,11 +77,26 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 					break // CRLF: one newline
 				}
 				u.typing = append(u.typing, '\n')
-			case k == "\r" || k == "\n":
+			case k == "\r" || k == "\n" || k == "\t":
+				// Enter steers: the message reaches the agent after its
+				// current step. Tab (and any /command) waits for the turn
+				// to end.
 				if t := strings.TrimSpace(string(u.typing)); t != "" {
-					u.queued = append(u.queued, t)
+					if k == "\t" || strings.HasPrefix(t, "/") || !u.canSteer {
+						u.queued = append(u.queued, t)
+					} else {
+						u.steer = append(u.steer, t)
+					}
 				}
 				u.typing = nil
+			case k == "\x1b[A" && len(u.typing) == 0 && len(u.steer)+len(u.queued) > 0:
+				// Up takes the last pending message back for editing.
+				if n := len(u.queued); n > 0 {
+					u.typing, u.queued = []rune(u.queued[n-1]), u.queued[:n-1]
+				} else {
+					n := len(u.steer)
+					u.typing, u.steer = []rune(u.steer[n-1]), u.steer[:n-1]
+				}
 			case k == "\x0f": // Ctrl-O
 				u.mu.Unlock()
 				u.openViewer()
@@ -160,6 +175,10 @@ func (u *ui) nextKey() (string, error) {
 func (u *ui) takeQueued() (next string, ok bool, draft string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if len(u.steer) > 0 {
+		// Sent too late for the turn that ended: they go first.
+		u.queued, u.steer = append(u.steer, u.queued...), nil
+	}
 	if len(u.queued) > 0 {
 		next, u.queued = u.queued[0], u.queued[1:]
 		return next, true, ""
@@ -171,6 +190,9 @@ func (u *ui) takeQueued() (next string, ok bool, draft string) {
 // typeaheadLines renders queued and typed text for the live area.
 func (u *ui) typeaheadLines(width int) []string {
 	var lines []string
+	for _, q := range u.steer {
+		lines = append(lines, u.paint(cDim, "  ↳ at the next step: "+truncate(strings.ReplaceAll(q, "\n", "↵"), width-24)))
+	}
 	for _, q := range u.queued {
 		lines = append(lines, u.paint(cDim, "  ↳ queued: "+truncate(strings.ReplaceAll(q, "\n", "↵"), width-14)))
 	}
@@ -183,7 +205,7 @@ func (u *ui) typeaheadLines(width int) []string {
 		}
 		lines = append(lines, u.paint(cCyan, "❯ ")+t+u.paint(cDim, "▏"))
 	} else if len(u.queued) == 0 && u.keys != nil && activeFS() == nil { // full screen: in the status bar
-		lines = append(lines, u.paint(cDim, "  type to queue a message · Esc or Ctrl-C to interrupt"))
+		lines = append(lines, u.paint(cDim, "  type to steer · enter sends at the next step · tab queues for after · esc stops"))
 	}
 	return lines
 }

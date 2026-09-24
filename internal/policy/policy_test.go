@@ -223,7 +223,7 @@ func TestRiskyAuditBypasses(t *testing.T) {
 
 func TestDeclineReason(t *testing.T) {
 	fb := "use the helper in util.go instead"
-	g := &Gate{Mode: Ask, Root: "/w", Approve: func(string, string) bool { return false }, Feedback: func() string { return fb }}
+	g := &Gate{Mode: Ask, Root: "/w", Approve: func(string, string) bool { return false }, Feedback: func(string) string { return fb }}
 	if ok, why := g.Write("/w/a.go"); ok || !strings.Contains(why, "the user declined and said: use the helper") {
 		t.Fatalf("with feedback: %v %q", ok, why)
 	}

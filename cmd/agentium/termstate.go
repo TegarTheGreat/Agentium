@@ -22,15 +22,17 @@ func setTermRestore(f func()) {
 
 // restoreTerm undoes raw mode and shows the cursor again.
 func restoreTerm() {
-	if fs := activeFS(); fs != nil {
-		fs.leave()
-	}
+	// Raw mode first: leaving the full screen then restores the state
+	// from before Agentium started, which must be applied last.
 	termMu.Lock()
 	f := termRestore
 	termRestore = nil
 	termMu.Unlock()
 	if f != nil {
 		f()
+	}
+	if fs := activeFS(); fs != nil {
+		fs.leave()
 	}
 	if isTTY(os.Stderr) {
 		os.Stderr.WriteString("\x1b[?2004l\x1b[?25h")

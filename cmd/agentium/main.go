@@ -36,7 +36,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.15.0"
+var version = "0.16.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -226,6 +226,8 @@ type ui struct {
 	lastCount    int
 	lastDur      time.Duration
 	outputs      []stepOutput // recent step output, for Ctrl-O
+	steer        []string     // typed during a turn, for its next step
+	canSteer     bool
 	turnStart    time.Time
 
 	// Type-ahead while a turn runs (see typeahead.go).
@@ -296,9 +298,10 @@ func (u *ui) line(s string) {
 	u.endLine()
 	u.lastKey = ""
 	if u.live {
-		s = "  " + s
+		fmt.Fprintln(os.Stderr, "  "+u.noteLine(s))
+	} else {
+		fmt.Fprintln(os.Stderr, u.dim(s))
 	}
-	fmt.Fprintln(os.Stderr, u.dim(s))
 	u.drawLive()
 }
 
@@ -373,16 +376,16 @@ type approver struct {
 	gate   *policy.Gate
 	enable bool
 	always map[string]bool // scopes approved with "always"
-	// feedback is what the user said when declining, for the model.
-	feedback string
+	// feedback is what the user said when declining, by action.
+	feedback map[string]string
 }
 
-// takeFeedback returns the user's reason for the last refusal, once.
-func (a *approver) takeFeedback() string {
+// takeFeedback returns the user's reason for refusing action, once.
+func (a *approver) takeFeedback(action string) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	fb := a.feedback
-	a.feedback = ""
+	fb := a.feedback[action]
+	delete(a.feedback, action)
 	return fb
 }
 
@@ -408,7 +411,10 @@ func (a *approver) ask(action, reason string) bool {
 				remember()
 			}
 			if fb, ok := strings.CutPrefix(k, "t:"); ok {
-				a.feedback = fb
+				if a.feedback == nil {
+					a.feedback = map[string]string{}
+				}
+				a.feedback[action] = fb
 			}
 			return k == "y" || k == "a"
 		}
@@ -600,6 +606,16 @@ func run(args []string) error {
 			defer screen.leave()
 		}
 	}
+	// Until the session's own handler is installed, a signal must still
+	// give the terminal back.
+	early := make(chan os.Signal, 1)
+	signal.Notify(early, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		if _, ok := <-early; ok {
+			restoreTerm()
+			os.Exit(130)
+		}
+	}()
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
 	u.live = isTTY(os.Stderr) && !*quiet && os.Getenv("TERM") != "dumb"
 	if !*asJSON && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" && os.Getenv("AGENTIUM_RAW") == "" {
@@ -610,7 +626,9 @@ func run(args []string) error {
 	gate := &policy.Gate{Mode: m, Root: cwd}
 	gate.Protected = gitProtected(cwd)
 	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}
-	gate.Approve, gate.Feedback = ap.ask, ap.takeFeedback
+	if ap.enable {
+		gate.Approve, gate.Feedback = ap.ask, ap.takeFeedback
+	}
 
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
 	curModel.Store(sess.Model)
@@ -791,12 +809,16 @@ func run(args []string) error {
 		a.Events.ToolOutput = u.toolOutput
 		a.Events.Notice = func(msg string) { u.line("· " + msg); u.think() }
 		a.Events.SubToolStart, a.Events.SubAgentTool = nil, u.subAgentTool
+		u.canSteer = true
+		a.Steer = u.takeSteer
 		u.startTicker()
 	}
 
 	var active atomic.Pointer[context.CancelFunc]
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Stop(early)
+	close(early)
 	go func() {
 		for s := range sig {
 			if s != os.Interrupt {
@@ -812,6 +834,7 @@ func run(args []string) error {
 			u.mu.Lock()
 			u.endLine()
 			u.mu.Unlock()
+			restoreTerm()
 			a.Env.KillJobs()
 			os.Exit(130)
 		}
@@ -1097,6 +1120,11 @@ func run(args []string) error {
 		if line == "" {
 			continue
 		}
+		if strings.HasPrefix(line, "!") {
+			// Shell mode: run it yourself; the agent hears about it next.
+			shellCommand(u, a, cwd, line[1:])
+			continue
+		}
 		if strings.EqualFold(line, "agentium update") {
 			// The shell command, typed here: do it rather than ask the model.
 			line = "/update"
@@ -1375,6 +1403,18 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		a.Note = note
 		_ = sess.Save()
+	case "/diff":
+		showDiff(u, sess.Cwd)
+	case "/context":
+		showContext(u, a)
+	case "/compact":
+		compactNow(u, a)
+		sess.Messages = a.Messages
+		_ = sess.Save()
+	case "/theme":
+		pickTheme(u, strings.Join(f[1:], " "))
+	case "/btw":
+		sideQuestion(u, a, strings.TrimSpace(strings.TrimPrefix(line, "/btw")))
 	case "/copy":
 		text := ""
 		for i := len(a.Messages) - 1; i >= 0; i-- {

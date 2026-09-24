@@ -19,6 +19,7 @@ type vterm struct {
 	st       vstyle
 	pending  []byte // an incomplete UTF-8 sequence or escape
 	maxLines int
+	dropped  int // lines trimmed from the top so far
 }
 
 type vcell struct {
@@ -99,6 +100,7 @@ func (v *vterm) newline() {
 		drop := len(v.lines) - v.maxLines + v.maxLines/5
 		v.lines = append([][]vcell(nil), v.lines[drop:]...)
 		v.row -= drop
+		v.dropped += drop
 	}
 }
 
@@ -142,7 +144,10 @@ func (v *vterm) escape(p []byte) (used int, ok bool) {
 			i++
 		}
 		if i >= len(p) {
-			return 0, len(p) > 64 // give up on runaway sequences
+			if len(p) > 64 {
+				return len(p), true // a runaway sequence: drop it
+			}
+			return 0, false
 		}
 		v.csi(string(p[2:i]), p[i])
 		return i + 1, true
@@ -155,7 +160,10 @@ func (v *vterm) escape(p []byte) (used int, ok bool) {
 				return i + 2, true
 			}
 		}
-		return 0, len(p) > 512
+		if len(p) > 512 {
+			return len(p), true // an unterminated OSC: drop it
+		}
+		return 0, false
 	}
 	return 2, true
 }

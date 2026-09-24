@@ -79,6 +79,9 @@ type Agent struct {
 	// Note is prepended to the next user input once (e.g. "the user undid
 	// your last changes"), so the model's picture of the files stays true.
 	Note string
+	// Steer, if set, returns messages the user sent while the agent was
+	// working; they are given to the model after the current step.
+	Steer func() []string
 	// Attach holds images for the next Run's user message.
 	Attach []provider.Image
 	// Ledger is the harness-kept working state (files, commands, errors,
@@ -250,6 +253,12 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 			if stuck {
 				a.notice("stopped: repeating the same action")
 				return done(ErrStuck)
+			}
+			if a.Steer != nil && a.depth == 0 {
+				if msgs := a.Steer(); len(msgs) > 0 {
+					a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser,
+						Text: "[The user sent this while you were working; take it into account now:]\n" + strings.Join(msgs, "\n\n")})
+				}
 			}
 		}
 		if truncated {
