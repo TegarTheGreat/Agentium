@@ -314,10 +314,13 @@ func undoLast(store *checkpoint.Store, sess *session.Session) (string, error) {
 	if !ok {
 		return "", errors.New("nothing to undo")
 	}
-	files, err := store.Restore(context.Background(), cp.ID)
+	files, err := store.Restore(context.Background(), cp.ID, cp.After)
 	if err != nil {
-		sess.AddCheckpoint(cp.ID, cp.Prompt)
+		sess.Checkpoints = append(sess.Checkpoints, cp)
 		return "", fmt.Errorf("undo failed: %v", err)
+	}
+	if nested := store.Nested(context.Background()); len(nested) > 0 {
+		fmt.Fprintf(os.Stderr, "· note: nested repositories are not covered by undo: %s\n", strings.Join(limitList(nested, 5), ", "))
 	}
 	if len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "· no file changes to revert for %q\n", firstLine(cp.Prompt))

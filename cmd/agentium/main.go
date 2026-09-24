@@ -794,9 +794,17 @@ func run(args []string) error {
 		if interactive {
 			stopTyping = u.startTyping(cancel)
 		}
+		checkpoints := len(sess.Checkpoints)
 		st, err := a.Run(ctx, send)
 		stopTyping()
 		u.endTurn()
+		if store != nil && len(sess.Checkpoints) > checkpoints {
+			// Remember where this turn's changes end, so undo reverts only
+			// them and keeps later edits by the user.
+			if after, serr := store.Snapshot(context.Background(), "after: "+firstLine(input)); serr == nil {
+				sess.EndCheckpoint(after)
+			}
+		}
 		if mem != nil {
 			mem.afterTurn(input, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), u.line)
 		}

@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/fsx"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,13 +75,23 @@ func read(p string) string {
 	return string(b)
 }
 
-func write(p, s string) error {
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, []byte(s), 0o600); err != nil {
-		return err
+func write(p, s string) error { return fsx.WriteFile(p, []byte(s), 0o600) }
+
+// lock serializes read-modify-write of the memory files, within this
+// process and across processes (two sessions in one project; USER.md is
+// shared by all projects).
+func (s *Store) lock() func() {
+	s.mu.Lock()
+	unlock := fsx.Lock(filepath.Join(filepath.Dir(s.UserPath), "memory.lock"), 10*time.Second)
+	return func() {
+		unlock()
+		s.mu.Unlock()
 	}
-	return os.Rename(tmp, p)
 }
+
+// Lock holds the memory lock for a caller that rewrites the files itself
+// (agentium tidy); it returns the release function.
+func (s *Store) Lock() func() { return s.lock() }
 
 // Decision is one entry of DECISIONS.md:
 //
@@ -266,8 +277,7 @@ func weakest(lines []string, protect int, root string) int {
 // Remember stores a project fact; updated reports that it replaced a
 // similar older one, evicted what was forgotten to make room.
 func (s *Store) Remember(fact string) (updated bool, evicted []string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lock()()
 	updated, evicted, err = s.upsert(s.MemoryPath, fact, MemoryLimit, s.Root)
 	s.keepEvicted(evicted)
 	return
@@ -275,8 +285,7 @@ func (s *Store) Remember(fact string) (updated bool, evicted []string, err error
 
 // Prefer stores a user-wide preference.
 func (s *Store) Prefer(fact string) (updated bool, evicted []string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lock()()
 	updated, evicted, err = s.upsert(s.UserPath, fact, UserLimit, "")
 	s.keepEvicted(evicted)
 	return
@@ -295,8 +304,7 @@ var supersedes = regexp.MustCompile(`(?i)\b(?:supersedes|replaces)\s+(D-\d+)\b`)
 // Decide records a decision and returns its id. Text mentioning
 // "supersedes D-007" marks that decision superseded.
 func (s *Store) Decide(text string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lock()()
 	ds := s.Decisions()
 	max := 0
 	for _, d := range ds {
@@ -320,8 +328,7 @@ func (s *Store) Decide(text string) (string, error) {
 // Forget removes lines containing text from USER.md and MEMORY.md, and
 // marks matching active decisions dropped. It reports how many changed.
 func (s *Store) Forget(text string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lock()()
 	needle := strings.ToLower(strings.TrimSpace(text))
 	if len(needle) < 4 {
 		return 0, errors.New("forget needs at least 4 characters to match")

@@ -36,6 +36,9 @@ type Checkpoint struct {
 	ID     string    `json:"id"`
 	Prompt string    `json:"prompt"`
 	Time   time.Time `json:"time"`
+	// After is the snapshot taken when the turn ended: undo reverts only
+	// what changed between ID and After.
+	After string `json:"after,omitempty"`
 }
 
 const maxCheckpoints = 50
@@ -45,6 +48,13 @@ func (s *Session) AddCheckpoint(id, prompt string) {
 	s.Checkpoints = append(s.Checkpoints, Checkpoint{ID: id, Prompt: prompt, Time: time.Now()})
 	if n := len(s.Checkpoints); n > maxCheckpoints {
 		s.Checkpoints = append([]Checkpoint(nil), s.Checkpoints[n-maxCheckpoints:]...)
+	}
+}
+
+// EndCheckpoint records the end-of-turn snapshot of the newest checkpoint.
+func (s *Session) EndCheckpoint(after string) {
+	if n := len(s.Checkpoints); n > 0 && s.Checkpoints[n-1].After == "" {
+		s.Checkpoints[n-1].After = after
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/fsx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,14 +274,23 @@ func cmdTidy(args []string) error {
 			return nil
 		}
 	}
+	unlock := st.Lock()
+	// A running session may have written memory while the model and the
+	// user were deciding: then the reviewed diff is stale.
+	if readFile(st.UserPath) != user || readFile(st.MemoryPath) != mem {
+		unlock()
+		return errors.New("memory changed meanwhile (another session wrote to it); run tidy again")
+	}
 	for _, f := range [][2]string{{st.UserPath, newUser}, {st.MemoryPath, newMem}} {
 		if old := readFile(f[0]); old != "" {
-			_ = os.WriteFile(f[0]+".bak", []byte(old), 0o600)
+			_ = fsx.WriteFile(f[0]+".bak", []byte(old), 0o600)
 		}
-		if err := os.WriteFile(f[0], []byte(f[1]), 0o600); err != nil {
+		if err := fsx.WriteFile(f[0], []byte(f[1]), 0o600); err != nil {
+			unlock()
 			return err
 		}
 	}
+	unlock()
 	_ = st.Journal("tidy: memory consolidated")
 	fmt.Fprintln(os.Stderr, "memory updated (backups: *.bak)")
 	return nil

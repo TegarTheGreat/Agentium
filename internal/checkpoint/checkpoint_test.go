@@ -46,7 +46,7 @@ func TestSnapshotRestore(t *testing.T) {
 	if len(changed) != 3 {
 		t.Fatalf("changed = %v", changed)
 	}
-	touched, err := s.Restore(ctx, id)
+	touched, err := s.Restore(ctx, id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,37 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 	// Nothing changed: restore is a no-op.
 	id2, _ := s.Snapshot(ctx, "turn 2")
-	if touched, err := s.Restore(ctx, id2); err != nil || len(touched) != 0 {
+	if touched, err := s.Restore(ctx, id2, ""); err != nil || len(touched) != 0 {
 		t.Fatalf("noop restore: %v %v", touched, err)
+	}
+}
+
+func TestRestoreOnlyTheTurn(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(t.TempDir(), root)
+	if err != nil {
+		t.Skip(err)
+	}
+	ctx := context.Background()
+	os.WriteFile(filepath.Join(root, "a.go"), []byte("v1"), 0o644)
+	before, _ := s.Snapshot(ctx, "before")
+	// The turn changes a.go and creates b"weird\tname".go.
+	os.WriteFile(filepath.Join(root, "a.go"), []byte("v2"), 0o644)
+	weird := filepath.Join(root, "b\"weird\tname.go")
+	os.WriteFile(weird, []byte("x"), 0o644)
+	after, _ := s.Snapshot(ctx, "after")
+	// Later the user creates notes.md.
+	os.WriteFile(filepath.Join(root, "notes.md"), []byte("mine"), 0o644)
+	if _, err := s.Restore(ctx, before, after); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "a.go")); string(b) != "v1" {
+		t.Errorf("a.go not restored: %q", b)
+	}
+	if _, err := os.Stat(weird); err == nil {
+		t.Error("file with an unusual name created by the turn survived undo")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "notes.md")); string(b) != "mine" {
+		t.Error("undo deleted a file the user created after the turn")
 	}
 }

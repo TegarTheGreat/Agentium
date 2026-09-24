@@ -1,8 +1,10 @@
 package memory
 
 import (
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -213,5 +215,35 @@ func TestLessonsPromotedOnRecurrence(t *testing.T) {
 	}
 	if rep := s.Lessons([]string{l2}, false); len(rep) != 0 {
 		t.Fatal("untrusted turns must not write memory")
+	}
+}
+
+func TestTwoStoresDoNotLoseDecisions(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	a, err := Open(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Open(home, root)
+	var wg sync.WaitGroup
+	for _, st := range []*Store{a, b} {
+		wg.Add(1)
+		go func(st *Store) {
+			defer wg.Done()
+			for i := 0; i < 30; i++ {
+				if _, err := st.Decide(fmt.Sprintf("decision %d", i)); err != nil {
+					t.Error(err)
+				}
+			}
+		}(st)
+	}
+	wg.Wait()
+	ds := a.Decisions()
+	seen := map[string]bool{}
+	for _, d := range ds {
+		seen[d.ID] = true
+	}
+	if len(ds) != 60 || len(seen) != 60 {
+		t.Fatalf("got %d decisions, %d unique ids; want 60", len(ds), len(seen))
 	}
 }
