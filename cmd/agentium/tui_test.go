@@ -41,10 +41,15 @@ func TestAlwaysScope(t *testing.T) {
 	for _, c := range []struct{ action, key string }{
 		{"bash: npm install three", "bash:npm"},
 		{"network: FOO=1 /usr/bin/curl -sS x", "network:curl"},
+		{"bash: cd /w && go test ./...", "bash:go"},
+		{"bash: cd /w && go test && rm -rf ~", "bash=go test && rm -rf ~"},
+		{"bash: sudo apt install x", "bash=sudo apt install x"},
+		{"bash: cd /other && ls", "bash=cd /other && ls"},
+		{"bash: npm test | tee log", "bash=npm test | tee log"},
 		{"write: /a/b.go", "write"},
 		{"fetch: https://example.com/x?y", "fetch:example.com"},
 	} {
-		if k, _ := alwaysScope(c.action); k != c.key {
+		if k, _ := alwaysScope(c.action, "/w"); k != c.key {
 			t.Errorf("%q: key %q, want %q", c.action, k, c.key)
 		}
 	}

@@ -582,9 +582,18 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 	u.clearLive()
 	u.endLine()
 	u.afterTool = false
-	width := termWidth(os.Stderr) - 4
-	fmt.Fprintf(os.Stderr, "\n%s %s\n  %s\n  %s ",
-		u.paint(cYellow, "▲"), u.paint(cBold, title), u.paint(cCyan, truncate(what, width)),
+	// The whole command is shown (wrapped), never cut: what is approved
+	// must be what is seen. Very long ones show their first rows and say so.
+	var body strings.Builder
+	for i, row := range wrapRows(sanitize(what), termWidth(os.Stderr)-4) {
+		if i == 12 {
+			body.WriteString("  " + u.paint(cYellow, "… (command continues; press n and ask the agent to split it)") + "\n")
+			break
+		}
+		body.WriteString("  " + u.paint(cCyan, row) + "\n")
+	}
+	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",
+		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
 		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no ›"))
 	u.mu.Unlock()
 	defer func() {
@@ -597,15 +606,19 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 		}
 		u.mu.Unlock()
 	}()
-	start := time.Now()
+	last := time.Now()
 	u.drainKeys()
 	for {
 		k, err := u.nextKey()
 		if err != nil {
 			return "", err
 		}
-		if time.Since(start) < 400*time.Millisecond {
-			continue // keys typed before the prompt appeared are not answers
+		// An answer needs a pause before it: keys that are part of a
+		// burst of typing (a message typed ahead) never count as answers.
+		gap := time.Since(last)
+		last = time.Now()
+		if gap < 400*time.Millisecond {
+			continue
 		}
 		switch strings.ToLower(k) {
 		case "y":
@@ -619,4 +632,47 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 			return "n", nil
 		}
 	}
+}
+
+// wrapRows splits s into rows at most width columns wide.
+func wrapRows(s string, width int) []string {
+	if width < 10 {
+		width = 10
+	}
+	var rows []string
+	var cur strings.Builder
+	n := 0
+	for _, r := range s {
+		if r == '\n' {
+			rows = append(rows, cur.String())
+			cur.Reset()
+			n = 0
+			continue
+		}
+		if w := runeWidth(r); n+w > width {
+			rows = append(rows, cur.String())
+			cur.Reset()
+			n = 0
+		}
+		cur.WriteRune(r)
+		n += runeWidth(r)
+	}
+	return append(rows, cur.String())
+}
+
+// sanitize makes text safe to measure and print: tabs become spaces and
+// other control characters (C0, DEL, C1) are dropped, so a command
+// cannot move the cursor or hide part of itself.
+func sanitize(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n':
+			return r
+		case r == '\t':
+			return ' '
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0):
+			return -1
+		}
+		return r
+	}, s)
 }

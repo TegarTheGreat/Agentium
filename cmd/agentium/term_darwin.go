@@ -19,9 +19,14 @@ func inputReady(f *os.File, d time.Duration) bool {
 	var r syscall.FdSet
 	fd := int(f.Fd())
 	r.Bits[fd/32] |= 1 << (uint(fd) % 32)
-	tv := syscall.NsecToTimeval(d.Nanoseconds())
-	if err := syscall.Select(fd+1, &r, nil, nil, &tv); err != nil {
-		return true
+	deadline := time.Now().Add(d)
+	for {
+		tv := syscall.NsecToTimeval(time.Until(deadline).Nanoseconds())
+		set := r
+		err := syscall.Select(fd+1, &set, nil, nil, &tv)
+		if err == syscall.EINTR && time.Now().Before(deadline) {
+			continue // a signal (e.g. a resize) is not input
+		}
+		return err == nil && set.Bits[fd/32]&(1<<(uint(fd)%32)) != 0
 	}
-	return r.Bits[fd/32]&(1<<(uint(fd)%32)) != 0
 }

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/agent"
@@ -76,6 +77,12 @@ Keys: ↑/↓ history · Ctrl-A/E/U/K/W · paste keeps newlines · end a line wi
 
 func main() {
 	sandbox.MaybeRunHelper()
+	defer func() {
+		if r := recover(); r != nil {
+			restoreTerm()
+			panic(r)
+		}
+	}()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -123,6 +130,7 @@ func main() {
 }
 
 func exit(err error) {
+	restoreTerm()
 	if err == nil {
 		return
 	}
@@ -348,7 +356,7 @@ func (a *approver) ask(action, reason string) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	key, scope := alwaysScope(action)
+	key, scope := alwaysScope(action, a.gate.Root)
 	if a.gate.GetMode() == policy.Yolo || a.always[key] { // "always" chosen earlier
 		return true
 	}
@@ -382,18 +390,28 @@ func (a *approver) ask(action, reason string) bool {
 }
 
 // alwaysScope is what "always" approves for the rest of the session: the
-// same program for commands, file changes, the same host for fetches.
-func alwaysScope(action string) (key, label string) {
+// same program for simple commands, file changes, the same host for
+// fetches. A compound command, or one run through a wrapper that could
+// run anything (sudo, sh -c, xargs, env …), is approved only verbatim, so
+// approving "cd x && go test" never approves "cd x && rm -rf ~".
+func alwaysScope(action, root string) (key, label string) {
 	kind, rest, _ := strings.Cut(action, ": ")
 	switch kind {
 	case "bash", "network":
+		cmd := strings.TrimSpace(rest)
+		if root != "" {
+			cmd = strings.TrimPrefix(cmd, "cd "+root+" && ")
+		}
 		prog := ""
-		for _, w := range strings.Fields(rest) {
+		for _, w := range strings.Fields(cmd) {
 			if strings.Contains(w, "=") && !strings.HasPrefix(w, "-") && prog == "" {
 				continue // VAR=value prefix
 			}
 			prog = filepath.Base(w)
 			break
+		}
+		if strings.ContainsAny(cmd, ";&|`$<>\n(") || wrapperCommands[prog] || prog == "" {
+			return kind + "=" + cmd, "for this exact command"
 		}
 		if kind == "network" {
 			return kind + ":" + prog, "for `" + prog + "` with network"
@@ -412,6 +430,13 @@ func alwaysScope(action string) (key, label string) {
 	}
 	return action, "for this"
 }
+
+// wrapperCommands run another command given as arguments.
+var wrapperCommands = map[string]bool{"cd": true, "sudo": true, "doas": true, "su": true, "env": true, "sh": true,
+	"bash": true, "zsh": true, "dash": true, "fish": true, "xargs": true, "npx": true, "bunx": true, "pnpx": true,
+	"timeout": true, "nice": true, "nohup": true, "exec": true, "eval": true, "command": true, "time": true,
+	"watch": true, "find": true, "ssh": true, "docker": true, "kubectl": true, "python": true, "python3": true,
+	"node": true, "perl": true, "ruby": true, "busybox": true, "setsid": true, "stdbuf": true, "chroot": true}
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("agentium", flag.ContinueOnError)
@@ -710,9 +735,15 @@ func run(args []string) error {
 
 	var active atomic.Pointer[context.CancelFunc]
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		for range sig {
+		for s := range sig {
+			if s != os.Interrupt {
+				// Terminated or the terminal closed: leave it usable.
+				restoreTerm()
+				a.Env.KillJobs()
+				os.Exit(128 + 15)
+			}
 			if c := active.Load(); c != nil {
 				(*c)()
 				continue

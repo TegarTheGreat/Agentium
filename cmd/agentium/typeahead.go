@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"strings"
@@ -29,12 +30,17 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 	u.mu.Lock()
 	u.keys = keys
 	u.mu.Unlock()
+	os.Stderr.WriteString("\x1b[?2004h") // bracketed paste: a pasted block stays one message
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// If the reader stops (the terminal went away), a waiting
+		// approval prompt must not block forever.
+		defer close(keys)
 		ed := &editor{in: os.Stdin}
+		pasting, lastCR := false, false
 		for {
 			select {
 			case <-done:
@@ -57,13 +63,22 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 				}
 				continue
 			}
-			switch k {
-			case "\r", "\n":
+			switch {
+			case k == "\x1b[200~":
+				pasting = true
+			case k == "\x1b[201~":
+				pasting = false
+			case pasting && (k == "\r" || k == "\n"):
+				if k == "\n" && len(u.typing) > 0 && u.typing[len(u.typing)-1] == '\n' && lastCR {
+					break // CRLF: one newline
+				}
+				u.typing = append(u.typing, '\n')
+			case k == "\r" || k == "\n":
 				if t := strings.TrimSpace(string(u.typing)); t != "" {
 					u.queued = append(u.queued, t)
 				}
 				u.typing = nil
-			case "\x03":
+			case k == "\x03":
 				if len(u.typing) > 0 {
 					u.typing = nil
 				} else {
@@ -71,22 +86,25 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 					interrupt()
 					continue
 				}
-			case "\x7f", "\x08":
+			case k == "\x7f" || k == "\x08":
 				if len(u.typing) > 0 {
 					u.typing = u.typing[:len(u.typing)-1]
 				}
-			case "\x15":
+			case k == "\x15":
 				u.typing = nil
-			case "\x1b[200~", "\x1b[201~":
 			default:
 				if !strings.HasPrefix(k, "\x1b") {
 					for _, r := range k {
-						if r >= 0x20 || r == '\t' {
+						switch {
+						case r == '\t':
+							u.typing = append(u.typing, ' ', ' ')
+						case r >= 0x20 && r != 0x7f:
 							u.typing = append(u.typing, r)
 						}
 					}
 				}
 			}
+			lastCR = k == "\r"
 			u.clearLive()
 			u.drawLive()
 			u.mu.Unlock()
@@ -95,6 +113,7 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 	return func() {
 		close(done)
 		wg.Wait()
+		os.Stderr.WriteString("\x1b[?2004l")
 		restore()
 		u.mu.Lock()
 		u.keys = nil
@@ -109,7 +128,11 @@ func (u *ui) nextKey() (string, error) {
 	keys := u.keys
 	u.mu.Unlock()
 	if keys != nil {
-		return <-keys, nil
+		k, ok := <-keys
+		if !ok {
+			return "", errors.New("terminal input closed")
+		}
+		return k, nil
 	}
 	return readKey()
 }
@@ -132,10 +155,10 @@ func (u *ui) takeQueued() (next string, ok bool, draft string) {
 func (u *ui) typeaheadLines(width int) []string {
 	var lines []string
 	for _, q := range u.queued {
-		lines = append(lines, u.paint(cDim, "  ↳ queued: "+truncate(q, width-14)))
+		lines = append(lines, u.paint(cDim, "  ↳ queued: "+truncate(strings.ReplaceAll(q, "\n", "↵"), width-14)))
 	}
 	if len(u.typing) > 0 {
-		t := string(u.typing)
+		t := strings.ReplaceAll(string(u.typing), "\n", "↵")
 		// Show the end of long input, where the cursor is.
 		for strWidth(t) > width-4 {
 			_, size := utf8.DecodeRuneInString(t)

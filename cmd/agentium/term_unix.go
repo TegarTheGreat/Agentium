@@ -30,7 +30,7 @@ func tcset(fd uintptr, t *syscall.Termios) error {
 
 // makeRaw puts the terminal in raw mode (no echo, no line buffering, no
 // signal keys) and returns a function restoring the previous state.
-func makeRaw(f *os.File) (func(), error) {
+func makeRawOS(f *os.File) (func(), error) {
 	fd := f.Fd()
 	old, err := tcget(fd)
 	if err != nil {
@@ -56,6 +56,16 @@ func termWidth(f *os.File) int {
 		return 80
 	}
 	return int(ws.Col)
+}
+
+// termRows is the terminal height (24 when unknown).
+func termRows(f *os.File) int {
+	var ws struct{ Row, Col, X, Y uint16 }
+	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if e != 0 || ws.Row == 0 {
+		return 24
+	}
+	return int(ws.Row)
 }
 
 const lineEditing = true

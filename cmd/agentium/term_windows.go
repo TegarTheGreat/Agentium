@@ -39,7 +39,7 @@ func consoleMode(f *os.File) (uint32, bool) {
 // makeRaw switches the console to raw VT input: no echo, no line
 // buffering, Ctrl-C as a key, arrow keys as escape sequences — what the
 // line editor reads on Unix terminals too.
-func makeRaw(f *os.File) (func(), error) {
+func makeRawOS(f *os.File) (func(), error) {
 	old, ok := consoleMode(f)
 	if !ok {
 		return nil, errors.New(errNoConsole)
@@ -74,5 +74,25 @@ func init() {
 	}
 }
 
-// inputReady: console input has no cheap poll here; wait for the key.
-func inputReady(*os.File, time.Duration) bool { return true }
+var procWaitForSingleObject = k32.NewProc("WaitForSingleObject")
+
+// inputReady reports whether console input arrives within d (so a lone
+// Esc is not merged with the next key).
+func inputReady(f *os.File, d time.Duration) bool {
+	r, _, _ := procWaitForSingleObject.Call(f.Fd(), uintptr(d.Milliseconds()))
+	return r == 0 // WAIT_OBJECT_0; WAIT_TIMEOUT is 0x102
+}
+
+// termRows is the console window height.
+func termRows(f *os.File) int {
+	var info struct {
+		Size, Cursor             [2]int16
+		Attrs                    uint16
+		Left, Top, Right, Bottom int16
+		MaxSize                  [2]int16
+	}
+	if r, _, _ := procGetScreenBufInfo.Call(f.Fd(), uintptr(unsafe.Pointer(&info))); r == 0 || info.Bottom <= info.Top {
+		return 24
+	}
+	return int(info.Bottom-info.Top) + 1
+}

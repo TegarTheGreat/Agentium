@@ -72,7 +72,7 @@ func (t *liveTool) feed(p []byte) {
 		case '\t':
 			t.partial += "  "
 		default:
-			if r >= 0x20 {
+			if r >= 0x20 && r != 0x7f && (r < 0x80 || r >= 0xa0) {
 				t.partial += string(r)
 			}
 		}
@@ -150,6 +150,12 @@ func (u *ui) drawLive() {
 	if len(lines) == 0 {
 		return
 	}
+	// Never taller than the screen: cursor-up cannot go past the top row,
+	// so a taller area could not be erased.
+	if max := termRows(os.Stderr) - 2; max > 2 && len(lines) > max {
+		more := len(lines) - (max - 1)
+		lines = append(lines[:max-1], u.paint(cDim, fmt.Sprintf("  … %d more line%s", more, plural(more))))
+	}
 	os.Stderr.WriteString(strings.Join(lines, "\n"))
 	u.drawn = len(lines)
 }
@@ -198,6 +204,7 @@ func (u *ui) permanent(s string) {
 func (u *ui) beginTurn() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.lastKey, u.afterTool = "", false
 	if u.live {
 		u.thinking, u.thinkT = true, time.Now()
 	}
@@ -354,8 +361,7 @@ func (u *ui) detail(c provider.ToolCall) string {
 		lines := strings.Split(strings.TrimSpace(cmd), "\n")
 		s = strings.TrimSpace(lines[0]) + fmt.Sprintf("  (+%d lines)", len(lines)-1)
 	}
-	s = u.relative(s)
-	return s
+	return sanitize(u.relative(s))
 }
 
 // relative strips the workspace from paths and leading "cd <workspace>".
