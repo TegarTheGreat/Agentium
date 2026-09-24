@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -132,6 +133,18 @@ func TestSecretsUnreadable(t *testing.T) {
 	if out, err := run(t, work, "cat "+filepath.Join(home, ".bashrc"), box); err != nil || !strings.Contains(out, "PUBLIC") {
 		t.Fatalf("ordinary home files should stay readable: %v %q", err, out)
 	}
+	// A home directory can still be listed (names only).
+	if out, err := run(t, work, "ls -a "+home, box); err != nil || !strings.Contains(out, ".bashrc") {
+		t.Errorf("listing home should work: %v %q", err, out)
+	}
+	// A symlinked ~/.config (dotfile managers) does not expose gh tokens.
+	dot := filepath.Join(home, "dotfiles", "config", "gh")
+	os.MkdirAll(dot, 0o700)
+	os.WriteFile(filepath.Join(dot, "hosts.yml"), []byte("TOKEN"), 0o600)
+	os.Symlink(filepath.Join(home, "dotfiles", "config"), filepath.Join(home, ".config"))
+	if out, _ := run(t, work, "cat "+filepath.Join(home, ".config", "gh", "hosts.yml")+"; cat "+filepath.Join(dot, "hosts.yml"), box); strings.Contains(out, "TOKEN") {
+		t.Error("a token behind a symlinked ~/.config was readable")
+	}
 	// Even when the workspace is the home directory itself.
 	if out, _ := run(t, home, "cat .ssh/id_ed25519", Config{Write: []string{home, "/dev"}}); strings.Contains(out, "PRIVATE") {
 		t.Fatal("an SSH key was readable with home as the workspace")
@@ -160,5 +173,52 @@ func TestReadOnlyDropsWorkspace(t *testing.T) {
 	want := []string{"/home/u/.cache", "/dev/null"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+func TestNetworkEscapesDenied(t *testing.T) {
+	if !Probe().Network {
+		t.Skip("network confinement unavailable")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer ln.Close()
+	got := make(chan string, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			b := make([]byte, 64)
+			n, _ := c.Read(b)
+			got <- string(b[:n])
+			c.Close()
+		}
+	}()
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	work, _ := filepath.EvalSymlinks(t.TempDir())
+	box := Config{Write: []string{work, "/dev"}}
+	for name, py := range map[string]string{
+		"fast open": `s=socket.socket(); s.sendto(b'TFO-LEAK', 0x20000000, ('127.0.0.1',` + port + `))`,
+		"mptcp":     `s=socket.socket(socket.AF_INET, socket.SOCK_STREAM, 262); s.connect(('127.0.0.1',` + port + `)); s.send(b'MPTCP-LEAK')`,
+		"packet":    `socket.socket(17, socket.SOCK_RAW, 0)`,
+	} {
+		out, _ := run(t, work, `python3 -c "import socket
+try:
+    `+py+`
+    print('allowed')
+except OSError as e:
+    print('errno', e.errno)"`, box)
+		if strings.Contains(out, "allowed") {
+			t.Errorf("%s: not denied: %q", name, out)
+		}
+	}
+	select {
+	case s := <-got:
+		t.Fatalf("data left the sandbox: %q", s)
+	case <-time.After(300 * time.Millisecond):
 	}
 }

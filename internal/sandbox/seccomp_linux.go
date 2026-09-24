@@ -3,6 +3,8 @@
 package sandbox
 
 import (
+	"errors"
+	"fmt"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -14,20 +16,25 @@ import (
 // set. Other architectures run without it.
 func denyDatagrams() error {
 	var arch, sysSocket uint32
+	var sendFlags [][2]uint32 // syscall, index of its flags argument
 	switch runtime.GOARCH {
 	case "amd64":
-		arch, sysSocket = 0xc000003e, 41 // AUDIT_ARCH_X86_64
+		arch, sysSocket = 0xc000003e, 41                    // AUDIT_ARCH_X86_64
+		sendFlags = [][2]uint32{{44, 3}, {46, 2}, {307, 3}} // sendto, sendmsg, sendmmsg
 	case "arm64":
 		arch, sysSocket = 0xc00000b7, 198 // AUDIT_ARCH_AARCH64
+		sendFlags = [][2]uint32{{206, 3}, {211, 2}, {269, 3}}
 	default:
-		return nil
+		return errUnsupportedArch
 	}
 	const (
 		sysIoUringSetup = 425
 		afInet          = 2
 		afInet6         = 10
-		sockDgram       = 2
-		sockRaw         = 3
+		afPacket        = 17
+		sockStream      = 1
+		ipprotoTCP      = 6
+		msgFastOpen     = 0x20000000
 		retAllow        = 0x7fff0000
 		retErrno        = 0x00050000
 		eacces          = 13
@@ -42,16 +49,31 @@ func denyDatagrams() error {
 	}
 	p.jeq(sysSocket, "socket", "")
 	p.jeq(sysIoUringSetup, "enosys", "")
+	for i, sf := range sendFlags {
+		// TCP Fast Open sends data with the connect, past Landlock's check.
+		p.jeq(sf[0], fmt.Sprintf("send%d", i), "")
+	}
 	p.ret(retAllow)
+	for i, sf := range sendFlags {
+		p.label(fmt.Sprintf("send%d", i))
+		p.ld(16 + 8*sf[1])
+		p.and(msgFastOpen)
+		p.jeq(msgFastOpen, "deny", "allow")
+	}
 	p.label("socket")
 	p.ld(16) // args[0]: domain
-	p.jeq(afInet, "type", "")
-	p.jeq(afInet6, "type", "allow")
-	p.label("type")
+	p.jeq(afPacket, "deny", "")
+	p.jeq(afInet, "inet", "")
+	p.jeq(afInet6, "inet", "allow")
+	p.label("inet")
+	// Only plain TCP: UDP, raw, SOCK_PACKET and other protocols (MPTCP,
+	// SCTP) are not covered by Landlock's TCP rules.
 	p.ld(24)   // args[1]: type
 	p.and(0xf) // without SOCK_NONBLOCK / SOCK_CLOEXEC
-	p.jeq(sockDgram, "deny", "")
-	p.jeq(sockRaw, "deny", "allow")
+	p.jeq(sockStream, "", "deny")
+	p.ld(32) // args[2]: protocol
+	p.jeq(0, "allow", "")
+	p.jeq(ipprotoTCP, "allow", "deny")
 	p.label("allow")
 	p.ret(retAllow)
 	p.label("deny")
@@ -71,6 +93,11 @@ func denyDatagrams() error {
 	}
 	return nil
 }
+
+var errUnsupportedArch = errors.New("no seccomp filter for this architecture")
+
+// datagramFilterSupported reports whether denyDatagrams works here.
+func datagramFilterSupported() bool { return runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64" }
 
 type sockFilter struct {
 	code uint16

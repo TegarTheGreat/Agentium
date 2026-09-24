@@ -42,6 +42,8 @@ func TestAlwaysScope(t *testing.T) {
 		{"bash: npm install three", "bash:npm"},
 		{"network: FOO=1 /usr/bin/curl -sS x", "network=FOO=1 /usr/bin/curl -sS x"},
 		{"bash: cd /w && go test ./...", "bash:go"},
+		{"bash: ./go test", "bash=./go test"},
+		{"bash: LD_PRELOAD=/tmp/e.so go test", "bash=LD_PRELOAD=/tmp/e.so go test"},
 		{"bash: cd /w && go test && rm -rf ~", "bash=go test && rm -rf ~"},
 		{"bash: sudo apt install x", "bash=sudo apt install x"},
 		{"bash: cd /other && ls", "bash=cd /other && ls"},
@@ -72,5 +74,11 @@ func TestNewer(t *testing.T) {
 func TestAlwaysScopeWriteOutside(t *testing.T) {
 	if k, _ := alwaysScope("write: /home/u/.bashrc", "outside the workspace", "/w"); k != "write=/home/u/.bashrc" {
 		t.Fatalf("outside write scoped too wide: %q", k)
+	}
+}
+
+func TestAlwaysScopeRiskyIsExact(t *testing.T) {
+	if k, _ := alwaysScope("bash: git push --force origin main", "force push", "/w"); k != "bash=git push --force origin main" {
+		t.Fatalf("risky command scoped too wide: %q", k)
 	}
 }

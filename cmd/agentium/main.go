@@ -34,7 +34,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.14.0"
+var version = "0.14.1"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -405,14 +405,17 @@ func alwaysScope(action, reason, root string) (key, label string) {
 			cmd = strings.TrimPrefix(cmd, "cd "+root+" && ")
 		}
 		prog := ""
-		for _, w := range strings.Fields(cmd) {
-			if strings.Contains(w, "=") && !strings.HasPrefix(w, "-") && prog == "" {
-				continue // VAR=value prefix
-			}
-			prog = filepath.Base(w)
-			break
+		if f := strings.Fields(cmd); len(f) > 0 {
+			prog = f[0]
 		}
-		if strings.ContainsAny(cmd, ";&|`$<>\n(") || wrapperCommands[prog] || prog == "" {
+		// Broad only for an ordinary command in ask mode: a bare program
+		// name (not ./go or /tmp/x/go, a binary the agent may have
+		// written), no VAR= prefix (LD_PRELOAD=…, GIT_SSH_COMMAND=…), no
+		// shell syntax, no wrapper. A command flagged for a reason of its
+		// own (force push, rm -rf …) is approved verbatim, so approving
+		// "git status" never approves "git push --force".
+		if reason != "ask mode" || strings.ContainsAny(cmd, ";&|`$<>\n()'\"\\") || wrapperCommands[prog] ||
+			prog == "" || strings.ContainsAny(prog, "/=") {
 			return kind + "=" + cmd, "for this exact command"
 		}
 		if kind == "network" {

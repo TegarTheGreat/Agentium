@@ -2,6 +2,26 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.14.1] - 2026-09-24
+
+Fixes from a second review of the v0.14.0 security code.
+
+### Security
+
+- **More network escapes closed (Linux).** Without network access, the seccomp filter now also blocks:
+  - TCP Fast Open (data sent along with the connect);
+  - MPTCP and any non-TCP protocol on INET sockets;
+  - `AF_PACKET` and `SOCK_PACKET` sockets.
+- **Unsupported architectures are reported.** Where the filter is unavailable, the sandbox status says UDP is not blocked.
+- **Credentials stay protected through symlinks.** A symlinked `~/.ssh` or `~/.config` (dotfile managers), `AGENTIUM_HOME`, or a home directory behind a symlink no longer exposes them. Directories that hold a credential can still be listed.
+- **Sandboxed commands cannot read Agentium's lock files, checkpoints or sessions.** Locks moved to `~/.agentium/locks`, so a command can no longer hold a lock to stall the agent.
+- **"Always" is narrower again:**
+  - Broad scope only for a bare program in ask mode.
+  - `./go`, `/tmp/x/go` and `VAR=… cmd` are approved verbatim.
+  - Commands flagged for their own risk (force push, `rm -rf`) are approved verbatim, so approving `git status` never approves `git push --force`.
+- **Typed text can't answer an approval prompt by accident.** A key counts as an answer only on its own, with a pause before and nothing right after, so words you were typing cannot answer it. Esc and Ctrl-C always answer no, and ignored keys show a hint.
+- **An MCP token refresh gives up within 20 seconds.** Waiting processes therefore never retry with the same single-use refresh token.
+
 ## [0.14.0] - 2026-09-24
 
 A full audit of the code base (terminal UI, tools and sandbox, agent loop and providers, storage) with every verified finding fixed, plus a regression run against a live model.
@@ -188,6 +208,7 @@ go install github.com/tegarthegreat/agentium/cmd/agentium@v0.11.0
 
 Windows users can download the `.zip` archive below.
 
+[0.14.1]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.14.1
 [0.14.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.14.0
 [0.13.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.13.0
 [0.12.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.12.0

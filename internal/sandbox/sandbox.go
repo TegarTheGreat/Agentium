@@ -77,32 +77,33 @@ func DefaultWrite(root string) []string {
 }
 
 // SecretPaths are the credential files and directories under home that
-// sandboxed commands may not read, whether or not they exist.
+// sandboxed commands may not read, whether or not they exist. Each is
+// listed as written and, when it is (or lies under) a symlink, also as
+// the real path, since the sandbox rules apply to real paths.
 func SecretPaths(home string) []string {
 	var out []string
+	add := func(p string) {
+		out = append(out, p)
+		if r, err := filepath.EvalSymlinks(p); err == nil && r != p {
+			out = append(out, r)
+		}
+	}
 	for _, p := range []string{".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker/config.json", ".netrc",
 		".pgpass", ".git-credentials", ".config/gh", ".config/gcloud", ".config/hub", ".cargo/credentials",
 		".cargo/credentials.toml", ".npmrc", ".pypirc", ".gem/credentials", ".terraform.d/credentials.tfrc.json",
-		".agentium/auth.json", ".agentium/mcp-auth.json", ".agentium/config.json", "Library/Keychains"} {
-		out = append(out, filepath.Join(home, p))
+		"Library/Keychains"} {
+		add(filepath.Join(home, p))
 	}
-	if h := os.Getenv("AGENTIUM_HOME"); h != "" {
-		for _, f := range []string{"auth.json", "mcp-auth.json", "config.json"} {
-			out = append(out, filepath.Join(h, f))
-		}
+	ah := os.Getenv("AGENTIUM_HOME")
+	if ah == "" {
+		ah = filepath.Join(home, ".agentium")
+	}
+	// Agentium's keys and config, its lock files (a command holding one
+	// would stall the agent) and its checkpoints and sessions.
+	for _, f := range []string{"auth.json", "mcp-auth.json", "config.json", "locks", "checkpoints", "sessions"} {
+		add(filepath.Join(ah, f))
 	}
 	return out
-}
-
-func secretPaths() []string {
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	if r, err := filepath.EvalSymlinks(h); err == nil {
-		h = r
-	}
-	return SecretPaths(h)
 }
 
 // ReadOnly drops from write every path that is root, inside root, or
@@ -173,4 +174,18 @@ func MaybeRunHelper() {
 		fmt.Fprintln(os.Stderr, "agentium sandbox:", err)
 		os.Exit(126)
 	}
+}
+
+// secretPaths is SecretPaths for this user, for both the home path as
+// given and its real path (HOME may be a symlink, e.g. /home -> var/home).
+func secretPaths() []string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	out := SecretPaths(h)
+	if r, err := filepath.EvalSymlinks(h); err == nil && r != h {
+		out = append(out, SecretPaths(r)...)
+	}
+	return out
 }

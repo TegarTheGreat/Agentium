@@ -622,28 +622,45 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 	}()
 	last := time.Now()
 	u.drainKeys()
+	hinted := false
 	for {
 		k, err := u.nextKey()
 		if err != nil {
 			return "", err
 		}
-		// An answer needs a pause before it: keys that are part of a
-		// burst of typing (a message typed ahead) never count as answers.
-		gap := time.Since(last)
-		last = time.Now()
-		if gap < 400*time.Millisecond {
-			continue
-		}
-		switch strings.ToLower(k) {
-		case "y":
-			fmt.Fprintln(os.Stderr, u.paint(cGreen, "yes"))
-			return "y", nil
-		case "a":
-			fmt.Fprintln(os.Stderr, u.paint(cGreen, "always"))
-			return "a", nil
-		case "n", "\r", "\n", "\x1b", "\x03":
+		if k == "\x1b" || k == "\x03" { // Esc and Ctrl-C always mean no
 			fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
 			return "n", nil
+		}
+		// An answer is a key on its own: a pause before it, and nothing
+		// right after it. Keys inside a burst of typing (a message typed
+		// ahead: "add tests" must not answer "always") never count.
+		gap := time.Since(last)
+		last = time.Now()
+		ans := strings.ToLower(k)
+		isAnswer := ans == "y" || ans == "a" || ans == "n" || ans == "\r" || ans == "\n"
+		if gap >= 400*time.Millisecond && isAnswer {
+			if next, ok := u.keyWithin(400 * time.Millisecond); !ok {
+				switch ans {
+				case "y":
+					fmt.Fprintln(os.Stderr, u.paint(cGreen, "yes"))
+					return "y", nil
+				case "a":
+					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always"))
+					return "a", nil
+				default:
+					fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
+					return "n", nil
+				}
+			} else if next == "\x1b" || next == "\x03" {
+				fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
+				return "n", nil
+			}
+			last = time.Now()
+		}
+		if !hinted {
+			hinted = true
+			fmt.Fprint(os.Stderr, u.paint(cDim, "(pause, then press y, a or n) "))
 		}
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -50,7 +51,13 @@ type TokenStore struct {
 	mu   sync.Mutex // guards refreshing
 }
 
-func (s *TokenStore) lock() func() { return fsx.Lock(s.Path+".lock", 10*time.Second) }
+func (s *TokenStore) lock() func() { return fsx.Lock(s.lockPath(".lock"), 10*time.Second) }
+
+// lockPath is in the locks directory next to the store, which sandboxed
+// commands cannot read.
+func (s *TokenStore) lockPath(suffix string) string {
+	return filepath.Join(filepath.Dir(s.Path), "locks", filepath.Base(s.Path)+suffix)
+}
 
 // load reads the grants; a file that does not parse is an error, so it
 // is never overwritten with an empty set.
@@ -111,7 +118,7 @@ func (s *TokenStore) Token(ctx context.Context, serverURL string) (string, error
 	// waited re-reads the grant, which another refresher may have renewed.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	unlock := fsx.Lock(s.Path+".refresh.lock", 30*time.Second)
+	unlock := fsx.Lock(s.lockPath(".refresh.lock"), 30*time.Second)
 	defer unlock()
 	g = s.Get(serverURL)
 	if g == nil || g.AccessToken == "" {
@@ -127,7 +134,11 @@ func (s *TokenStore) Token(ctx context.Context, serverURL string) (string, error
 	if g.Resource != "" {
 		form.Set("resource", g.Resource)
 	}
-	tok, err := tokenRequest(ctx, g.TokenEndpoint, form)
+	// Well within the other processes' lock wait, so none of them gives up
+	// waiting and refreshes with the same single-use token.
+	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	tok, err := tokenRequest(rctx, g.TokenEndpoint, form)
 	if err != nil {
 		return "", fmt.Errorf("%w (refresh failed: %v)", ErrLoginRequired, err)
 	}

@@ -125,7 +125,11 @@ func writeJSON(path string, v any, perm os.FileMode) error {
 
 // lock serializes read-modify-write of Agentium's state files across
 // processes (two sessions, or a session and `agentium login`).
-func lock(path string) func() { return fsx.Lock(path+".lock", 5*time.Second) }
+// Lock files live in Home()/locks, which sandboxed commands cannot read
+// (and so cannot hold a lock to stall the agent).
+func lock(path string) func() {
+	return fsx.Lock(filepath.Join(Home(), "locks", filepath.Base(path)+".lock"), 5*time.Second)
+}
 
 // Load reads config.json; a missing file yields an empty Config.
 func Load() (Config, error) {

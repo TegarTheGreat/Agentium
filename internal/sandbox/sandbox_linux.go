@@ -86,6 +86,8 @@ func Probe() Status {
 		return Status{Detail: "Landlock unavailable (kernel < 5.13 or disabled): commands run unconfined"}
 	case v < 4:
 		return Status{Available: true, Detail: fmt.Sprintf("Landlock ABI %d: filesystem confined, network NOT blockable (kernel < 6.7)", v)}
+	case !datagramFilterSupported():
+		return Status{Available: true, Detail: fmt.Sprintf("Landlock ABI %d: filesystem and TCP confined, UDP NOT blockable on %s", v, runtime.GOARCH)}
 	}
 	return Status{Available: true, Network: true, Detail: fmt.Sprintf("Landlock ABI %d: filesystem and TCP network confined", v)}
 }
@@ -155,7 +157,7 @@ func confineAndExec(cfg Config, argv []string) error {
 	if !cfg.Network {
 		// Landlock confines TCP only: UDP (and so DNS lookups that could
 		// carry data out) and raw sockets are refused with seccomp.
-		if err := denyDatagrams(); err != nil {
+		if err := denyDatagrams(); err != nil && err != errUnsupportedArch {
 			return fmt.Errorf("seccomp: %w", err)
 		}
 	}
@@ -163,21 +165,19 @@ func confineAndExec(cfg Config, argv []string) error {
 }
 
 // addExcept grants access to path, except to the denied paths below it:
-// a directory holding a denied path gets rules for its other entries.
+// a directory holding a denied path gets rules for its other entries,
+// and itself only the right to list its entries (names, not contents).
+// Symlinked entries leading to a denied path are skipped, since a rule
+// applies to the link's target.
 func addExcept(rulesetFD int, path string, access uint64, deny []string) error {
 	clean := filepath.Clean(path)
-	holds := false
-	for _, d := range deny {
-		if d == clean {
-			return nil // denied itself
-		}
-		if strings.HasPrefix(d, strings.TrimSuffix(clean, "/")+"/") {
-			holds = true
-		}
+	if denied(clean, deny) {
+		return nil
 	}
-	if !holds {
+	if !holdsDenied(clean, deny) {
 		return addRule(rulesetFD, clean, access)
 	}
+	_ = addRule(rulesetFD, clean, fsReadDir)
 	entries, err := os.ReadDir(clean)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -186,12 +186,35 @@ func addExcept(rulesetFD int, path string, access uint64, deny []string) error {
 		return nil // unreadable: grant nothing below it
 	}
 	for _, e := range entries {
-		if err := addExcept(rulesetFD, filepath.Join(clean, e.Name()), access, deny); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// Entries can vanish or be unopenable (sockets); skip them.
-			continue
+		p := filepath.Join(clean, e.Name())
+		if e.Type()&os.ModeSymlink != 0 {
+			if t, err := filepath.EvalSymlinks(p); err == nil && (denied(t, deny) || holdsDenied(t, deny)) {
+				continue
+			}
 		}
+		// Entries can vanish or be unopenable (sockets); skip them.
+		_ = addExcept(rulesetFD, p, access, deny)
 	}
 	return nil
+}
+
+func denied(p string, deny []string) bool {
+	for _, d := range deny {
+		if p == d || strings.HasPrefix(p, strings.TrimSuffix(d, "/")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func holdsDenied(dir string, deny []string) bool {
+	prefix := strings.TrimSuffix(dir, "/") + "/"
+	for _, d := range deny {
+		if strings.HasPrefix(d, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func addRule(rulesetFD int, path string, access uint64) error {

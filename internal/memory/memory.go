@@ -83,7 +83,7 @@ func write(p, s string) error { return fsx.WriteFile(p, []byte(s), 0o600) }
 // shared by all projects).
 func (s *Store) lock() func() {
 	s.mu.Lock()
-	unlock := fsx.Lock(filepath.Join(filepath.Dir(s.UserPath), "memory.lock"), 10*time.Second)
+	unlock := fsx.Lock(filepath.Join(filepath.Dir(s.UserPath), "locks", "memory.lock"), 10*time.Second)
 	return func() {
 		unlock()
 		s.mu.Unlock()

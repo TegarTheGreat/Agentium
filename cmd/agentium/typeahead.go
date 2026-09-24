@@ -184,3 +184,23 @@ func (u *ui) drainKeys() {
 		}
 	}
 }
+
+// keyWithin reports a key pressed within d, if any (read and dropped).
+func (u *ui) keyWithin(d time.Duration) (string, bool) {
+	u.mu.Lock()
+	keys := u.keys
+	u.mu.Unlock()
+	if keys != nil {
+		select {
+		case k, ok := <-keys:
+			return k, ok
+		case <-time.After(d):
+			return "", false
+		}
+	}
+	if !inputReady(os.Stdin, d) {
+		return "", false
+	}
+	k, err := readKey()
+	return k, err == nil
+}
