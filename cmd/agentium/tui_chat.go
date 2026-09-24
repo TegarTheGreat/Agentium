@@ -8,28 +8,16 @@ import (
 // Chat-style rendering for the full-screen UI: the user's messages are
 // right-aligned bubbles, Agentium's replies follow its name.
 
-// userMessage renders a submitted message for the transcript, followed by
-// the label of the reply to come (commands answer without one).
+// userMessage renders a submitted message for the transcript: an ink
+// bar down its left side, like a quote of what you said.
 func (u *ui) userMessage(line string) string {
-	width := termWidth(os.Stderr) - 1
-	maxW := max(width*3/4, 20)
-	var rows []string
-	for _, l := range strings.Split(line, "\n") {
-		rows = append(rows, wordWrap(sanitize(l), maxW-2)...)
-	}
-	w := 0
-	for _, r := range rows {
-		w = max(w, strWidth(r))
-	}
+	width := termWidth(os.Stderr) - 4
 	var sb strings.Builder
-	indent := max(width-w-2, 0)
-	sb.WriteString(strings.Repeat(" ", max(width-3, 0)) + u.paint(cDim, "You") + "\r\n")
-	for _, r := range rows {
-		pad := w - strWidth(r)
-		sb.WriteString(strings.Repeat(" ", indent) + "\x1b[48;5;238m\x1b[38;5;255m " + r + strings.Repeat(" ", pad) + " \x1b[0m\r\n")
-	}
-	if !strings.HasPrefix(line, "/") && !strings.EqualFold(line, "agentium update") {
-		sb.WriteString("\r\n" + u.paint(cCyan, "◆") + " " + u.paint(cBold, "Agentium") + "\r\n")
+	sb.WriteString("\r\n")
+	for _, l := range strings.Split(line, "\n") {
+		for _, r := range wordWrap(sanitize(l), width) {
+			sb.WriteString(u.paint(cInk, "▌") + " " + u.paint(cBold, r) + "\r\n")
+		}
 	}
 	return sb.String()
 }
@@ -37,9 +25,10 @@ func (u *ui) userMessage(line string) string {
 // welcome opens a full-screen session.
 func (u *ui) welcome(model, mode, box, cwd string) {
 	var sb strings.Builder
-	sb.WriteString("\n" + u.paint(cCyan, "◆") + " " + u.paint(cBold, "Agentium") + "\n")
-	sb.WriteString("  Hi! I work in " + u.paint(cBold, shortPath(cwd)) + " with " + model + ".\n")
-	sb.WriteString(u.paint(cDim, "  "+mode+" mode · "+box+" · ask me to build, fix or explain something; /help lists commands.") + "\n")
+	sb.WriteString("\n  " + u.paint(cAccent, "◆") + " " + u.paint(cBold, "Agentium") + " " + u.paint(cGray, version) + "\n")
+	sb.WriteString(u.paint(cGray, "    "+shortPath(cwd)+" · "+model+" · "+mode+" mode · "+box) + "\n\n")
+	sb.WriteString(u.paint(cDim, "    Try: explain this project · fix the failing test · add a --json flag") + "\n")
+	sb.WriteString(u.paint(cDim, "    / commands · @ mention a file · ctrl+t panel · ? shortcuts") + "\n")
 	os.Stderr.WriteString(sb.String())
 }
 

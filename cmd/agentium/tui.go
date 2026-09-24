@@ -17,7 +17,9 @@ import (
 // doing right now, with a spinner and a running command's latest output),
 // and the permanent one-line record of each finished step.
 
-const (
+// Colors are SGR parameters; applyTheme replaces them with the Night
+// Shift palette on truecolor terminals (theme.go).
+var (
 	cBold    = "1"
 	cDim     = "2"
 	cRed     = "31"
@@ -27,6 +29,10 @@ const (
 	cMagenta = "35"
 	cCyan    = "36"
 	cGray    = "90"
+	cAccent  = "33" // Agentium itself: the desk lamp
+	cInk     = "94" // the user, links and paths
+	bgAdd    = "48;5;22"
+	bgDel    = "48;5;52"
 )
 
 // paint wraps s in an SGR color when the UI uses color.
@@ -134,18 +140,24 @@ func (u *ui) drawLive() {
 	}
 	spin := spinFrames[u.frame%len(spinFrames)]
 	var lines []string
-	if u.thinking && len(u.tools) == 0 {
-		lines = append(lines, u.paint(cCyan, spin)+" "+u.paint(cDim, "Thinking… "+elapsed(time.Since(u.thinkT))))
+	f := activeFS()
+	if f != nil {
+		// Full screen: what is happening goes in the composer's border,
+		// type-ahead in the composer itself.
+		f.setBusy(true, u.stripText(spin), string(u.typing), u.queued)
+	}
+	if u.thinking && len(u.tools) == 0 && f == nil {
+		lines = append(lines, "  "+u.paint(cAccent, spin)+" "+u.paint(cDim, "Thinking… "+elapsed(time.Since(u.thinkT))))
 	}
 	for _, t := range u.tools {
 		secs := " " + elapsed(time.Since(t.start))
-		detail := truncate(t.detail, width-strWidth(t.name)-strWidth(secs)-4)
-		lines = append(lines, u.paint(cYellow, spin)+" "+u.paint(cBold, t.name)+" "+detail+u.paint(cDim, secs))
+		detail := truncate(t.detail, width-strWidth(t.name)-strWidth(secs)-6)
+		lines = append(lines, "  "+u.paint(cAccent, spin)+" "+u.paint(cBold, t.name)+" "+detail+u.paint(cDim, secs))
 		for _, l := range t.lines() {
-			lines = append(lines, u.paint(cDim, "  │ "+truncate(l, width-4)))
+			lines = append(lines, u.paint(cDim, "    │ "+truncate(l, width-6)))
 		}
 	}
-	if len(lines) > 0 || len(u.typing) > 0 || len(u.queued) > 0 {
+	if f == nil && (len(lines) > 0 || len(u.typing) > 0 || len(u.queued) > 0) {
 		lines = append(lines, u.typeaheadLines(width)...)
 	}
 	if len(lines) == 0 {
@@ -159,6 +171,28 @@ func (u *ui) drawLive() {
 	}
 	os.Stderr.WriteString(strings.Join(lines, "\n"))
 	u.drawn = len(lines)
+}
+
+// stripText says what is happening, for the composer's top border.
+func (u *ui) stripText(spin string) string {
+	var what string
+	switch {
+	case u.paused:
+		what = "Waiting for your answer"
+	case len(u.tools) > 0:
+		t := u.tools[len(u.tools)-1]
+		what = actSentence(actFor(t.call.Name)) + " " + t.detail + " · " + elapsed(time.Since(t.start))
+		if t.call.Name == "task" {
+			_, title := taskArgs(t.call)
+			what = "Briefing staff: " + title + " · " + elapsed(time.Since(t.start))
+		}
+		if n := len(u.tools); n > 1 {
+			what += fmt.Sprintf(" (+%d more)", n-1)
+		}
+	default:
+		what = "Thinking · " + elapsed(time.Since(u.thinkT))
+	}
+	return u.paint(cAccent, spin) + " " + what + u.paint(cGray, " · ctrl+c to stop")
 }
 
 func elapsed(d time.Duration) string {
@@ -234,15 +268,37 @@ func (u *ui) officeTool(c provider.ToolCall) {
 	})
 }
 
-// subAgentTool shows a sub-agent's tool call at its desk.
+// subAgentTool shows a sub-agent's tool call: at its desk, and as a line
+// marked in its color.
 func (u *ui) subAgentTool(task string, c provider.ToolCall) {
-	u.inOffice(func(o *office) { o.staffDo(task, actFor(c.Name), u.detail(c)) })
+	mark := u.paint(cDim, "↳")
+	if f := activeFS(); f != nil {
+		f.office.staffDo(task, actFor(c.Name), u.detail(c))
+		if c.Name == "edit" {
+			// Counted when made: a sub-agent's results are not reported.
+			if path, lines, _ := editDiff(u.cwd, c.Args); path != "" {
+				add, del := diffCounts(lines)
+				f.addChange(u.relative(path), add, del)
+			}
+		}
+		if col, ok := f.office.staffColor(task); ok {
+			mark = fgColor(col, f.truecolor) + "↳\x1b[0m"
+		}
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.lastKey = ""
+	u.permanent("    " + mark + u.paint(cDim, " "+toolLabel(c.Name)+" "+truncate(u.detail(c), termWidth(os.Stderr)-22)))
 }
 
 func (u *ui) beginTurn() {
 	u.inOffice(func(o *office) { o.setLead(actThink, "") })
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.replyStart = true
+	if u.live && u.wrap != nil {
+		u.wrap.setMargin(2, "")
+	}
 	u.lastKey, u.afterTool = "", false
 	if u.live {
 		u.thinking, u.thinkT = true, time.Now()
@@ -250,9 +306,15 @@ func (u *ui) beginTurn() {
 }
 
 func (u *ui) endTurn() {
-	u.inOffice(func(o *office) { o.setLead(actDone, "") })
+	u.inOffice(func(o *office) { o.setLead(actDone, ""); o.finished() })
+	if f := activeFS(); f != nil {
+		f.setBusy(false, "", "", nil)
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if u.wrap != nil {
+		u.wrap.setMargin(0, "")
+	}
 	u.clearLive()
 	u.thinking, u.tools = false, nil
 }
@@ -269,6 +331,9 @@ func (u *ui) think() {
 
 func (u *ui) toolStart(c provider.ToolCall) {
 	u.officeTool(c)
+	if f := activeFS(); f != nil && c.Name == "todo" {
+		f.setTodos(todoItems(c))
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.clearLive()
@@ -334,16 +399,33 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 		}
 		u.clearLive()
 		os.Stderr.WriteString("\033[1A\r\033[2K")
-		fmt.Fprintln(os.Stderr, icon+" "+u.paint(cBold, name)+" "+detail+u.paint(cDim, fmt.Sprintf(" ×%d", u.lastCount)+total))
+		fmt.Fprintln(os.Stderr, "  "+icon+" "+u.paint(cBold, name)+" "+detail+u.paint(cDim, fmt.Sprintf(" ×%d", u.lastCount)+total))
 		u.drawLive()
 	} else {
-		line := icon + " " + u.paint(cBold, name) + " " + detail + u.paint(cDim, dur)
+		line := "  " + icon + " " + u.paint(cBold, name) + " " + detail + u.paint(cDim, dur)
 		if fail != "" {
 			line += "  " + u.paint(cRed, fail)
 		}
 		u.permanent(line)
+		// What the step did: an edit's diff, the end of a command's output.
+		var more []string
+		switch {
+		case fail == "" && c.Name == "edit":
+			more = u.diffCard(c.Args, width)
+			if f := activeFS(); f != nil {
+				if path, lines, _ := editDiff(u.cwd, c.Args); path != "" {
+					add, del := diffCounts(lines)
+					f.addChange(u.relative(path), add, del)
+				}
+			}
+		case c.Name == "bash" && !strings.HasPrefix(detail, "job ") && !errors.Is(err, context.Canceled):
+			more = u.outputTail(out, width)
+		}
+		for _, l := range more {
+			u.permanent(l)
+		}
 		u.lastKey, u.lastCount, u.lastDur = key, 1, d
-		if fail != "" || u.paused {
+		if fail != "" || u.paused || len(more) > 0 {
 			u.lastKey = ""
 		}
 	}
@@ -366,13 +448,6 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 			}
 		})
 	}
-}
-
-func (u *ui) subTool(c provider.ToolCall) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.lastKey = ""
-	u.permanent(u.paint(cDim, "  ↳ "+toolLabel(c.Name)+" "+truncate(u.detail(c), termWidth(os.Stderr)-20)))
 }
 
 // toolLabel is a tool's display name.
@@ -401,6 +476,19 @@ func toolLabel(name string) string {
 
 // detail summarizes a call's arguments for display, with paths relative
 // to the workspace.
+// todoItems returns a todo call's list.
+func todoItems(c provider.ToolCall) []todoItem {
+	var m struct {
+		Items []struct{ Text, Status string }
+	}
+	_ = jsonUnmarshal(c.Args, &m)
+	var out []todoItem
+	for _, it := range m.Items {
+		out = append(out, todoItem{text: sanitize(it.Text), status: it.Status})
+	}
+	return out
+}
+
 func (u *ui) detail(c provider.ToolCall) string {
 	var m map[string]any
 	_ = jsonUnmarshal(c.Args, &m)

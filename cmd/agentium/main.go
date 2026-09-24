@@ -158,6 +158,9 @@ func exitCode(err error) int {
 	return 1
 }
 
+// curModel is the session's model, for the status line.
+var curModel atomic.Value
+
 func isTTY(f *os.File) bool {
 	if fs := activeFS(); fs != nil && f == fs.pw {
 		return true
@@ -199,7 +202,10 @@ type ui struct {
 	color   bool
 	midLine bool      // stdout has text without a trailing newline
 	md      *mdStream // renders Markdown when stdout is a terminal
-	cwd     string
+	wrap    *wrapWriter
+	// replyStart: the next reply text opens a new block (◆ marker).
+	replyStart bool
+	cwd        string
 
 	// Live status area (terminal only): what is running right now.
 	live     bool
@@ -242,6 +248,11 @@ func (u *ui) text(d string) {
 	if u.afterTool && d != "" {
 		os.Stderr.WriteString("\n")
 		u.afterTool = false
+		u.replyStart = true
+	}
+	if u.replyStart && u.live && u.wrap != nil && strings.TrimSpace(d) != "" {
+		u.wrap.setMargin(2, u.paint(cAccent, "◆")+" ")
+		u.replyStart = false
 	}
 	if u.md != nil {
 		u.md.Write(d)
@@ -281,6 +292,9 @@ func (u *ui) line(s string) {
 	u.clearLive()
 	u.endLine()
 	u.lastKey = ""
+	if u.live {
+		s = "  " + s
+	}
 	fmt.Fprintln(os.Stderr, u.dim(s))
 	u.drawLive()
 }
@@ -560,6 +574,9 @@ func run(args []string) error {
 	if *asJSON {
 		*quiet = true
 	}
+	if *prompt == "" && !*asJSON && !*quiet && isTTY(os.Stderr) && os.Getenv("NO_COLOR") == "" {
+		applyTheme(cfg.Theme)
+	}
 	var screen *fullscreen
 	if *prompt == "" && !*asJSON && !*quiet && *bestOf <= 1 && fullscreenWanted(*classic || strings.EqualFold(cfg.UI, "classic")) {
 		if screen, err = enterFullscreen(); err == nil {
@@ -569,7 +586,8 @@ func run(args []string) error {
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
 	u.live = isTTY(os.Stderr) && !*quiet && os.Getenv("TERM") != "dumb"
 	if !*asJSON && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" && os.Getenv("AGENTIUM_RAW") == "" {
-		u.md = newMD(newWrap(os.Stdout, func() int { return termWidth(os.Stdout) - 1 }))
+		u.wrap = newWrap(os.Stdout, func() int { return termWidth(os.Stdout) - 1 })
+		u.md = newMD(u.wrap)
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
@@ -578,6 +596,7 @@ func run(args []string) error {
 	gate.Approve = ap.ask
 
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
+	curModel.Store(sess.Model)
 	go session.Prune(200, 90*24*time.Hour)
 	mem := openMemory(cfg, cwd)
 	snapshot := ""
@@ -751,11 +770,10 @@ func run(args []string) error {
 	if u.live {
 		u.cwd = cwd
 		a.Events.ToolStart = u.toolStart
-		a.Events.SubToolStart = u.subTool
 		a.Events.ToolDone = u.toolDone
 		a.Events.ToolOutput = u.toolOutput
 		a.Events.Notice = func(msg string) { u.line("· " + msg); u.think() }
-		a.Events.SubAgentTool = u.subAgentTool
+		a.Events.SubToolStart, a.Events.SubAgentTool = nil, u.subAgentTool
 		u.startTicker()
 	}
 
@@ -935,15 +953,14 @@ func run(args []string) error {
 			}
 		}(a.Events.TurnFinish)
 		screen.mu.Lock()
-		screen.header = func() string {
-			return sess.Model + " · " + string(gate.GetMode()) + " · " + box + " · " + shortPath(cwd)
-		}
-		screen.status = func() string {
-			s := fmtK(int(totalTok.Load())) + " tokens"
-			if c := math.Float64frombits(totalCost.Load()); c > 0 {
-				s += fmt.Sprintf(" · $%.4f", c)
+		screen.info = func() statusInfo {
+			used, limit := a.ContextUsed()
+			model, _ := curModel.Load().(string)
+			if i := strings.LastIndex(model, "/"); i >= 0 {
+				model = model[i+1:]
 			}
-			return s
+			return statusInfo{model: model, mode: string(gate.GetMode()), box: box,
+				tokens: int(totalTok.Load()), cost: math.Float64frombits(totalCost.Load()), ctxUsed: used, ctxMax: limit}
 		}
 		screen.mu.Unlock()
 		u.welcome(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)
@@ -968,9 +985,9 @@ func run(args []string) error {
 	var ed *editor
 	if lineEditing && isTTY(os.Stderr) {
 		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
-		if screen != nil {
+		if u.live {
 			ed.echo = u.userMessage
-			ed.placeholder = "Message Agentium…  (/ for commands)"
+			ed.placeholder = "Message Agentium…  / commands · @ files"
 		}
 	}
 	// afterPlan is the mode /go switches to.
@@ -992,8 +1009,8 @@ func run(args []string) error {
 		if queued {
 			// A message typed while the last turn ran.
 			line = next
-			if screen != nil {
-				os.Stderr.WriteString("\n" + u.userMessage(line))
+			if u.live {
+				os.Stderr.WriteString(u.userMessage(line))
 			} else {
 				fmt.Fprintln(os.Stderr, "\n"+ps+line)
 			}
@@ -1105,6 +1122,7 @@ func (e *slashEnv) switchModel(ref string) error {
 	a.MaxOutput = res.Info.Output
 	*e.res = res
 	e.sess.Model = res.Provider + "/" + res.Model
+	curModel.Store(e.sess.Model)
 	_ = config.Set("model", e.sess.Model)
 	e.u.success("Model: " + e.sess.Model + e.u.paint(cDim, " (saved as default)"))
 	return nil

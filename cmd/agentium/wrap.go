@@ -23,6 +23,18 @@ type wrapWriter struct {
 	started bool
 	head    []byte // the line's first word, to detect bullets
 	esc     bool
+
+	// Margin: every line starts with indent spaces, or once with lead (a
+	// marker as wide as indent) instead.
+	indent   int
+	lead     string
+	margined bool
+}
+
+// setMargin indents the lines that follow; lead, if set, replaces the
+// indent of the next line.
+func (ww *wrapWriter) setMargin(indent int, lead string) {
+	ww.indent, ww.lead = indent, lead
 }
 
 func newWrap(w io.Writer, width func() int) *wrapWriter {
@@ -35,6 +47,16 @@ func (ww *wrapWriter) Write(p []byte) (int, error) {
 		r, size := utf8.DecodeRune(p[i:])
 		b := p[i : i+size]
 		i += size
+		if !ww.margined && r != '\n' && ww.col == 0 && (ww.indent > 0 || ww.lead != "") {
+			ww.margined = true
+			if ww.lead != "" {
+				out = append(out, ww.lead...)
+				ww.lead = ""
+			} else {
+				out = append(out, strings.Repeat(" ", ww.indent)...)
+			}
+			ww.col = ww.indent
+		}
 		switch {
 		case ww.esc:
 			ww.word = append(ww.word, b...)
@@ -47,7 +69,7 @@ func (ww *wrapWriter) Write(p []byte) (int, error) {
 		case r == '\n':
 			out = ww.flushWord(out)
 			out = append(out, '\n')
-			ww.col, ww.spaces, ww.hang, ww.started, ww.head = 0, 0, 0, false, nil
+			ww.col, ww.spaces, ww.hang, ww.started, ww.head, ww.margined = 0, 0, 0, false, nil, false
 		case ww.raw:
 			out = ww.flushWord(out)
 			out = append(out, b...)
@@ -78,8 +100,9 @@ func (ww *wrapWriter) flushWord(out []byte) []byte {
 	width := ww.width()
 	if ww.started && width > 20 && ww.col+ww.spaces+ww.wordW > width {
 		out = append(out, '\n')
-		out = append(out, strings.Repeat(" ", ww.hang)...)
-		ww.col = ww.hang
+		hang := max(ww.hang, ww.indent)
+		out = append(out, strings.Repeat(" ", hang)...)
+		ww.col = hang
 	} else {
 		out = append(out, strings.Repeat(" ", ww.spaces)...)
 		ww.col += ww.spaces

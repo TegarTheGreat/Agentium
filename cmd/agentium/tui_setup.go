@@ -29,7 +29,8 @@ func turnCost(res provider.Resolved, fb *provider.Fallback, st agent.Stats) floa
 	return info.Price(st.Usage.Input, st.Usage.Output, st.Usage.CacheRead, st.Usage.CacheWrite)
 }
 
-// turnSummary is the line printed after each turn in the terminal UI.
+// turnSummary is the receipt printed after each turn: a rule with the
+// time, steps, tokens and cost.
 func (u *ui) turnSummary(st agent.Stats, err error, cost float64) string {
 	us := st.Usage
 	parts := []string{fmt.Sprintf("%.1fs", st.Elapsed.Seconds())}
@@ -44,11 +45,13 @@ func (u *ui) turnSummary(st agent.Stats, err error, cost float64) string {
 	if cost > 0 {
 		parts = append(parts, fmt.Sprintf("$%.4f", cost))
 	}
-	head := u.paint(cGreen, "●") + " "
+	head := u.paint(cGreen, "●")
 	if err != nil {
-		head = u.paint(cRed, "●") + " "
+		head = u.paint(cRed, "●")
 	}
-	return "\n" + head + u.paint(cDim, strings.Join(parts, " · "))
+	text := " " + strings.Join(parts, " · ") + " "
+	rule := max(termWidth(os.Stderr)-strWidth(text)-8, 2)
+	return "\n  " + head + u.paint(cGray, " ──"+text+strings.Repeat("─", rule))
 }
 
 // banner is shown when an interactive session starts.
@@ -613,6 +616,9 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no ›"))
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
+	if f := activeFS(); f != nil {
+		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always · n no", "", nil)
+	}
 	asked := time.Now()
 	defer func() {
 		u.inOffice(func(o *office) { o.setLead(actThink, "") })

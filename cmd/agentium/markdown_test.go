@@ -23,7 +23,7 @@ func TestMarkdownStream(t *testing.T) {
 		{[]string{"Plain text, no marks."}, "Plain text, no marks.\n"},
 		{[]string{"## Sum", "mary\nok"}, "</><b>Summary</>\nok\n"},
 		{[]string{"- one\n", "* two **big** `x*y`\n"}, "• one\n• two </><b>big</> </><c>x*y</>\n"},
-		{[]string{"```go\nfunc a() { *p = **q }\n```\nafter"}, "<d>```go</>\nfunc a() { *p = **q }\n<d>```</>\nafter\n"},
+		{[]string{"```go\nfunc a() { *p = **q }\n```\nafter"}, "<d>┌─ go</>\n<d>│</> func a() { *p = **q }\n<d>└─</>\nafter\n"},
 		{[]string{"> note\n---\n"}, "</><d>│ note</>\n<d>" + strings.Repeat("─", 40) + "</>\n"},
 		{[]string{"a * b and snake_case_name"}, "a * b and snake_case_name\n"},
 		{[]string{"-", "-", "flag is fine"}, "--flag is fine\n"},
@@ -32,7 +32,7 @@ func TestMarkdownStream(t *testing.T) {
 		{[]string{"see (**this**) now"}, "see (</><b>this</>) now\n"},
 		{[]string{"**[link](x)** and ***both***"}, "</><b>[link](x)</> and </><b>both</>\n"},
 		{[]string{"---\r\nx\r\n"}, "<d>" + strings.Repeat("─", 40) + "</>\nx\n"},
-		{[]string{"````md\n```go\nx := **y**\n```\n````\nafter **b**"}, "<d>````md</>\n```go\nx := **y**\n```\n<d>````</>\nafter </><b>b</>\n"},
+		{[]string{"````md\n```go\nx := **y**\n```\n````\nafter **b**"}, "<d>┌─ md</>\n<d>│</> ```go\n<d>│</> x := **y**\n<d>│</> ```\n<d>└─</>\nafter </><b>b</>\n"},
 	}
 	for _, c := range cases {
 		if got := render(c.in...); got != c.want {
@@ -80,7 +80,7 @@ func TestWordWrap(t *testing.T) {
 	m.Write("- one two three four five six seven\n```\nthis long code line is never wrapped at all\n```\nend")
 	m.End()
 	got := stripANSI(sb.String())
-	want := "• one two three four\n  five six seven\n```\nthis long code line is never wrapped at all\n```\nend\n"
+	want := "• one two three four\n  five six seven\n┌─\n│ this long code line is never wrapped at all\n└─\nend\n"
 	if got != want {
 		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}

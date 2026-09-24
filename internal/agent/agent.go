@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/policy"
@@ -35,6 +36,8 @@ type Events struct {
 
 // Agent holds one conversation.
 type Agent struct {
+	// ctxUsed is the prompt size of the latest model call, in tokens.
+	ctxUsed atomic.Int64
 	// MaxOutput is the model's output token limit (0 if unknown).
 	MaxOutput int
 	Client    provider.Client
@@ -175,6 +178,9 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		a.Turns++
 		st.Usage.Add(resp.Usage)
 		a.Usage.Add(resp.Usage)
+		if in := resp.Usage.Input + resp.Usage.CacheRead + resp.Usage.CacheWrite; in > 0 {
+			a.ctxUsed.Store(int64(in))
+		}
 		if a.Cost != nil {
 			a.Spent += a.Cost(resp.Usage)
 		}
@@ -269,6 +275,12 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		return done(nil)
 	}
 	return done(ErrMaxTurns)
+}
+
+// ContextUsed reports how much of the context window the conversation
+// took at the latest model call; safe to call while the agent runs.
+func (a *Agent) ContextUsed() (used, limit int) {
+	return int(a.ctxUsed.Load()), a.ContextTokens
 }
 
 func (a *Agent) notice(msg string) {
@@ -496,6 +508,7 @@ func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessa
 // Reset clears the conversation.
 func (a *Agent) Reset() {
 	a.Messages = nil
+	a.ctxUsed.Store(0)
 	if a.Env != nil {
 		a.Env.ForgetReads()
 	}

@@ -29,6 +29,7 @@ type Config struct {
 	FastModel string `json:"fast_model,omitempty"` // reserved for background work
 	Mode      string `json:"mode,omitempty"`       // ask | auto | yolo
 	UI        string `json:"ui,omitempty"`         // fullscreen (default) | classic
+	Theme     string `json:"theme,omitempty"`      // auto (default) | dark | light
 	MaxTokens int    `json:"max_tokens,omitempty"`
 	MaxTurns  int    `json:"max_turns,omitempty"`
 	// FetchPrivate lets the fetch tool reach localhost/private networks.

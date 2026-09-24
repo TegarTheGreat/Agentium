@@ -289,8 +289,14 @@ func (v *vterm) end() int {
 
 // render returns line i as text with SGR codes, cut to width columns.
 func (v *vterm) render(i, width int) string {
+	s, _ := v.renderW(i, width)
+	return s
+}
+
+// renderW is render that also returns the width in columns.
+func (v *vterm) renderW(i, width int) (string, int) {
 	if i < 0 || i >= len(v.lines) {
-		return ""
+		return "", 0
 	}
 	var sb strings.Builder
 	cur := vstyle{}
@@ -312,7 +318,7 @@ func (v *vterm) render(i, width int) string {
 	if cur != (vstyle{}) {
 		sb.WriteString("\x1b[0m")
 	}
-	return sb.String()
+	return sb.String(), cols
 }
 
 // plain returns line i without styling.

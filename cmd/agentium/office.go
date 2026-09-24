@@ -17,7 +17,7 @@ import (
 
 const (
 	officeRows  = 7 // 6 rows of pixels (12 px) and a label row
-	deskW       = 21
+	deskW       = 17
 	officeFrame = 250 * time.Millisecond
 )
 
@@ -55,6 +55,7 @@ type office struct {
 	lead  actor
 	staff []*actor
 	hired int
+	done  int // turns finished this session
 	start time.Time
 }
 
@@ -137,7 +138,9 @@ func (o *office) dismiss(key string, ok bool) {
 	}
 }
 
-// render draws the strip for width columns.
+// render draws Agentium's desk and up to two staff desks, each with
+// who it is and what they are doing written beside it, for a sidebar
+// width columns wide.
 func (o *office) render(width int, truecolor bool) []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -153,56 +156,76 @@ func (o *office) render(width int, truecolor bool) []string {
 		o.lead.act, o.lead.detail, o.lead.since = actIdle, "", now
 	}
 	frame := int(now.Sub(o.start) / officeFrame)
-	infoW := 34
-	fit := max((width-infoW)/deskW, 1)
 	actors := []*actor{&o.lead}
-	for i := 0; i < len(o.staff) && len(actors) < fit; i++ {
+	for i := 0; i < len(o.staff) && i < 2; i++ {
 		actors = append(actors, o.staff[i])
 	}
-	c := newCanvas(len(actors)*deskW, 12)
+	textW := width - deskW - 1
+	var rows []string
 	for i, a := range actors {
-		drawDesk(c, i*deskW, a, frame, now)
-	}
-	rows := c.halfBlocks(truecolor)
-	var labels strings.Builder
-	for _, a := range actors {
-		lab := truncate(a.name+" · "+actWord(a.act), deskW-1)
-		labels.WriteString(" " + "\x1b[2m" + lab + "\x1b[0m" + strings.Repeat(" ", max(deskW-1-strWidth(lab), 0)))
-	}
-	rows = append(rows, labels.String())
-	// The info column: what is happening, in words.
-	info := o.info(infoW-2, now)
-	used := len(actors) * deskW
-	for i := range rows {
-		pad := max(width-used-infoW, 0)
-		if i < len(info) {
-			rows[i] += strings.Repeat(" ", pad+2) + info[i]
+		c := newCanvas(deskW, 12)
+		drawDesk(c, 0, a, frame, now)
+		px := c.halfBlocks(truecolor)
+		// Beside the desk: who, what (and for how long), on what.
+		name := "\x1b[1m" + a.name + "\x1b[0m"
+		if i > 0 {
+			name = fgColor(a.shirt, truecolor) + "\x1b[1m" + truncate(a.name, textW) + "\x1b[0m"
 		}
+		doing := "\x1b[" + cAccent + "m" + actWord(a.act) + "\x1b[0m"
+		if a.act != actIdle {
+			doing += "\x1b[2m · " + elapsed(now.Sub(a.since)) + "\x1b[0m"
+		}
+		side := []string{"", name, doing}
+		about := a.detail
+		if i > 0 && (about == "" || a.act == actThink) {
+			about = a.title
+		}
+		if a.act != actIdle {
+			for j, l := range wordWrap(about, textW) {
+				if j == 2 {
+					break
+				}
+				side = append(side, "\x1b[2m"+truncate(l, textW)+"\x1b[0m")
+			}
+		}
+		for j, p := range px {
+			t := ""
+			if j < len(side) {
+				t = side[j]
+			}
+			rows = append(rows, p+" "+t)
+		}
+	}
+	if extra := len(o.staff) - 2; extra > 0 {
+		rows = append(rows, fmt.Sprintf("\x1b[2m+%d more staff at work\x1b[0m", extra))
 	}
 	return rows
 }
 
-func (o *office) info(w int, now time.Time) []string {
-	var out []string
-	a := o.lead
-	head := actSentence(a.act)
-	if a.detail != "" && a.act != actIdle {
-		head += " " + a.detail
-	}
-	out = append(out, "\x1b[1m"+truncate(head, w)+"\x1b[0m")
-	if a.act != actIdle {
-		out = append(out, "\x1b[2m"+elapsed(now.Sub(a.since))+"\x1b[0m")
-	} else {
-		out = append(out, "\x1b[2mready\x1b[0m")
-	}
+// staffColor is the color of the staff member working on task.
+func (o *office) staffColor(task string) (rgb, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	for _, s := range o.staff {
-		if len(out) >= 6 {
-			break
+		if s.key == task {
+			return s.shirt, true
 		}
-		line := s.name + ": " + firstNonEmpty(s.detail, s.title)
-		out = append(out, "\x1b[2m"+truncate(line, w)+"\x1b[0m")
 	}
-	return out
+	return rgb{}, false
+}
+
+// leadState returns what Agentium is doing.
+func (o *office) leadState() actor {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.lead
+}
+
+// finished counts a finished turn.
+func (o *office) finished() {
+	o.mu.Lock()
+	o.done++
+	o.mu.Unlock()
 }
 
 func actWord(act string) string {

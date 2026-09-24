@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"runtime"
@@ -13,16 +14,44 @@ import (
 // The full-screen UI. Agentium's output (stdout and stderr) is redirected
 // into a pipe and interpreted by a vterm; a compositor draws the screen:
 //
-//	header      ◆ Agentium · model · mode · folder
-//	office      pixel-art desks (office.go)
-//	transcript  the conversation, scrollable (PgUp/PgDn, mouse wheel)
-//	input       the prompt, in a box at the bottom
-//	status      hints, or how far the view is scrolled
+//	┌──────────────────────────────────┬───────────────┐
+//	│ transcript (scrollable)          │ ops sidebar:  │
+//	│                                  │ office, plan, │
+//	│ ╭─ ◐ Running go test · 0:04 ───╮ │ staff,        │
+//	│ │ ❯ composer                   │ │ changes,      │
+//	│ ╰─ enter send · / commands ────╯ │ context       │
+//	├──────────────────────────────────┴───────────────┤
+//	│ status line: model · mode · ctx meter · cost      │
+//	└───────────────────────────────────────────────────┘
 //
 // Every feature of the inline UI keeps working unchanged inside the
 // transcript pane. On exit the alternate screen is left and the
 // conversation is printed to the normal terminal, so it stays in the
 // scrollback.
+//
+// Locking: UI code holding ui.mu may call into the fullscreen (which
+// takes f.mu); the compositor never takes ui.mu, since a UI writer can be
+// blocked on the pipe that the reader drains under f.mu.
+
+const (
+	sideW     = 36  // sidebar width, border included
+	sideMinW  = 110 // narrower terminals hide the sidebar
+	maxQueued = 3
+)
+
+type statusInfo struct {
+	model, mode, box string
+	tokens           int
+	cost             float64
+	ctxUsed, ctxMax  int
+}
+
+type todoItem struct{ text, status string }
+
+type fileChange struct {
+	path     string
+	add, del int
+}
 
 type fullscreen struct {
 	mu        sync.Mutex
@@ -34,19 +63,28 @@ type fullscreen struct {
 	prev      []string
 	scroll    int // lines scrolled up from the bottom
 	office    *office
-	header    func() string
-	status    func() string
-	input     bool // the line editor is active: its line is the input box
+	info      func() statusInfo
+	input     bool // the line editor is active: its line is the composer's
 	dirty     bool
 	truecolor bool
 	lastFrame int
-	maxEnd    int // longest transcript drawn (the live area shrinks and grows it)
-	done      chan struct{}
-	readDone  chan struct{}
-	stdout    *os.File
-	stderr    *os.File
-	restore   func()
-	closed    bool
+	maxEnd    int  // longest transcript drawn (the live area shrinks and grows it)
+	hideSide  bool // Ctrl-T
+
+	// The composer while a turn runs.
+	busy    bool
+	strip   string // what is happening, in the top border
+	typing  string
+	queued  []string
+	todos   []todoItem
+	changes []fileChange
+
+	done     chan struct{}
+	readDone chan struct{}
+	stdout   *os.File
+	stderr   *os.File
+	restore  func()
+	closed   bool
 }
 
 // fs is the active full-screen UI, if any.
@@ -83,7 +121,7 @@ func enterFullscreen() (*fullscreen, error) {
 	f := &fullscreen{tty: os.Stderr, pr: pr, pw: pw, stdout: os.Stdout, stderr: os.Stderr, office: newOffice(),
 		truecolor: truecolorTerm(), done: make(chan struct{}), readDone: make(chan struct{}), lastFrame: -1}
 	f.rows, f.cols = termRows(f.tty), termWidth(f.tty)
-	f.vt = newVterm(f.cols - 4)
+	f.vt = newVterm(f.transcriptWidth())
 	// Keys are not echoed by the terminal (they would land in the middle
 	// of the screen); Ctrl-C still interrupts.
 	if restore, err := noEcho(os.Stdin); err == nil {
@@ -125,14 +163,14 @@ func enterFullscreen() (*fullscreen, error) {
 			case <-winch:
 				f.mu.Lock()
 				f.rows, f.cols = termRows(f.tty), termWidth(f.tty)
-				f.vt.width = max(f.cols-4, 10)
+				f.vt.width = f.transcriptWidth()
 				f.prev = nil
 				f.dirty = true
 				f.mu.Unlock()
 			case <-t.C:
 				f.mu.Lock()
 				frame := int(time.Since(f.office.start) / officeFrame)
-				if f.dirty || frame != f.lastFrame {
+				if f.dirty || (f.sidebar() && frame != f.lastFrame) {
 					f.lastFrame = frame
 					f.dirty = false
 					f.draw()
@@ -175,11 +213,27 @@ func (f *fullscreen) leave() {
 		end--
 	}
 	for i := 0; i < end; i++ {
-		sb.WriteString(f.vt.render(i, f.vt.width) + "\n")
+		line, _ := f.vt.renderW(i, f.vt.width)
+		sb.WriteString(line + "\n")
 	}
 	f.mu.Unlock()
 	f.tty.WriteString(sb.String())
 }
+
+// sidebar reports whether the sidebar is shown; the caller holds f.mu.
+func (f *fullscreen) sidebar() bool { return !f.hideSide && f.cols >= sideMinW }
+
+// mainWidth is the width of the transcript and composer column.
+func (f *fullscreen) mainWidth() int {
+	if f.sidebar() {
+		return f.cols - sideW
+	}
+	return f.cols
+}
+
+// transcriptWidth is the text width inside the transcript (1 column of
+// margin on the left, 2 on the right).
+func (f *fullscreen) transcriptWidth() int { return max(f.mainWidth()-3, 10) }
 
 func (f *fullscreen) width() int {
 	f.mu.Lock()
@@ -191,22 +245,19 @@ func (f *fullscreen) width() int {
 func (f *fullscreen) height() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	_, h, _ := f.layout()
-	return h
+	return f.transcriptRows()
 }
 
-// layout: rows used by the office strip, the transcript, and whether the
-// office is shown.
-func (f *fullscreen) layout() (officeH, transcriptH int, showOffice bool) {
-	fixed := 2 // header, status
-	if f.input {
-		fixed += 3 // the input box: borders and the line
+func (f *fullscreen) composerRows() int {
+	n := 3 // borders and the input line
+	if f.busy {
+		n += min(len(f.queued), maxQueued)
 	}
-	showOffice = f.rows >= 24 && f.cols >= 60
-	if showOffice {
-		officeH = officeRows + 1
-	}
-	return officeH, max(f.rows-fixed-officeH, 3), showOffice
+	return n
+}
+
+func (f *fullscreen) transcriptRows() int {
+	return max(f.rows-1-f.composerRows(), 3)
 }
 
 func (f *fullscreen) setInput(on bool) {
@@ -221,11 +272,54 @@ func (f *fullscreen) setInput(on bool) {
 	f.mu.Unlock()
 }
 
+// setBusy shows a running turn in the composer: what is happening, the
+// message being typed and the queue.
+func (f *fullscreen) setBusy(busy bool, strip, typing string, queued []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.busy == busy && f.strip == strip && f.typing == typing && strings.Join(f.queued, "\x00") == strings.Join(queued, "\x00") {
+		return
+	}
+	f.busy, f.strip, f.typing = busy, strip, typing
+	f.queued = append(f.queued[:0], queued...)
+	f.dirty = true
+}
+
+func (f *fullscreen) setTodos(items []todoItem) {
+	f.mu.Lock()
+	f.todos = items
+	f.dirty = true
+	f.mu.Unlock()
+}
+
+// addChange records an edit for the CHANGES section.
+func (f *fullscreen) addChange(path string, add, del int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dirty = true
+	for i := range f.changes {
+		if f.changes[i].path == path {
+			f.changes[i].add += add
+			f.changes[i].del += del
+			return
+		}
+	}
+	f.changes = append(f.changes, fileChange{path, add, del})
+}
+
+func (f *fullscreen) toggleSidebar() {
+	f.mu.Lock()
+	f.hideSide = !f.hideSide
+	f.vt.width = f.transcriptWidth()
+	f.prev = nil
+	f.dirty = true
+	f.mu.Unlock()
+}
+
 func (f *fullscreen) scrollBy(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	_, h, _ := f.layout()
-	f.scroll = min(max(f.scroll+n, 0), max(f.vt.end()-h, 0))
+	f.scroll = min(max(f.scroll+n, 0), max(f.vt.end()-f.transcriptRows(), 0))
 	f.dirty = true
 }
 
@@ -236,25 +330,30 @@ func (f *fullscreen) redraw() {
 	f.mu.Unlock()
 }
 
+func sgr(code string) string { return "\x1b[" + code + "m" }
+
+// padTo pads a styled string to w columns (it must not be wider).
+func padTo(s string, w int) string {
+	return s + strings.Repeat(" ", max(w-strWidth(s), 0))
+}
+
 // draw composes the screen and writes the rows that changed; the caller
 // holds f.mu.
 func (f *fullscreen) draw() {
-	officeH, h, showOffice := f.layout()
-	screen := make([]string, 0, f.rows)
-	screen = append(screen, f.headerRow())
-	if showOffice {
-		screen = append(screen, f.office.render(f.cols, f.truecolor)...)
-		screen = append(screen, "")
-		for len(screen) < 1+officeH {
-			screen = append(screen, "")
-		}
+	mainW := f.mainWidth()
+	h := f.transcriptRows()
+	var side []string
+	if f.sidebar() {
+		side = f.sidebarRows(f.rows - 1)
 	}
+	left := make([]string, 0, f.rows)
+
 	end := f.vt.end()
 	inputRow := -1
 	if f.input {
 		inputRow = f.vt.row
 		if inputRow == end-1 {
-			end-- // the prompt line is drawn in the input box
+			end-- // the prompt line is drawn in the composer
 		}
 	}
 	if f.scroll > 0 && end > f.maxEnd {
@@ -263,24 +362,28 @@ func (f *fullscreen) draw() {
 	}
 	f.maxEnd = max(f.maxEnd, end)
 	f.scroll = min(f.scroll, max(end-h, 0))
-	// A short conversation starts at the top, like a chat; a long one
-	// keeps its newest lines in view.
+	// A short conversation starts at the top; a long one keeps its newest
+	// lines in view.
 	first := max(end-h-f.scroll, 0)
 	for i := 0; i < h; i++ {
-		row := ""
+		row, w := "", 0
 		if first+i < end {
-			row = f.vt.render(first+i, f.cols-2)
+			row, w = f.vt.renderW(first+i, mainW-3)
 		}
-		screen = append(screen, " "+row)
+		left = append(left, " "+row+strings.Repeat(" ", max(mainW-1-w, 0)))
 	}
-	if f.input {
-		border := "\x1b[38;5;66m"
-		inner := max(f.cols-4, 1)
-		line := f.vt.render(inputRow, inner)
-		pad := max(inner-strWidth(line), 0)
-		screen = append(screen, border+"╭"+strings.Repeat("─", f.cols-2)+"╮\x1b[0m")
-		screen = append(screen, border+"│\x1b[0m "+line+strings.Repeat(" ", pad)+" "+border+"│\x1b[0m")
-		screen = append(screen, border+"╰"+strings.Repeat("─", f.cols-2)+"╯\x1b[0m")
+	left = append(left, f.composer(mainW, inputRow)...)
+
+	screen := make([]string, 0, f.rows)
+	for i, l := range left {
+		if side != nil {
+			s := ""
+			if i < len(side) {
+				s = side[i]
+			}
+			l += sgr(cGray) + "│" + "\x1b[0m" + s
+		}
+		screen = append(screen, l)
 	}
 	screen = append(screen, f.statusRow())
 
@@ -297,48 +400,212 @@ func (f *fullscreen) draw() {
 	}
 	f.prev = screen
 	if f.input && f.scroll == 0 {
-		// The cursor in the input box.
-		out.WriteString("\x1b[" + strconv.Itoa(len(screen)-2) + ";" + strconv.Itoa(min(f.vt.col, f.cols-4)+3) + "H\x1b[?25h")
+		// The cursor in the composer.
+		row := h + 2
+		out.WriteString("\x1b[" + strconv.Itoa(row) + ";" + strconv.Itoa(min(f.vt.col, mainW-5)+3) + "H\x1b[?25h")
 	}
 	f.tty.WriteString(out.String())
 }
 
-func (f *fullscreen) headerRow() string {
-	left := " ◆ Agentium " + "\x1b[2m" + version + "\x1b[22m"
-	right := " "
-	if f.header != nil {
-		right = f.header() + " "
+// composer draws the input box: the editor's line when it is active, the
+// type-ahead while a turn runs.
+func (f *fullscreen) composer(w, inputRow int) []string {
+	border := sgr(cGray)
+	if f.input {
+		border = sgr(cInk)
+	} else if f.busy {
+		border = sgr(cAccent)
 	}
-	pad := f.cols - strWidth(left) - strWidth(right)
-	if pad < 1 {
-		right = truncate(right, max(f.cols-strWidth(left)-2, 0))
-		pad = max(f.cols-strWidth(left)-strWidth(right), 0)
+	inner := max(w-4, 1)
+	top := border + "╭" + strings.Repeat("─", w-2) + "╮\x1b[0m"
+	if f.busy && f.strip != "" {
+		strip := truncate(f.strip, w-8)
+		top = border + "╭─ \x1b[0m" + strip + " " + border + strings.Repeat("─", max(w-5-strWidth(strip), 0)) + "╮\x1b[0m"
 	}
-	return "\x1b[48;5;236m\x1b[38;5;252m" + left + strings.Repeat(" ", pad) + right + "\x1b[0m"
+	var rows []string
+	rows = append(rows, top)
+	if f.busy {
+		for i, q := range f.queued {
+			if i == maxQueued {
+				break
+			}
+			q = truncate(strings.ReplaceAll(q, "\n", "↵"), inner-12)
+			rows = append(rows, border+"│\x1b[0m "+padTo(sgr(cDim)+"↳ queued: "+q+"\x1b[0m", inner)+" "+border+"│\x1b[0m")
+		}
+	}
+	var line string
+	switch {
+	case f.input:
+		line, _ = f.vt.renderW(inputRow, inner)
+	case f.busy && f.typing != "":
+		t := strings.ReplaceAll(f.typing, "\n", "↵")
+		for strWidth(t) > inner-4 {
+			_, t = firstRune(t)
+		}
+		line = sgr(cInk) + "❯\x1b[0m " + t + sgr(cDim) + "▏\x1b[0m"
+	case f.busy:
+		line = sgr(cGray) + "❯ type to queue a message for when this turn ends\x1b[0m"
+	}
+	rows = append(rows, border+"│\x1b[0m "+padTo(line, inner)+" "+border+"│\x1b[0m")
+	hint := "enter send · ctrl+j new line · / commands · pgup scroll"
+	if f.busy {
+		hint = "enter queue · ctrl+c stop · pgup scroll"
+	}
+	if f.cols >= sideMinW {
+		hint += " · ctrl+t panel"
+	}
+	hint = truncate(hint, w-8)
+	rows = append(rows, border+"╰─ \x1b[0m"+sgr(cGray)+hint+"\x1b[0m "+border+strings.Repeat("─", max(w-5-strWidth(hint), 0))+"╯\x1b[0m")
+	return rows
+}
+
+func firstRune(s string) (string, string) {
+	for i := range s {
+		if i > 0 {
+			return s[:i], s[i:]
+		}
+	}
+	return s, ""
+}
+
+// sectionTitle is a sidebar heading with an optional right-hand note.
+func sectionTitle(title, note string) string {
+	w := sideW - 3
+	t := "\x1b[1m" + sgr(cGray) + title + "\x1b[0m"
+	if note != "" {
+		t += strings.Repeat(" ", max(w-strWidth(title)-strWidth(note), 1)) + note
+	}
+	return t
+}
+
+// sidebarRows draws the ops sidebar, h rows tall.
+func (f *fullscreen) sidebarRows(h int) []string {
+	w := sideW - 3 // "│ " … " "
+	var rows []string
+	add := func(s string) { rows = append(rows, " "+padTo(s, w)+" ") }
+	add("")
+	lead := f.office.leadState()
+	add(sectionTitle("OFFICE", sgr(cAccent)+actWord(lead.act)+"\x1b[0m"))
+	for _, r := range f.office.render(w, f.truecolor) {
+		add(r)
+	}
+
+	if len(f.todos) > 0 {
+		done := 0
+		for _, t := range f.todos {
+			if t.status == "done" {
+				done++
+			}
+		}
+		add("")
+		add(sectionTitle("PLAN", sgr(cDim)+fmt.Sprintf("%d/%d ", done, len(f.todos))+"\x1b[0m"+meter(done, len(f.todos), 8, cGreen)))
+		for _, t := range f.todos {
+			switch t.status {
+			case "done":
+				add(sgr(cGreen) + "✓ " + "\x1b[0m" + sgr(cDim) + truncate(t.text, w-2) + "\x1b[0m")
+			case "in_progress":
+				add(sgr(cAccent) + "▸ " + "\x1b[0m\x1b[1m" + truncate(t.text, w-2) + "\x1b[0m")
+			default:
+				add(sgr(cGray) + "· " + "\x1b[0m" + truncate(t.text, w-2))
+			}
+		}
+	}
+
+	if len(f.changes) > 0 {
+		add, del := 0, 0
+		for _, c := range f.changes {
+			add += c.add
+			del += c.del
+		}
+		rows = append(rows, " "+padTo("", w)+" ")
+		rows = append(rows, " "+padTo(sectionTitle("CHANGES", sgr(cGreen)+fmt.Sprintf("+%d", add)+"\x1b[0m "+sgr(cRed)+fmt.Sprintf("−%d", del)+"\x1b[0m"), w)+" ")
+		for _, c := range f.changes {
+			counts := sgr(cGreen) + fmt.Sprintf("+%d", c.add) + "\x1b[0m " + sgr(cRed) + fmt.Sprintf("−%d", c.del) + "\x1b[0m"
+			name := truncate(c.path, w-strWidth(counts)-1)
+			rows = append(rows, " "+padTo(name+strings.Repeat(" ", max(w-strWidth(name)-strWidth(counts), 1))+counts, w)+" ")
+		}
+	}
+
+	// CONTEXT sits at the bottom.
+	var foot []string
+	if f.info != nil {
+		in := f.info()
+		if in.ctxMax > 0 {
+			pct := min(in.ctxUsed*100/in.ctxMax, 100)
+			color := cGreen
+			switch {
+			case pct >= 90:
+				color = cRed
+			case pct >= 70:
+				color = cYellow
+			}
+			foot = append(foot, " "+padTo(sectionTitle("CONTEXT", sgr(cDim)+fmt.Sprintf("%s / %s", fmtK(in.ctxUsed), fmtK(in.ctxMax))+"\x1b[0m"), w)+" ")
+			foot = append(foot, " "+padTo(meter(pct, 100, w-5, color)+fmt.Sprintf(" %3d%%", pct), w)+" ")
+		}
+	}
+	for len(rows)+len(foot) < h {
+		rows = append(rows, strings.Repeat(" ", sideW-1))
+	}
+	if len(rows)+len(foot) > h {
+		rows = rows[:max(h-len(foot), 0)]
+	}
+	return append(rows, foot...)
+}
+
+// meter is a bar of n cells filled in proportion to v/total.
+func meter(v, total, n int, color string) string {
+	if total <= 0 || n <= 0 {
+		return ""
+	}
+	full := min(v*n/total, n)
+	if v > 0 && full == 0 {
+		full = 1
+	}
+	return sgr(color) + strings.Repeat("▰", full) + "\x1b[0m" + sgr(cGray) + strings.Repeat("▱", n-full) + "\x1b[0m"
 }
 
 func (f *fullscreen) statusRow() string {
+	var in statusInfo
+	if f.info != nil {
+		in = f.info()
+	}
 	var left string
 	if f.scroll > 0 {
-		left = " \x1b[33m↓ " + strconv.Itoa(f.scroll) + " more line" + plural(f.scroll) + "\x1b[0m\x1b[2m · PgDn or wheel to go back\x1b[0m"
-	} else if f.input {
-		left = " \x1b[2mEnter send · \\ + Enter new line · PgUp/wheel scroll · /help\x1b[0m"
+		left = " " + sgr(cYellow) + "↓ " + strconv.Itoa(f.scroll) + " more line" + plural(f.scroll) + "\x1b[0m" + sgr(cGray) + " · pgdn or wheel to return\x1b[0m"
 	} else {
-		left = " \x1b[2mtype to queue a message · Ctrl-C interrupt · PgUp/wheel scroll\x1b[0m"
+		modeColor := cGreen
+		switch in.mode {
+		case "plan":
+			modeColor = cMagenta
+		case "ask":
+			modeColor = cYellow
+		case "yolo":
+			modeColor = cRed
+		}
+		left = " " + sgr(cAccent) + "◆ agentium\x1b[0m" + sgr(cGray) + " · \x1b[0m" + in.model + sgr(cGray) + " · \x1b[0m" +
+			sgr(modeColor) + in.mode + "\x1b[0m" + sgr(cGray) + " · " + in.box + "\x1b[0m"
 	}
-	right := ""
-	if f.status != nil {
-		right = f.status()
+	var right []string
+	if in.ctxMax > 0 && !f.sidebar() {
+		pct := min(in.ctxUsed*100/in.ctxMax, 100)
+		right = append(right, "ctx "+meter(pct, 100, 6, cGreen)+sgr(cGray)+fmt.Sprintf(" %d%%", pct)+"\x1b[0m")
 	}
-	if strWidth(left)+strWidth(right)+1 > f.cols {
-		left = truncate(left, max(f.cols-strWidth(right)-2, 0))
+	if in.tokens > 0 {
+		right = append(right, sgr(cGray)+fmtK(in.tokens)+" tok\x1b[0m")
 	}
-	pad := max(f.cols-strWidth(left)-strWidth(right)-1, 0)
-	return left + strings.Repeat(" ", pad) + "\x1b[2m" + right + "\x1b[0m"
+	if in.cost > 0 {
+		right = append(right, sgr(cGray)+fmt.Sprintf("$%.4f", in.cost)+"\x1b[0m")
+	}
+	r := strings.Join(right, sgr(cGray)+" · \x1b[0m") + " "
+	if strWidth(left)+strWidth(r)+1 > f.cols {
+		left = truncate(left, max(f.cols-strWidth(r)-2, 0))
+	}
+	return left + strings.Repeat(" ", max(f.cols-strWidth(left)-strWidth(r), 0)) + r
 }
 
 // scrollKey handles a scrolling key (PgUp/PgDn, mouse wheel) and reports
-// whether k was one; other mouse events are swallowed too.
+// whether k was one; other mouse events are swallowed too. Ctrl-T
+// toggles the sidebar.
 func scrollKey(k string) bool {
 	f := activeFS()
 	if f == nil {
@@ -349,6 +616,8 @@ func scrollKey(k string) bool {
 		f.scrollBy(f.height() - 2)
 	case k == "\x1b[6~":
 		f.scrollBy(-(f.height() - 2))
+	case k == "\x14": // Ctrl-T
+		f.toggleSidebar()
 	case strings.HasPrefix(k, "\x1b[<"):
 		// SGR mouse: button 64 = wheel up, 65 = wheel down.
 		btn, _, _ := strings.Cut(strings.TrimPrefix(k, "\x1b[<"), ";")

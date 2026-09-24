@@ -34,8 +34,10 @@ const (
 	sgrReset = "\033[0m"
 	sgrBold  = "\033[1m"
 	sgrDim   = "\033[2m"
-	sgrCyan  = "\033[36m"
 )
+
+// sgrCyan marks inline code; applyTheme sets it.
+var sgrCyan = "\033[36m"
 
 func (m *mdStream) Write(d string) {
 	var out strings.Builder
@@ -133,17 +135,21 @@ func (m *mdStream) block(out *strings.Builder) {
 	if mark := fenceMark(body); mark != "" && (!m.fence || strings.HasPrefix(mark, m.fenceMark) && strings.TrimSpace(body) == mark) {
 		// A fence closes only with the same character, at least as long,
 		// and nothing after it (so ```` can contain ```).
+		// Code blocks are drawn as a card: a titled top edge, a bar down
+		// the left, a bottom edge.
 		if m.fence {
 			m.fence, m.fenceMark = false, ""
+			out.WriteString(indent + sgrDim + "└─" + sgrReset)
 		} else {
 			m.fence, m.fenceMark = true, mark
+			lang := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(body), mark))
+			out.WriteString(indent + sgrDim + strings.TrimSpace("┌─ "+lang) + sgrReset)
 		}
-		out.WriteString(indent + sgrDim + body + sgrReset)
 		m.endLine(out, full)
 		return
 	}
 	if m.fence {
-		out.WriteString(h)
+		out.WriteString(sgrDim + "│" + sgrReset + " " + h)
 		m.lineStart = full
 		return
 	}
