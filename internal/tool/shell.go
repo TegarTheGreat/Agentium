@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -178,6 +179,39 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
+// quietEnv keeps commands from stopping to wait for a person: pagers,
+// editors and prompts either pass through or fail at once.
+var quietEnv = []string{"PAGER=cat", "GIT_PAGER=cat", "GIT_EDITOR=true", "GIT_TERMINAL_PROMPT=0",
+	"DEBIAN_FRONTEND=noninteractive", "PYTHONUNBUFFERED=1", "PIP_NO_INPUT=1", "CI=1"}
+
+var spillSweep sync.Once
+
+// clipOrSpill clips long output to its head and tail, and keeps the whole
+// output in a file the model can grep instead of running the command again.
+func clipOrSpill(out string) string {
+	if len(out) <= bashMaxOutput {
+		return out
+	}
+	s := Clip(out, bashMaxOutput)
+	dir := filepath.Join(os.TempDir(), "agentium-output")
+	spillSweep.Do(func() { // yesterday's spills are not needed any more
+		ents, _ := os.ReadDir(dir)
+		for _, e := range ents {
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 24*time.Hour {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	})
+	if os.MkdirAll(dir, 0o700) == nil {
+		if f, err := os.CreateTemp(dir, "out-*.log"); err == nil {
+			f.WriteString(out)
+			f.Close()
+			s = strings.TrimRight(s, "\n") + fmt.Sprintf("\n[the full output (%d lines) is in %s: grep it or read parts with the read tool instead of re-running]", strings.Count(strings.TrimRight(out, "\n"), "\n")+1, f.Name())
+		}
+	}
+	return s
+}
+
 func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config, passEnv []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -192,7 +226,7 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
-	cmd.Env = policy.ScrubEnv(cmd.Env, passEnv)
+	cmd.Env = append(policy.ScrubEnv(cmd.Env, passEnv), quietEnv...)
 	cmd.Dir = dir
 	setProcessGroup(cmd)
 	// Background children (e.g. `server &`) may keep the pipe open; don't
@@ -229,7 +263,7 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	// started with "&") is stopped: long-running processes belong in
 	// background jobs, which are tracked and stopped at the end.
 	killProcessGroup(cmd)
-	s := Clip(out.String(), bashMaxOutput)
+	s := clipOrSpill(out.String())
 	if errors.Is(err, exec.ErrWaitDelay) {
 		err = nil
 		s += "\n[processes left running were stopped; start servers with background=true]"

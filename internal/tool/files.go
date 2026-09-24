@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -21,7 +22,7 @@ const (
 
 var readTool = Tool{
 	Def: providerDef("read",
-		"Read a text file or an image, or show a directory as a tree. Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
+		"Read a text file (lines are shown numbered: NUMBER<tab>text; the number is not part of the file) or an image, or show a directory as a tree. Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
 		`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based start line"},"limit":{"type":"integer"},"outline":{"type":"boolean"}},"required":["path"]}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
@@ -148,19 +149,23 @@ func sliceLines(s string, offset, limit int) string {
 	if end-start > readMaxLines {
 		end = start + readMaxLines
 	}
+	// Lines are numbered like cat -n, so line numbers in errors and test
+	// output can be matched without another command.
+	numW := len(strconv.Itoa(end))
 	var sb strings.Builder
 	for i := start; i < end; i++ {
-		if sb.Len()+len(lines[i]) > readMaxBytes {
+		prefix := fmt.Sprintf("%*d\t", numW, i+1)
+		if sb.Len()+len(prefix)+len(lines[i]) > readMaxBytes {
 			if sb.Len() == 0 {
 				// A single huge line (minified code): show its start.
-				sb.WriteString(strings.ToValidUTF8(lines[i][:readMaxBytes], "") + "…[line truncated]\n")
+				sb.WriteString(prefix + strings.ToValidUTF8(lines[i][:readMaxBytes], "") + "…[line truncated]\n")
 				end = i + 1
 			} else {
 				end = i
 			}
 			break
 		}
-		sb.WriteString(lines[i])
+		sb.WriteString(prefix + lines[i])
 	}
 	out := sb.String()
 	if start > 0 || end < total {

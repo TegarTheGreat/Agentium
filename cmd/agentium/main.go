@@ -1404,6 +1404,8 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		a.Note = note
 		_ = sess.Save()
+	case "/export":
+		exportSession(u, a, sess, strings.Join(f[1:], " "))
 	case "/memory":
 		showMemory(u, e.mem, strings.Join(f[1:], " "))
 	case "/diff":

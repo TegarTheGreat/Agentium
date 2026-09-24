@@ -50,12 +50,31 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 		r := &results[i]
 		switch c.Name {
 		case "edit":
-			if !r.IsError && codeExt[strings.ToLower(filepath.Ext(argString(c, "path")))] {
+			path := argString(c, "path")
+			if !r.IsError && codeExt[strings.ToLower(filepath.Ext(path))] {
 				rs.editedCode = true
+			}
+			// Many edits to one file without a passing check: the model is
+			// probably iterating on a wrong idea.
+			if !r.IsError && rs.fileEdits != nil {
+				rs.fileEdits[path]++
+				if rs.fileEdits[path] >= fileEditWarn && !rs.editWarned[path] {
+					rs.editWarned[path] = true
+					warned = true
+					r.Text += fmt.Sprintf("\n[agentium: %d edits to %s without a passing check. Step back: say what you have learned, name two other explanations for the problem, and test the likeliest before editing again]", rs.fileEdits[path], path)
+					a.notice(fmt.Sprintf("%d edits to %s without a passing check; asked the model to step back", rs.fileEdits[path], filepath.Base(path)))
+				}
 			}
 		case "bash":
 			if !r.IsError && checkCmd.MatchString(argString(c, "cmd")) {
+				// A check that ran counts as verification only if it passed.
 				rs.editedCode = false
+				rs.checkFailed = failedExit.MatchString(r.Text)
+				if !rs.checkFailed {
+					for k := range rs.fileEdits {
+						delete(rs.fileEdits, k)
+					}
+				}
 			}
 		}
 		// A denial is the user's or the policy's answer, not a sign the
@@ -104,6 +123,10 @@ func canonical(raw json.RawMessage) string {
 // escalateAfter is how many failing tool batches in a row make the agent
 // think harder.
 const escalateAfter = 3
+
+// fileEditWarn is how many edits to one file, without a passing check in
+// between, trigger a step-back note.
+const fileEditWarn = 6
 
 var failedExit = regexp.MustCompile(`\[exit [1-9]\d*\]\s*$`)
 

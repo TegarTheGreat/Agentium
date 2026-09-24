@@ -28,7 +28,11 @@ func (u *ui) welcome(model, mode, box, cwd string) {
 	sb.WriteString("\n  " + u.paint(cAccent, "◆") + " " + u.paint(cBold, "Agentium") + " " + u.paint(cGray, version) + "\n")
 	sb.WriteString(u.paint(cGray, "    "+shortPath(cwd)+" · "+model+" · "+mode+" mode · "+box) + "\n\n")
 	sb.WriteString(u.paint(cDim, "    Try: explain this project · fix the failing test · add a --json flag") + "\n")
-	sb.WriteString(u.paint(cDim, "    / commands · @ mention a file · ctrl+t panel · ? shortcuts") + "\n")
+	keys := "    / commands · @ mention a file · ! shell · ? shortcuts"
+	if termWidth(realTTY()) >= sideMinW {
+		keys += " · ctrl+t panel"
+	}
+	sb.WriteString(u.paint(cDim, keys) + "\n")
 	os.Stderr.WriteString(sb.String())
 }
 

@@ -49,11 +49,11 @@ func TestRead(t *testing.T) {
 	e := env(t)
 	write(t, e, "a.txt", "one\ntwo\nthree\nfour\n")
 	out, err := call(t, readTool, e, `{"path":"a.txt"}`)
-	if err != nil || out != "one\ntwo\nthree\nfour\n" {
+	if err != nil || out != "1\tone\n2\ttwo\n3\tthree\n4\tfour\n" {
 		t.Fatalf("%q %v", out, err)
 	}
 	out, _ = call(t, readTool, e, `{"path":"a.txt","offset":2,"limit":2}`)
-	if !strings.HasPrefix(out, "two\nthree\n") || !strings.Contains(out, "lines 2-3 of 4") {
+	if !strings.HasPrefix(out, "2\ttwo\n3\tthree\n") || !strings.Contains(out, "lines 2-3 of 4") {
 		t.Fatalf("slice = %q", out)
 	}
 	out, _ = call(t, readTool, e, `{"path":"."}`)
@@ -143,8 +143,12 @@ func TestBash(t *testing.T) {
 		t.Fatalf("timeout: %v after %s", err, time.Since(t0))
 	}
 	out, _ = call(t, bashTool, e, `{"cmd":"seq 1 100000"}`)
-	if len(out) > bashMaxOutput+200 || !strings.Contains(out, "omitted") || !strings.HasSuffix(strings.TrimSpace(out), "100000") {
-		t.Fatalf("clip: len=%d tail=%q", len(out), out[len(out)-20:])
+	if len(out) > bashMaxOutput+400 || !strings.Contains(out, "omitted") || !strings.Contains(out, "100000\n[the full output (100000 lines) is in ") {
+		t.Fatalf("clip: len=%d tail=%q", len(out), out[len(out)-120:])
+	}
+	spill := regexp.MustCompile(`is in (\S+):`).FindStringSubmatch(out)
+	if full, err := os.ReadFile(spill[1]); err != nil || !strings.Contains(string(full), "\n50000\n") {
+		t.Fatalf("spilled output: %v", err)
 	}
 	// Background child holding the pipe must not hang the tool.
 	t0 = time.Now()
@@ -999,5 +1003,19 @@ func TestGitGuardHooksPath(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(e.Root, ".husky", "pre-commit")); strings.Contains(string(b), "evil") {
 		t.Fatal("planted hook survived")
+	}
+}
+
+func TestEditErrorsPointToTheText(t *testing.T) {
+	e := env(t)
+	write(t, e, "m.go", "package m\n\nfunc a() int {\n\treturn 1\n}\n\nfunc b() int {\n\treturn 1\n}\n")
+	_, err := call(t, editTool, e, `{"path":"m.go","old":"\treturn 1","new":"\treturn 2"}`)
+	if err == nil || !strings.Contains(err.Error(), "at lines 4, 8") {
+		t.Fatalf("ambiguous: %v", err)
+	}
+	call(t, readTool, e, `{"path":"m.go"}`)
+	_, err = call(t, editTool, e, `{"path":"m.go","old":"func a() int {\n\treturn 3\n}","new":"x"}`)
+	if err == nil || !strings.Contains(err.Error(), "lines 3-5") || !strings.Contains(err.Error(), `line 4 differs`) {
+		t.Fatalf("closest: %v", err)
 	}
 }

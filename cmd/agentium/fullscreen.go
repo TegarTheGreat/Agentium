@@ -423,7 +423,8 @@ func (f *fullscreen) draw() {
 		if first+i < end {
 			row, w = f.vt.renderW(first+i, mainW-3)
 		}
-		left = append(left, " "+row+strings.Repeat(" ", max(mainW-1-w, 0)))
+		_ = w
+		left = append(left, " "+row)
 	}
 	if len(f.popup) > 0 && f.input {
 		// The suggestions float over the bottom of the transcript.
@@ -457,14 +458,18 @@ func (f *fullscreen) draw() {
 			if i < len(side) {
 				s = side[i]
 			}
-			l += sgr(cGray) + "│" + "\x1b[0m" + s
+			// Move to the panel's column rather than padding with spaces:
+			// text copied from the conversation has no trailing blanks.
+			l += "\x1b[0m\x1b[K\x1b[" + strconv.Itoa(mainW+1) + "G" + sgr(cGray) + "│" + "\x1b[0m" + s
 		}
 		screen = append(screen, l)
 	}
 	screen = append(screen, f.statusRow())
 
 	var out strings.Builder
-	out.WriteString("\x1b[?25l")
+	// Synchronized output (DEC 2026): the terminal shows the frame whole,
+	// never half drawn. Terminals without it ignore the codes.
+	out.WriteString("\x1b[?2026h\x1b[?25l")
 	for i, row := range screen {
 		if i < len(f.prev) && f.prev[i] == row {
 			continue
@@ -480,6 +485,7 @@ func (f *fullscreen) draw() {
 		row := h + 2
 		out.WriteString("\x1b[" + strconv.Itoa(row) + ";" + strconv.Itoa(min(f.vt.col, mainW-5)+3) + "H\x1b[?25h")
 	}
+	out.WriteString("\x1b[?2026l")
 	f.tty.WriteString(out.String())
 }
 

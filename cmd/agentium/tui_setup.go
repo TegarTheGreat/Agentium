@@ -120,6 +120,7 @@ var helpRows = [][2]string{
 	{"/btw <question>", "a side question, not added to the conversation"},
 	{"/theme", "auto · dark · light"},
 	{"/memory", "what I remember and where · /memory edit"},
+	{"/export [file]", "save the conversation as Markdown"},
 	{"/sessions  /resume", "list and continue saved conversations"},
 	{"/clear", "start a new conversation"},
 	{"/skills", "list skills; /<skill> [task] runs one"},

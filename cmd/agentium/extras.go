@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/session"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
@@ -215,4 +217,38 @@ func sideQuestion(u *ui, a *agent.Agent, q string) {
 		sb.WriteString("  " + u.paint(cInk, "│") + " " + l + "\n")
 	}
 	os.Stderr.WriteString(sb.String())
+}
+
+// exportSession writes the conversation as Markdown (/export [file]).
+func exportSession(u *ui, a *agent.Agent, sess *session.Session, arg string) {
+	path := strings.TrimSpace(arg)
+	if path == "" {
+		path = "agentium-" + sess.ID + ".md"
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(sess.Cwd, path)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Agentium session %s\n\n_%s · %s_\n", sess.ID, sess.Model, shortPath(sess.Cwd))
+	for _, m := range a.Messages {
+		switch m.Role {
+		case provider.RoleUser:
+			if strings.HasPrefix(m.Text, "[agentium]") {
+				continue
+			}
+			sb.WriteString("\n## You\n\n" + strings.TrimSpace(m.Text) + "\n")
+		case provider.RoleAssistant:
+			if t := strings.TrimSpace(m.Text); t != "" {
+				sb.WriteString("\n## Agentium\n\n" + t + "\n")
+			}
+			for _, c := range m.ToolCalls {
+				sb.WriteString("\n- `" + strings.ReplaceAll(summarizeCall(c), "`", "'") + "`\n")
+			}
+		}
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		u.failure("export: " + err.Error())
+		return
+	}
+	u.success("Saved the conversation to " + shortPath(path))
 }

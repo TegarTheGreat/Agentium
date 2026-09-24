@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/skill"
 )
@@ -33,7 +34,7 @@ func selfPrompt(cwd string) string {
 
 About you (Agentium %s; for questions about yourself — never guess, check these files or the docs at https://github.com/TegarTheGreat/Agentium):
 - Settings %s (model, mode, theme, ui, mcp servers, providers, hooks, fallback); API keys in the OS keychain or %s (never read or print it)
-- Your instructions for every project: %s; for this project: AGENTS.md or CLAUDE.md in the repository
+- Your instructions for every project: %s; for this project: AGENTS.md (or CLAUDE.md, GEMINI.md) in the repository, from its root down to the current folder
 - Memory: user preferences %s (every project); this project (%s): %s (MEMORY.md, decisions, journal). Projects do not share notes.
 - Skills (a folder with SKILL.md): %s
 - Sessions %s; checkpoints for /undo %s
@@ -82,6 +83,12 @@ func showMemory(u *ui, m *memCtl, arg string) {
 			sb.WriteString("    " + sanitize(l) + "\n")
 		}
 	}
+	files := agent.ContextFiles(m.cwd)
+	var lines []string
+	for _, f := range files {
+		lines = append(lines, shortPath(f))
+	}
+	section("Instructions in use", "AGENTS.md · CLAUDE.md · GEMINI.md", strings.Join(lines, "\n"))
 	section("Preferences · every project", st.UserPath, readFile(st.UserPath))
 	section("Notes · this project ("+shortPath(st.Root)+")", st.MemoryPath, readFile(st.MemoryPath))
 	var ds []string

@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +19,7 @@ import (
 
 var editTool = Tool{
 	Def: providerDef("edit",
-		"Replace text in a file. old must match once (whitespace/indent differences are tolerated) unless all=true. Empty old writes the whole file. Edits that introduce a syntax error are rejected.",
+		"Replace text in a file. old is the file's text without read's line numbers and must match once (whitespace/indent differences are tolerated) unless all=true. Empty old writes the whole file. Edits that introduce a syntax error are rejected.",
 		`{"type":"object","required":["path","new"],"properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"},"all":{"type":"boolean"}}}`),
 	Run: runEdit,
 }
@@ -34,6 +36,13 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	}
 	if a.Path == "" {
 		return "", errors.New("path is required")
+	}
+	// Text copied from read output with its line numbers still on.
+	if numbered(a.Old) {
+		a.Old = stripNumbers(a.Old)
+		if numbered(a.New) {
+			a.New = stripNumbers(a.New)
+		}
 	}
 	p := real(env.abs(a.Path))
 	if env.Gate != nil {
@@ -147,7 +156,7 @@ func lineCount(s string) int {
 func replace(s, old, new string, all bool) (out string, n int, how string, err error) {
 	if c := strings.Count(s, old); c > 0 {
 		if c > 1 && !all {
-			return "", 0, "", fmt.Errorf("old text matches %d times; add surrounding context or set all=true", c)
+			return "", 0, "", fmt.Errorf("old text matches %d times (at lines %s); add surrounding context to pick one, or set all=true", c, matchLines(s, old))
 		}
 		if all {
 			return strings.ReplaceAll(s, old, new), c, "", nil
@@ -169,7 +178,60 @@ func replace(s, old, new string, all bool) (out string, n int, how string, err e
 			return res, 1, "ignoring " + mode, nil
 		}
 	}
-	return "", 0, "", errors.New("old text not found; read the file again and copy it exactly")
+	return "", 0, "", errors.New("old text not found." + closestHint(s, old) + " Copy the text exactly as read shows it (without the line numbers).")
+}
+
+// matchLines lists the line numbers where old starts in s.
+func matchLines(s, old string) string {
+	var at []string
+	for i, off := 0, 0; i < 10; i++ {
+		j := strings.Index(s[off:], old)
+		if j < 0 {
+			break
+		}
+		at = append(at, strconv.Itoa(strings.Count(s[:off+j], "\n")+1))
+		off += j + len(old)
+	}
+	return strings.Join(at, ", ")
+}
+
+// closestHint finds where old nearly matches and says where it differs,
+// so a failed edit can be fixed without reading the whole file again.
+func closestHint(s, old string) string {
+	fileLines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	oldLines := strings.Split(strings.Trim(strings.ReplaceAll(old, "\r\n", "\n"), "\n"), "\n")
+	if len(oldLines) == 0 || len(fileLines) == 0 {
+		return ""
+	}
+	best, bestScore := -1, 0
+	for i := 0; i+len(oldLines) <= len(fileLines); i++ {
+		score := 0
+		for j, ol := range oldLines {
+			if strings.TrimSpace(fileLines[i+j]) == strings.TrimSpace(ol) {
+				score++
+			}
+		}
+		if score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	if best < 0 || bestScore*2 < len(oldLines) && bestScore < 2 {
+		return " Nothing similar is in the file; read it again."
+	}
+	for j, ol := range oldLines {
+		if fl := fileLines[best+j]; strings.TrimSpace(fl) != strings.TrimSpace(ol) {
+			return fmt.Sprintf(" The closest match is at lines %d-%d (%d of %d lines equal); line %d differs: the file has %q, you wrote %q.",
+				best+1, best+len(oldLines), bestScore, len(oldLines), best+j+1, clipLine(fl), clipLine(ol))
+		}
+	}
+	return fmt.Sprintf(" The closest match is at lines %d-%d.", best+1, best+len(oldLines))
+}
+
+func clipLine(l string) string {
+	if len(l) > 120 {
+		return strings.ToValidUTF8(l[:120], "") + "…"
+	}
+	return l
 }
 
 func toCRLF(s string) string {
@@ -402,4 +464,29 @@ func writeInPlace(p string, data []byte, perm fs.FileMode) error {
 		return fmt.Errorf("write verification failed for %s: the file on disk differs from what was written", p)
 	}
 	return nil
+}
+
+var lineNumberPrefix = regexp.MustCompile(`^ *\d+\t`)
+
+// numbered reports whether every line of s starts with read's line number
+// prefix.
+func numbered(s string) bool {
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if s == "" || len(lines) == 0 {
+		return false
+	}
+	for _, l := range lines {
+		if !lineNumberPrefix.MatchString(l) {
+			return false
+		}
+	}
+	return true
+}
+
+func stripNumbers(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = lineNumberPrefix.ReplaceAllString(l, "")
+	}
+	return strings.Join(lines, "\n")
 }

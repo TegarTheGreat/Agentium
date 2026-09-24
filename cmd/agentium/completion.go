@@ -38,6 +38,7 @@ var slashCommands = []slashCmd{
 	{"/btw", "ask a side question (not added to the conversation)", true},
 	{"/theme", "auto · dark · light", false},
 	{"/memory", "what I remember, and where (edit to change it)", false},
+	{"/export", "save the conversation as Markdown", false},
 	{"/sessions", "list saved conversations", false},
 	{"/resume", "continue a saved conversation", true},
 	{"/clear", "start a new conversation", false},

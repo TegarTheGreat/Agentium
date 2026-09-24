@@ -180,7 +180,7 @@ func (u *ui) drawLive() {
 		more := len(lines) - (max - 1)
 		lines = append(lines[:max-1], u.paint(cDim, fmt.Sprintf("  … %d more line%s", more, plural(more))))
 	}
-	os.Stderr.WriteString(strings.Join(lines, "\n"))
+	os.Stderr.WriteString("\x1b[?2026h" + strings.Join(lines, "\n") + "\x1b[?2026l")
 	u.drawn = len(lines)
 }
 
@@ -408,6 +408,8 @@ func (u *ui) toolOutput(c provider.ToolCall, p []byte) {
 	}
 }
 
+var readLineNo = regexp.MustCompile(`(?m)^ *(\d+)\t`)
+
 var exitRE = regexp.MustCompile(`\n\[exit (\d+)\]$`)
 
 func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duration) {
@@ -441,6 +443,13 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 		dur = fmt.Sprintf(" %.1fs", d.Seconds())
 	}
 	name := toolLabel(c.Name)
+	if c.Name == "read" && fail == "" {
+		// Which part of the file was read.
+		if nums := readLineNo.FindAllStringSubmatch(out, -1); len(nums) > 0 {
+			first, last := nums[0][1], nums[len(nums)-1][1]
+			dur = " · lines " + first + "–" + last + dur
+		}
+	}
 	fail = truncate(fail, max(width/2, 20))
 	detail := truncate(u.detail(c), width-strWidth(name)-len(dur)-strWidth(fail)-8)
 	key := name + " " + detail

@@ -90,7 +90,7 @@ func TestLoopRunsToolsAndStops(t *testing.T) {
 	// Results come back in call order with errors flagged.
 	last := s.reqs[2].Messages
 	res := last[len(last)-3:]
-	if res[0].ToolCallID != "3" || res[0].Text != "alpha" || res[0].IsError {
+	if res[0].ToolCallID != "3" || res[0].Text != "1\talpha" || res[0].IsError {
 		t.Fatalf("read result = %+v", res[0])
 	}
 	if !res[1].IsError || !strings.Contains(res[1].Text, "unknown tool") {
@@ -253,7 +253,7 @@ func TestVerifyReminder(t *testing.T) {
 	s := &script{steps: []func(provider.Request) (provider.Response, error){
 		calls(tc("1", "edit", `{"path":"main.go","new":"package main\n"}`)),
 		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Done."}, nil },
-		calls(tc("2", "bash", `{"cmd":"go vet ./..."}`)),
+		calls(tc("2", "bash", `{"cmd":"echo test ok"}`)),
 		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Verified."}, nil },
 	}}
 	a := newAgent(t, s)
@@ -750,5 +750,79 @@ func TestSubAgentReportsWhenOutOfSteps(t *testing.T) {
 	}
 	if !strings.Contains(result, "report: read a.txt many times") || reads != subMaxTurns {
 		t.Fatalf("reads %d, result: %s", reads, result)
+	}
+}
+
+func TestVerifyGateCatchesFailingCheck(t *testing.T) {
+	// A test run that fails does not count as verification: the agent is
+	// asked again, with the task quoted back.
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "edit", `{"path":"main.go","new":"package main\n"}`)),
+		calls(tc("2", "bash", `{"cmd":"echo FAIL; exit 1 # go test"}`)),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Done."}, nil },
+		calls(tc("3", "bash", `{"cmd":"echo ok # go test"}`)),
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "Fixed and verified."}, nil
+		},
+	}}
+	a := newAgent(t, s)
+	a.Verify = true
+	st, err := a.Run(context.Background(), "make the build pass")
+	if err != nil || st.Turns != 5 {
+		t.Fatalf("turns=%d err=%v", st.Turns, err)
+	}
+	nudge := s.reqs[3].Messages[len(s.reqs[3].Messages)-1].Text
+	if !strings.Contains(nudge, "latest build/test/lint run failed") || !strings.Contains(nudge, "make the build pass") {
+		t.Fatalf("nudge: %q", nudge)
+	}
+}
+
+func TestManyEditsToOneFileAskToStepBack(t *testing.T) {
+	var steps []func(provider.Request) (provider.Response, error)
+	for i := 0; i < fileEditWarn; i++ {
+		steps = append(steps, calls(tc(fmt.Sprint(i), "edit", fmt.Sprintf(`{"path":"notes.txt","new":"v%d\n"}`, i))))
+	}
+	steps = append(steps, func(provider.Request) (provider.Response, error) { return provider.Response{Text: "ok"}, nil })
+	a := newAgent(t, &script{steps: steps})
+	if _, err := a.Run(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleTool && strings.Contains(m.Text, "Step back") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no step-back note after many edits to one file")
+	}
+}
+
+func TestDetectProject(t *testing.T) {
+	dir := t.TempDir()
+	if detectProject(dir) != "" {
+		t.Fatal("empty dir")
+	}
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"test":"node --test"}}`), 0o644)
+	if got := detectProject(dir); got != `project=go+node tests="go test ./...; npm test"` {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestOpenTodosNudgeOnce(t *testing.T) {
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "todo", `{"items":[{"text":"write code","status":"done"},{"text":"write docs","status":"pending"}]}`)),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Done."}, nil },
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Docs skipped on purpose."}, nil },
+	}}
+	a := newAgent(t, s)
+	a.Tools = append(a.Tools, a.TodoTool())
+	st, err := a.Run(context.Background(), "x")
+	if err != nil || st.Turns != 3 {
+		t.Fatalf("turns=%d err=%v", st.Turns, err)
+	}
+	if last := s.reqs[2].Messages[len(s.reqs[2].Messages)-1].Text; !strings.Contains(last, "write docs") {
+		t.Fatalf("nudge: %q", last)
 	}
 }

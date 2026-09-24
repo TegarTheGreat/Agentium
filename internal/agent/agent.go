@@ -124,7 +124,12 @@ const (
 // runState is per-Run bookkeeping.
 type runState struct {
 	editedCode  bool
-	reminded    bool
+	checkFailed bool // the latest build/test/lint run failed
+	reminded    int  // verification reminders given this turn
+	todoNudged  bool
+	task        string
+	fileEdits   map[string]int
+	editWarned  map[string]bool
 	truncations int
 	sigs        []string
 	failStreak  int // consecutive tool batches with a failure
@@ -138,7 +143,7 @@ type runState struct {
 func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 	start := time.Now()
 	var st Stats
-	var rs runState
+	rs := runState{task: input, fileEdits: map[string]int{}, editWarned: map[string]bool{}}
 	if a.Note != "" {
 		input = "[" + a.Note + "]\n\n" + input
 		a.Note = ""
@@ -274,11 +279,24 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		if len(resp.ToolCalls) > 0 {
 			continue
 		}
-		if a.Verify && rs.editedCode && !rs.reminded {
-			rs.reminded = true
-			a.notice("code changed without a check; asking the model to verify")
+		if a.Verify && (rs.editedCode || rs.checkFailed) && rs.reminded < 2 {
+			// The verification gate: an unverified or failing change is not
+			// done. The task is quoted back, since it may be far above.
+			rs.reminded++
+			why := "You changed code but have not run a build, test or lint since."
+			if !rs.editedCode {
+				why = "Your latest build/test/lint run failed."
+			}
+			a.notice("asking the model to verify its change")
 			a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser,
-				Text: "[agentium] You changed code but have not run a build, test or lint since. Run the most relevant quick check now. If it cannot be verified, reply with one line saying why."})
+				Text: "[agentium] " + why + " Before finishing: re-read the task — «" + clipTask(rs.task) + "» — run the most relevant check, and make sure every requirement is met (do not weaken or delete tests to pass). If something cannot be verified or fixed, say so in one line."})
+			continue
+		}
+		if open := openTodos(a.Ledger.Todos()); len(open) > 0 && !rs.todoNudged && a.depth == 0 {
+			// Finishing with open plan items usually means a forgotten step.
+			rs.todoNudged = true
+			a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser,
+				Text: "[agentium] Your todo list still has open items: " + strings.Join(open, "; ") + ". Finish them, or update the list (mark done, or drop what no longer applies) before you reply."})
 			continue
 		}
 		return done(nil)
@@ -290,6 +308,26 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 // took at the latest model call; safe to call while the agent runs.
 func (a *Agent) ContextUsed() (used, limit int) {
 	return int(a.ctxUsed.Load()), a.ContextTokens
+}
+
+// openTodos lists plan items not marked done.
+func openTodos(ts []Todo) []string {
+	var out []string
+	for _, t := range ts {
+		if t.Status != "done" {
+			out = append(out, t.Text)
+		}
+	}
+	return out
+}
+
+// clipTask shortens the task for a reminder.
+func clipTask(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 600 {
+		s = strings.ToValidUTF8(s[:600], "") + "…"
+	}
+	return s
 }
 
 func (a *Agent) notice(msg string) {
@@ -442,8 +480,14 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 				imgs = images()
 				a.Ledger.record(c.Name, c.Args, res, err)
 			}
+			took := time.Since(t0)
 			if a.Events.ToolDone != nil {
-				a.Events.ToolDone(c, res, err, time.Since(t0))
+				a.Events.ToolDone(c, res, err, took)
+			}
+			if took > 20*time.Second && c.Name == "bash" {
+				// Knowing a command is slow keeps the model from re-running
+				// it for another look at its output.
+				res += fmt.Sprintf("\n[took %s]", took.Round(time.Second))
 			}
 			msg := provider.Message{Role: provider.RoleTool, ToolCallID: c.ID, Text: res, Images: imgs}
 			if errors.Is(err, context.Canceled) {
