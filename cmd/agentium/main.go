@@ -971,6 +971,10 @@ func run(args []string) error {
 		if line == "" {
 			continue
 		}
+		if strings.EqualFold(line, "agentium update") {
+			// The shell command, typed here: do it rather than ask the model.
+			line = "/update"
+		}
 		switch f := strings.Fields(line); f[0] {
 		case "/plan":
 			if m := gate.GetMode(); m != policy.Plan {
@@ -1084,6 +1088,12 @@ func slash(line string, e *slashEnv) (exit bool) {
 			return false
 		}
 		u.success("Removed the stored key for " + f[1])
+	case "/update":
+		if updated, err := runUpdate(f[1:]); err != nil {
+			u.failure(err.Error())
+		} else if updated {
+			u.note("restart agentium to use the new version (/exit, then agentium)")
+		}
 	case "/config", "/settings":
 		u.showConfig(sess.Model, string(gate.GetMode()), a.Reasoning.Effort, e.box)
 	case "/effort":
@@ -1177,7 +1187,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 		return false
 	}
 	switch f[0] {
-	case "/help", "/?", "/login", "/logout", "/config", "/settings", "/effort", "/model", "/mode":
+	case "/help", "/?", "/login", "/logout", "/update", "/config", "/settings", "/effort", "/model", "/mode":
 		return false
 	case "/exit", "/quit", "/q":
 		return true

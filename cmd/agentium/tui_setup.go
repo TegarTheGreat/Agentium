@@ -118,6 +118,7 @@ var helpRows = [][2]string{
 	{"/skills", "list skills; /<skill> [task] runs one"},
 	{"/usage", "tokens used in this session"},
 	{"/config", "show current settings"},
+	{"/update", "install the latest release"},
 	{"/exit", "quit (also Ctrl-D)"},
 }
 

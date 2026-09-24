@@ -4,6 +4,10 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [0.14.2] - 2026-09-24
 
+### Added
+
+- **`/update` inside Agentium.** It installs the latest release without leaving the session. Typing `agentium update` at the prompt does the same, instead of sending it to the model.
+
 ### Fixed
 
 - **A turn no longer hangs on "Thinking…" forever.** Some providers (DeepSeek among them) keep a queued request open by sending only keep-alive comments. Those used to reset the stall timer, so a turn could wait for hours. A stream that sends nothing but keep-alives or pings for 10 minutes is now dropped and retried.

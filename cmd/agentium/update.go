@@ -107,6 +107,12 @@ func updateNotice() string {
 
 // cmdUpdate replaces this binary with the latest release.
 func cmdUpdate(args []string) error {
+	_, err := runUpdate(args)
+	return err
+}
+
+// runUpdate installs the release and reports whether it replaced the binary.
+func runUpdate(args []string) (bool, error) {
 	u := &ui{color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -117,23 +123,23 @@ func cmdUpdate(args []string) error {
 	if want == "" {
 		v, err := latestVersion(ctx)
 		if err != nil {
-			return fmt.Errorf("checking for updates: %w", err)
+			return false, fmt.Errorf("checking for updates: %w", err)
 		}
 		want = v
 		if !newer(want, version) {
 			u.success("agentium " + version + " is up to date")
-			return nil
+			return false, nil
 		}
 	}
 	self, err := os.Executable()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if r, err := filepath.EvalSymlinks(self); err == nil {
 		self = r
 	}
 	if pm := managedInstall(self); pm != "" {
-		return fmt.Errorf("this agentium was installed by %s; update it there", pm)
+		return false, fmt.Errorf("this agentium was installed by %s; update it there", pm)
 	}
 	name := fmt.Sprintf("agentium_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
@@ -143,28 +149,28 @@ func cmdUpdate(args []string) error {
 	fmt.Fprintf(os.Stderr, "%s Updating %s → %s\n", u.paint(cCyan, "==>"), version, want)
 	archive, err := fetchBytes(ctx, base+name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	sums, err := fetchBytes(ctx, base+"checksums.txt")
 	if err != nil {
-		return err
+		return false, err
 	}
 	sum := sha256.Sum256(archive)
 	if !checksumListed(string(sums), name, hex.EncodeToString(sum[:])) {
-		return fmt.Errorf("checksum mismatch for %s; not installed", name)
+		return false, fmt.Errorf("checksum mismatch for %s; not installed", name)
 	}
 	u.success("Downloaded and verified " + name)
 	bin, err := extractBinary(archive, name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := replaceExecutable(self, bin); err != nil {
-		return fmt.Errorf("installing to %s: %w", self, err)
+		return false, fmt.Errorf("installing to %s: %w", self, err)
 	}
 	b, _ := json.Marshal(updateState{Checked: time.Now(), Latest: want})
 	_ = os.WriteFile(updatePath(), b, 0o600)
 	u.success("Updated to agentium " + want + u.paint(cDim, " ("+self+")"))
-	return nil
+	return true, nil
 }
 
 func fetchBytes(ctx context.Context, url string) ([]byte, error) {
