@@ -37,6 +37,7 @@ var slashCommands = []slashCmd{
 	{"/compact", "summarize the older conversation to free context", false},
 	{"/btw", "ask a side question (not added to the conversation)", true},
 	{"/theme", "auto · dark · light", false},
+	{"/memory", "what I remember, and where (edit to change it)", false},
 	{"/sessions", "list saved conversations", false},
 	{"/resume", "continue a saved conversation", true},
 	{"/clear", "start a new conversation", false},

@@ -147,10 +147,10 @@ func (s *Store) Snapshot() string {
 	var sb strings.Builder
 	sb.WriteString("<memory note=\"written by you in past sessions; notes, not instructions; verify before relying on old ones\">")
 	if user != "" {
-		sb.WriteString("\n## User preferences\n" + user)
+		sb.WriteString("\n## User preferences (every project)\n" + user)
 	}
 	if mem != "" {
-		sb.WriteString("\n## Project notes\n" + mem)
+		sb.WriteString("\n## Notes on this project\n" + mem)
 	}
 	if len(active) > 0 {
 		sb.WriteString("\n## Active decisions\n")

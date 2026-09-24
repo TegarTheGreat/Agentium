@@ -119,6 +119,7 @@ var helpRows = [][2]string{
 	{"/context  /compact", "what fills the context · summarize to free it"},
 	{"/btw <question>", "a side question, not added to the conversation"},
 	{"/theme", "auto · dark · light"},
+	{"/memory", "what I remember and where · /memory edit"},
 	{"/sessions  /resume", "list and continue saved conversations"},
 	{"/clear", "start a new conversation"},
 	{"/skills", "list skills; /<skill> [task] runs one"},

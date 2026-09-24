@@ -139,6 +139,22 @@ func (p *pager) rows(w, h int) []string {
 	return rows
 }
 
+// editFile opens path in the user's editor.
+func editFile(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	text, err := externalEdit(string(b))
+	if err != nil {
+		return err
+	}
+	if text == strings.TrimRight(string(b), "\n") {
+		return nil
+	}
+	return os.WriteFile(path, []byte(text+"\n"), 0o600)
+}
+
 // externalEdit lets the user write the message in their editor.
 func externalEdit(text string) (string, error) {
 	ed := firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"))

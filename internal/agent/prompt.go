@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+
+	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/tool"
 	"os"
 	"path/filepath"
@@ -27,7 +29,7 @@ Rules:
 // memoryRules is added only when memory is enabled.
 const memoryRules = `
 
-Memory: <memory> holds notes from past sessions; <recall> may bring relevant past context. To save something for future sessions, put a line in your reply: "@remember <project fact>", "@prefer <user preference>", "@decide <decision> — <why>" (add "supersedes D-xxx" when replacing one), "@forget <text>". Save only durable, non-obvious facts (conventions, commands, lessons from mistakes, user preferences), never secrets. Name the file a fact is about (e.g. "see Makefile") so it can be checked later. Before debugging an error, search {memory} for it: it may have been solved before.`
+Memory: <memory> holds notes from past sessions; <recall> may bring relevant past context. To save something for future sessions, put a line in your reply: "@remember <fact about this project>", "@prefer <how the user likes to work, in every project: language, style, habits; never a fact about one project>", "@decide <decision> — <why>" (add "supersedes D-xxx" when replacing one), "@forget <text>". Save only durable, non-obvious facts (conventions, commands, lessons from mistakes, user preferences), never secrets. Name the file a fact is about (e.g. "see Makefile") so it can be checked later. Before debugging an error, search {memory} for it: it may have been solved before.`
 
 const maxContextFile = 12 * 1024
 
@@ -90,18 +92,12 @@ func contextFiles(root string) []string {
 	} else if h, err := os.UserHomeDir(); err == nil {
 		files = append(files, filepath.Join(h, ".agentium", "AGENTS.md"))
 	}
-	var dirs []string
-	for d := root; ; {
-		dirs = append(dirs, d)
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			break
+	dirs := []string{root}
+	if top, ok := config.RepoRoot(root); ok {
+		for d := root; d != top; {
+			d = filepath.Dir(d)
+			dirs = append(dirs, d)
 		}
-		p := filepath.Dir(d)
-		if p == d {
-			dirs = dirs[:1] // no repo: only cwd
-			break
-		}
-		d = p
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
 		for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {

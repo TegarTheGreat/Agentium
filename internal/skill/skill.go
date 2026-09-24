@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/config"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -56,18 +57,12 @@ func Dirs(home, cwd string) []Location {
 		dirs = append(dirs, Location{filepath.Join(h, ".claude", "skills"), "user"})
 	}
 	dirs = append(dirs, Location{UserDir(home), "user"})
-	var chain []string
-	for d := cwd; ; {
-		chain = append([]string{d}, chain...)
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			break
+	chain := []string{cwd}
+	if top, ok := config.RepoRoot(cwd); ok {
+		for d := cwd; d != top; {
+			d = filepath.Dir(d)
+			chain = append([]string{d}, chain...)
 		}
-		p := filepath.Dir(d)
-		if p == d {
-			chain = []string{cwd} // not a repository: only cwd
-			break
-		}
-		d = p
 	}
 	for _, d := range chain {
 		dirs = append(dirs, Location{filepath.Join(d, ".claude", "skills"), "project"},

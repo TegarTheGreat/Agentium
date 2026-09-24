@@ -2,6 +2,19 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] - 2026-09-25
+
+### Fixed
+
+- **A new project no longer inherits another one's memory.**
+  - A git repository at the home directory or the filesystem root (dotfiles, a container image) no longer makes every folder below it one project. Before, all of them shared the same notes, instructions and skills.
+  - `@prefer`, which writes preferences for every project, is now reserved for how you like to work, never facts about one project. The prompt labels the two kinds of memory clearly.
+- **Agentium knows itself.** It knows where its settings, keys, instructions, memory, skills, sessions and checkpoints are, which commands you have, and the exact formats for MCP servers, skills, hooks and providers. It answers from these instead of guessing.
+
+### Added
+
+- **`/memory`** shows what Agentium remembers (preferences for every project, this project's notes and decisions) and where each is kept. `/memory edit` and `/memory edit project` open them in `$EDITOR`.
+
 ## [0.16.0] - 2026-09-25
 
 ### Added

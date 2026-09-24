@@ -220,13 +220,29 @@ func UpdateAuth(f func(Auth)) error {
 // itself outside a repository. Project state (memory, code index) is
 // keyed by it, so every subdirectory of a repo shares one memory.
 func ProjectRoot(dir string) string {
+	if r, ok := RepoRoot(dir); ok {
+		return r
+	}
+	return dir
+}
+
+// RepoRoot is the git repository containing dir. A repository at the home
+// directory or the filesystem root (dotfiles, a container image) is not a
+// project boundary for directories below it: otherwise every project
+// under it would share one memory and one set of instructions.
+func RepoRoot(dir string) (string, bool) {
+	home, _ := os.UserHomeDir()
 	for d := dir; ; {
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return d
+			wide := d == home || filepath.Dir(d) == d
+			if !wide || d == dir {
+				return d, true
+			}
+			return "", false
 		}
 		p := filepath.Dir(d)
 		if p == d {
-			return dir
+			return "", false
 		}
 		d = p
 	}

@@ -36,7 +36,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.16.0"
+var version = "0.16.1"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -74,8 +74,8 @@ Flags:
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
 
-In a session: /<skill> [task]  /skills  /plan  /go  /undo  /sessions  /resume <n>  /clear  /model <ref>  /mode <m>  /usage  /exit
-Keys: ↑/↓ history · Ctrl-A/E/U/K/W · paste keeps newlines · end a line with \ for a newline
+In a session: /help lists commands and keys (/model /mode /undo /rewind /diff /context /compact /memory /btw …),
+  @file mentions a file, !cmd runs a shell command, Esc stops a turn, Enter during a turn steers it.
 `
 
 func main() {
@@ -676,7 +676,7 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, u.dim("· "+sh))
 		}
 	}
-	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + skill.Prompt(skills)
+	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + selfPrompt(cwd) + skill.Prompt(skills)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
@@ -1158,7 +1158,7 @@ func run(args []string) error {
 				printSkills(skills)
 				continue
 			}
-			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box}); done {
+			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box, mem: mem}); done {
 				return nil
 			}
 			continue
@@ -1183,6 +1183,7 @@ type slashEnv struct {
 	res   *provider.Resolved
 	u     *ui
 	box   string
+	mem   *memCtl
 }
 
 // switchModel points the agent at ref and saves it as the default.
@@ -1403,6 +1404,8 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		a.Note = note
 		_ = sess.Save()
+	case "/memory":
+		showMemory(u, e.mem, strings.Join(f[1:], " "))
 	case "/diff":
 		showDiff(u, sess.Cwd)
 	case "/context":
