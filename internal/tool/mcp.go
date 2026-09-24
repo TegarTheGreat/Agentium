@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/tegarthegreat/agentium/internal/mcp"
 )
 
 // MCPTools wraps the tools of running MCP servers.
+// mcpCallTimeout bounds one MCP tool call.
+var mcpCallTimeout = 10 * time.Minute
+
 func MCPTools(clients []*mcp.Client) []Tool {
 	var out []Tool
 	for _, c := range clients {
@@ -32,7 +36,13 @@ func MCPTools(clients []*mcp.Client) []Tool {
 						}
 					}
 					env.mutate() // MCP tools may change files: checkpoint first
-					res, isErr, err := c.CallTool(ctx, t.Name, args)
+					// A server that hangs must not hang the turn.
+					cctx, cancel := context.WithTimeout(ctx, mcpCallTimeout)
+					defer cancel()
+					res, isErr, err := c.CallTool(cctx, t.Name, args)
+					if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+						return "", fmt.Errorf("the MCP server did not answer within %s", mcpCallTimeout)
+					}
 					if err != nil {
 						return "", err
 					}

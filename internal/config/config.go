@@ -10,6 +10,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/tegarthegreat/agentium/internal/fsx"
 )
 
 // ProviderConf defines or overrides a provider.
@@ -110,19 +113,16 @@ func readJSON(path string, v any) error {
 }
 
 func writeJSON(path string, v any, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, perm); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fsx.WriteFile(path, b, perm)
 }
+
+// lock serializes read-modify-write of Agentium's state files across
+// processes (two sessions, or a session and `agentium login`).
+func lock(path string) func() { return fsx.Lock(path+".lock", 5*time.Second) }
 
 // Load reads config.json; a missing file yields an empty Config.
 func Load() (Config, error) {
@@ -135,9 +135,13 @@ func Load() (Config, error) {
 // leaving every other field, including unknown ones, as written.
 func Set(key string, value any) error {
 	path := filepath.Join(Home(), "config.json")
+	defer lock(path)()
 	m := map[string]json.RawMessage{}
 	if err := readJSON(path, &m); err != nil {
 		return err
+	}
+	if m == nil { // the file holds "null"
+		m = map[string]json.RawMessage{}
 	}
 	if value == nil {
 		delete(m, key)
@@ -185,6 +189,21 @@ func LoadAuth() (Auth, error) {
 // SaveAuth writes auth.json with owner-only permissions.
 func SaveAuth(a Auth) error {
 	return writeJSON(authPath(), a, 0o600)
+}
+
+// UpdateAuth changes auth.json under the cross-process lock, so two
+// processes storing different keys never lose one.
+func UpdateAuth(f func(Auth)) error {
+	defer lock(authPath())()
+	a, err := LoadAuth()
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		a = Auth{}
+	}
+	f(a)
+	return SaveAuth(a)
 }
 
 // ProjectRoot is the top of the git repository containing dir, or dir

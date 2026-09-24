@@ -375,18 +375,12 @@ var providerInfo = []struct{ id, name, keyURL string }{
 
 // saveKey stores a provider key in the OS keychain, else auth.json.
 func saveKey(id, key string) (string, error) {
-	auth, err := config.LoadAuth()
-	if err != nil {
-		return "", err
-	}
 	where := "~/.agentium/auth.json"
+	cred := config.Credential{APIKey: key}
 	if config.KeychainAvailable() && config.KeychainSet(id, key) == nil {
-		auth[id] = config.Credential{Keychain: true}
-		where = "the OS keychain"
-	} else {
-		auth[id] = config.Credential{APIKey: key}
+		cred, where = config.Credential{Keychain: true}, "the OS keychain"
 	}
-	return where, config.SaveAuth(auth)
+	return where, config.UpdateAuth(func(a config.Auth) { a[id] = cred })
 }
 
 // setup walks through choosing a provider, entering its key and picking

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/bench"
@@ -100,18 +101,12 @@ func cmdLogin(args []string) error {
 	if key == "" {
 		return errors.New("empty key")
 	}
-	auth, err := config.LoadAuth()
-	if err != nil {
-		return err
-	}
 	where := config.Home() + "/auth.json"
+	cred := config.Credential{APIKey: key}
 	if !*noKeychain && config.KeychainAvailable() && config.KeychainSet(id, key) == nil {
-		auth[id] = config.Credential{Keychain: true}
-		where = "the OS keychain"
-	} else {
-		auth[id] = config.Credential{APIKey: key}
+		cred, where = config.Credential{Keychain: true}, "the OS keychain"
 	}
-	if err := config.SaveAuth(auth); err != nil {
+	if err := config.UpdateAuth(func(a config.Auth) { a[id] = cred }); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "saved %s credentials to %s\n", id, where)
@@ -122,15 +117,12 @@ func cmdLogout(args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: agentium logout <provider>")
 	}
-	auth, err := config.LoadAuth()
-	if err != nil {
-		return err
-	}
-	if auth[args[0]].Keychain {
-		_ = config.KeychainDelete(args[0])
-	}
-	delete(auth, args[0])
-	return config.SaveAuth(auth)
+	return config.UpdateAuth(func(a config.Auth) {
+		if a[args[0]].Keychain {
+			_ = config.KeychainDelete(args[0])
+		}
+		delete(a, args[0])
+	})
 }
 
 func cmdModels(args []string) error {
@@ -451,9 +443,11 @@ func codeCache(cwd string) string {
 }
 
 // mcpTokens is where OAuth grants for remote MCP servers are kept.
-func mcpTokens() *mcp.TokenStore {
+// mcpTokens is the one token store of this process: its refresh lock
+// must be shared by every server and call.
+var mcpTokens = sync.OnceValue(func() *mcp.TokenStore {
 	return &mcp.TokenStore{Path: filepath.Join(config.Home(), "mcp-auth.json")}
-}
+})
 
 // cmdMCP: agentium mcp [list | login <name> | logout <name>].
 func cmdMCP(args []string) error {

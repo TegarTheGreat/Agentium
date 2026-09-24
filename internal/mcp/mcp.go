@@ -68,10 +68,12 @@ type Client struct {
 
 type response struct {
 	Result json.RawMessage `json:"result"`
-	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
+	Error  *rpcError       `json:"error"`
+}
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
 type message struct {
@@ -198,6 +200,17 @@ func (c *Client) dispatch(raw []byte) {
 		if ch != nil {
 			ch <- m.response
 		}
+	}
+}
+
+// fail ends one pending call with an error (its reply will not come).
+func (c *Client) fail(id int64, why string) {
+	c.mu.Lock()
+	ch := c.wait[id]
+	delete(c.wait, id)
+	c.mu.Unlock()
+	if ch != nil {
+		ch <- response{Error: &rpcError{Code: -32000, Message: why}}
 	}
 }
 

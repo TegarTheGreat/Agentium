@@ -83,6 +83,10 @@ func (t *httpTransport) send(ctx context.Context, b []byte) error {
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		// The reply (and maybe server requests before it) arrive as SSE
 		// events; read them in the background, the caller waits by id.
+		var req struct {
+			ID *int64 `json:"id"`
+		}
+		_ = json.Unmarshal(b, &req)
 		go func() {
 			defer resp.Body.Close()
 			readSSE(resp.Body, func(event, data string) bool {
@@ -91,6 +95,11 @@ func (t *httpTransport) send(ctx context.Context, b []byte) error {
 				}
 				return true
 			})
+			// The stream ended; if it never carried the reply (server
+			// crash, proxy reset), the caller must not wait forever.
+			if req.ID != nil {
+				t.c.fail(*req.ID, "the server closed the stream without replying")
+			}
 		}()
 		return nil
 	}
@@ -132,6 +141,11 @@ func (t *httpTransport) close() {
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
 	}
+	if t.tokens != nil && req.Header.Get("Authorization") == "" {
+		if tok, err := t.tokens.Token(ctx, t.url); err == nil {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+	}
 	if resp, err := httpClient.Do(req); err == nil {
 		resp.Body.Close()
 	}
@@ -142,6 +156,8 @@ func (t *httpTransport) close() {
 // every reply arrives on the stream.
 type sseTransport struct {
 	endpoint string
+	url      string
+	tokens   *TokenStore
 	headers  map[string]string
 	body     io.ReadCloser
 	cancel   context.CancelFunc
@@ -159,6 +175,11 @@ func startSSE(ctx context.Context, c *Client, cfg Config) (*sseTransport, error)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	if cfg.Tokens != nil && req.Header.Get("Authorization") == "" {
+		if tok, err := cfg.Tokens.Token(ctx, cfg.URL); err == nil {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		cancel()
@@ -169,7 +190,7 @@ func startSSE(ctx context.Context, c *Client, cfg Config) (*sseTransport, error)
 		cancel()
 		return nil, fmt.Errorf("HTTP %d opening the SSE stream", resp.StatusCode)
 	}
-	t := &sseTransport{headers: headers, body: resp.Body, cancel: cancel}
+	t := &sseTransport{url: cfg.URL, tokens: cfg.Tokens, headers: headers, body: resp.Body, cancel: cancel}
 	endpoint := make(chan string, 1)
 	go func() {
 		readSSE(resp.Body, func(event, data string) bool {
@@ -210,6 +231,11 @@ func (t *sseTransport) send(ctx context.Context, b []byte) error {
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
+	}
+	if t.tokens != nil && req.Header.Get("Authorization") == "" {
+		if tok, err := t.tokens.Token(ctx, t.url); err == nil {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {

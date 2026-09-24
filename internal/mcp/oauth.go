@@ -7,6 +7,8 @@ package mcp
 // browser, and keeps the tokens, refreshing them when they expire.
 
 import (
+	"github.com/tegarthegreat/agentium/internal/fsx"
+
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -19,7 +21,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -40,56 +41,79 @@ type Grant struct {
 	Expiry        time.Time `json:"expiry,omitempty"`
 }
 
-// TokenStore keeps grants in a 0600 JSON file, keyed by server URL.
+// TokenStore keeps grants in a 0600 JSON file, keyed by server URL. The
+// file is changed only under a cross-process lock, and a refresh happens
+// once per server even when calls race (a refresh token may be single
+// use, and reusing one can revoke the whole grant).
 type TokenStore struct {
 	Path string
-	mu   sync.Mutex
+	mu   sync.Mutex // guards refreshing
 }
 
-func (s *TokenStore) load() map[string]*Grant {
+func (s *TokenStore) lock() func() { return fsx.Lock(s.Path+".lock", 10*time.Second) }
+
+// load reads the grants; a file that does not parse is an error, so it
+// is never overwritten with an empty set.
+func (s *TokenStore) load() (map[string]*Grant, error) {
 	m := map[string]*Grant{}
-	if b, err := os.ReadFile(s.Path); err == nil {
-		json.Unmarshal(b, &m)
+	b, err := os.ReadFile(s.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return m, nil
 	}
-	return m
-}
-
-func (s *TokenStore) save(m map[string]*Grant) error {
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
-		return err
+	if err != nil {
+		return nil, err
 	}
-	b, _ := json.MarshalIndent(m, "", "  ")
-	tmp := s.Path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("%s is not valid JSON (fix or delete it): %w", s.Path, err)
 	}
-	return os.Rename(tmp, s.Path)
+	if m == nil {
+		m = map[string]*Grant{}
+	}
+	return m, nil
 }
 
 // Get returns the stored grant for a server, if any.
 func (s *TokenStore) Get(serverURL string) *Grant {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.load()[serverURL]
+	m, err := s.load()
+	if err != nil {
+		return nil
+	}
+	return m[serverURL]
 }
 
 // Put stores (or, with nil, removes) a grant.
 func (s *TokenStore) Put(serverURL string, g *Grant) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	m := s.load()
+	defer s.lock()()
+	m, err := s.load()
+	if err != nil {
+		return err
+	}
 	if g == nil {
 		delete(m, serverURL)
 	} else {
 		m[serverURL] = g
 	}
-	return s.save(m)
+	b, _ := json.MarshalIndent(m, "", "  ")
+	return fsx.WriteFile(s.Path, b, 0o600)
 }
 
 // Token returns a valid access token for serverURL, refreshing it when it
 // is about to expire. ErrLoginRequired when there is none.
 func (s *TokenStore) Token(ctx context.Context, serverURL string) (string, error) {
 	g := s.Get(serverURL)
+	if g == nil || g.AccessToken == "" {
+		return "", ErrLoginRequired
+	}
+	if g.Expiry.IsZero() || time.Until(g.Expiry) > time.Minute {
+		return g.AccessToken, nil
+	}
+	// One refresh at a time, across goroutines and processes; whoever
+	// waited re-reads the grant, which another refresher may have renewed.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock := fsx.Lock(s.Path+".refresh.lock", 30*time.Second)
+	defer unlock()
+	g = s.Get(serverURL)
 	if g == nil || g.AccessToken == "" {
 		return "", ErrLoginRequired
 	}
@@ -112,7 +136,9 @@ func (s *TokenStore) Token(ctx context.Context, serverURL string) (string, error
 		g.RefreshToken = tok.RefreshToken
 	}
 	g.Expiry = tok.expiry()
-	_ = s.Put(serverURL, g)
+	if err := s.Put(serverURL, g); err != nil {
+		return "", err
+	}
 	return g.AccessToken, nil
 }
 
