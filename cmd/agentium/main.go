@@ -34,7 +34,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.13.0"
+var version = "0.14.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -208,8 +208,10 @@ type ui struct {
 	// starts after a blank line.
 	afterTool bool
 	held      []string // lines printed while an approval prompt waited
-	lastKey   string   // the last tool line, for collapsing repeats
-	lastCount int
+	// approvalWait is the total time spent waiting on approval prompts.
+	approvalWait time.Duration
+	lastKey      string // the last tool line, for collapsing repeats
+	lastCount    int
 
 	// Type-ahead while a turn runs (see typeahead.go).
 	keys   chan string

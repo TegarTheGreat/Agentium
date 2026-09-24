@@ -608,9 +608,11 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
 		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no ›"))
 	u.mu.Unlock()
+	asked := time.Now()
 	defer func() {
 		u.mu.Lock()
 		u.paused = false
+		u.approvalWait += time.Since(asked)
 		held := u.held
 		u.held = nil
 		for _, l := range held {

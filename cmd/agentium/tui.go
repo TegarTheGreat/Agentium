@@ -41,6 +41,7 @@ var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 
 // liveTool is a tool call in progress.
 type liveTool struct {
+	waited  time.Duration // approval waiting already counted at start
 	call    provider.ToolCall
 	name    string
 	detail  string
@@ -232,7 +233,7 @@ func (u *ui) toolStart(c provider.ToolCall) {
 	u.clearLive()
 	u.endLine()
 	u.thinking = false
-	u.tools = append(u.tools, &liveTool{call: c, name: toolLabel(c.Name), detail: u.detail(c), start: time.Now()})
+	u.tools = append(u.tools, &liveTool{call: c, name: toolLabel(c.Name), detail: u.detail(c), start: time.Now(), waited: u.approvalWait})
 	u.drawLive()
 }
 
@@ -254,6 +255,10 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 	defer u.mu.Unlock()
 	for i, t := range u.tools {
 		if t.call.ID == c.ID {
+			// Time spent waiting for the user's approval is not the step's.
+			if d -= u.approvalWait - t.waited; d < 0 {
+				d = 0
+			}
 			u.tools = append(u.tools[:i], u.tools[i+1:]...)
 			break
 		}
