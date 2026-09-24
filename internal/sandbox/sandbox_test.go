@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -201,11 +202,14 @@ func TestNetworkEscapesDenied(t *testing.T) {
 	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
 	work, _ := filepath.EvalSymlinks(t.TempDir())
 	box := Config{Write: []string{work, "/dev"}}
-	for name, py := range map[string]string{
+	cases := map[string]string{
 		"fast open": `s=socket.socket(); s.sendto(b'TFO-LEAK', 0x20000000, ('127.0.0.1',` + port + `))`,
 		"mptcp":     `s=socket.socket(socket.AF_INET, socket.SOCK_STREAM, 262); s.connect(('127.0.0.1',` + port + `)); s.send(b'MPTCP-LEAK')`,
-		"packet":    `socket.socket(17, socket.SOCK_RAW, 0)`,
-	} {
+	}
+	if runtime.GOOS == "linux" { // 17 is AF_PACKET on Linux (AF_ROUTE on macOS)
+		cases["packet"] = `socket.socket(17, socket.SOCK_RAW, 0)`
+	}
+	for name, py := range cases {
 		out, _ := run(t, work, `python3 -c "import socket
 try:
     `+py+`
