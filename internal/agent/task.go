@@ -70,7 +70,14 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 		MaxTurns: subMaxTurns, MaxTokens: a.MaxTokens, MaxOutput: a.MaxOutput, ContextTokens: a.ContextTokens, ContextChars: a.ContextChars,
 		Fast: a.Fast, FastModel: a.FastModel, Verify: !explore, Reasoning: a.Reasoning, FastMode: a.FastMode,
 		Cost: a.Cost, depth: a.depth + 1,
-		Events: Events{Notice: a.Events.Notice, ToolStart: a.Events.SubToolStart, Retry: a.Events.Retry},
+		Events: Events{Notice: a.Events.Notice, Retry: a.Events.Retry, ToolStart: func(c provider.ToolCall) {
+			if a.Events.SubToolStart != nil {
+				a.Events.SubToolStart(c)
+			}
+			if a.Events.SubAgentTool != nil {
+				a.Events.SubAgentTool(prompt, c)
+			}
+		}},
 	}
 	if a.MaxCost > 0 {
 		a.mu.Lock()

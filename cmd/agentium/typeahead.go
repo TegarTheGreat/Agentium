@@ -54,6 +54,9 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 			if err != nil {
 				return
 			}
+			if scrollKey(k) {
+				continue
+			}
 			u.mu.Lock()
 			if u.paused { // an approval prompt is waiting for this key
 				u.mu.Unlock()
@@ -128,13 +131,22 @@ func (u *ui) nextKey() (string, error) {
 	keys := u.keys
 	u.mu.Unlock()
 	if keys != nil {
-		k, ok := <-keys
-		if !ok {
-			return "", errors.New("terminal input closed")
+		for {
+			k, ok := <-keys
+			if !ok {
+				return "", errors.New("terminal input closed")
+			}
+			if !scrollKey(k) {
+				return k, nil
+			}
 		}
-		return k, nil
 	}
-	return readKey()
+	for {
+		k, err := readKey()
+		if err != nil || !scrollKey(k) {
+			return k, err
+		}
+	}
 }
 
 // takeQueued returns the next message typed during the last turn (one
@@ -165,7 +177,7 @@ func (u *ui) typeaheadLines(width int) []string {
 			t = t[size:]
 		}
 		lines = append(lines, u.paint(cCyan, "❯ ")+t+u.paint(cDim, "▏"))
-	} else if len(u.queued) == 0 && u.keys != nil {
+	} else if len(u.queued) == 0 && u.keys != nil && activeFS() == nil { // full screen: in the status bar
 		lines = append(lines, u.paint(cDim, "  type to queue a message · Ctrl-C to interrupt"))
 	}
 	return lines

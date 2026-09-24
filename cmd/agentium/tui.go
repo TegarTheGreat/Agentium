@@ -202,7 +202,45 @@ func (u *ui) permanent(s string) {
 	u.drawLive()
 }
 
+// inOffice updates the pixel office of the full-screen UI, if shown.
+func (u *ui) inOffice(fn func(o *office)) {
+	if f := activeFS(); f != nil {
+		fn(f.office)
+	}
+}
+
+// taskArgs returns a task call's prompt (which names the sub-agent) and
+// its short title.
+func taskArgs(c provider.ToolCall) (prompt, title string) {
+	var m struct{ Prompt, Title string }
+	_ = jsonUnmarshal(c.Args, &m)
+	title = m.Title
+	if title == "" {
+		title = firstLine(m.Prompt)
+	}
+	return m.Prompt, title
+}
+
+// officeTool shows a tool starting in the office.
+func (u *ui) officeTool(c provider.ToolCall) {
+	u.inOffice(func(o *office) {
+		if c.Name == "task" {
+			prompt, title := taskArgs(c)
+			o.hire(prompt, title)
+			o.setLead(actDelegate, title)
+			return
+		}
+		o.setLead(actFor(c.Name), u.detail(c))
+	})
+}
+
+// subAgentTool shows a sub-agent's tool call at its desk.
+func (u *ui) subAgentTool(task string, c provider.ToolCall) {
+	u.inOffice(func(o *office) { o.staffDo(task, actFor(c.Name), u.detail(c)) })
+}
+
 func (u *ui) beginTurn() {
+	u.inOffice(func(o *office) { o.setLead(actThink, "") })
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.lastKey, u.afterTool = "", false
@@ -212,6 +250,7 @@ func (u *ui) beginTurn() {
 }
 
 func (u *ui) endTurn() {
+	u.inOffice(func(o *office) { o.setLead(actDone, "") })
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.clearLive()
@@ -224,10 +263,12 @@ func (u *ui) think() {
 	defer u.mu.Unlock()
 	if u.live && !u.thinking && len(u.tools) == 0 {
 		u.thinking, u.thinkT = true, time.Now()
+		u.inOffice(func(o *office) { o.setLead(actThink, "") })
 	}
 }
 
 func (u *ui) toolStart(c provider.ToolCall) {
+	u.officeTool(c)
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.clearLive()
@@ -307,8 +348,23 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 		}
 	}
 	u.afterTool = true
+	if c.Name == "task" {
+		prompt, _ := taskArgs(c)
+		u.inOffice(func(o *office) { o.dismiss(prompt, fail == "") })
+	}
 	if len(u.tools) == 0 {
 		u.thinking, u.thinkT = true, time.Now()
+		u.inOffice(func(o *office) { o.setLead(actThink, "") })
+	} else {
+		last := u.tools[len(u.tools)-1].call
+		u.inOffice(func(o *office) {
+			if last.Name == "task" {
+				_, title := taskArgs(last)
+				o.setLead(actDelegate, title)
+			} else {
+				o.setLead(actFor(last.Name), u.detail(last))
+			}
+		})
 	}
 }
 

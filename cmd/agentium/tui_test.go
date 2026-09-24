@@ -82,3 +82,39 @@ func TestAlwaysScopeRiskyIsExact(t *testing.T) {
 		t.Fatalf("risky command scoped too wide: %q", k)
 	}
 }
+
+func TestBubbleWordWrap(t *testing.T) {
+	got := wordWrap("Use the task tool twice in parallel: one sub-agent creates hello.py", 20)
+	for _, r := range got {
+		if strWidth(r) > 20 {
+			t.Fatalf("row too wide: %q", r)
+		}
+	}
+	if strings.Join(got, " ") != "Use the task tool twice in parallel: one sub-agent creates hello.py" {
+		t.Fatalf("words lost or split: %q", got)
+	}
+	if got := wordWrap(strings.Repeat("x", 25), 10); len(got) != 3 || got[0] != strings.Repeat("x", 10) {
+		t.Fatalf("long word: %q", got)
+	}
+}
+
+func TestVtermBasics(t *testing.T) {
+	v := newVterm(20)
+	v.Write([]byte("hello\r\nworld\x1b[1A\r\x1b[2Kbye\n\x1b[31mred\x1b[0m"))
+	if v.plain(0) != "bye" || v.plain(1) != "redld" || v.end() != 2 { // "red" overwrites "wor"
+		t.Fatalf("got %q %q end=%d", v.plain(0), v.plain(1), v.end())
+	}
+	if !strings.Contains(v.render(1, 20), "\x1b[0;31mred") {
+		t.Fatalf("color lost: %q", v.render(1, 20))
+	}
+	v.Write([]byte("\r\n" + strings.Repeat("ab", 12))) // wraps at 20
+	if v.plain(2) != strings.Repeat("ab", 10) || v.plain(3) != "abab" {
+		t.Fatalf("wrap: %q %q", v.plain(2), v.plain(3))
+	}
+	v.Write([]byte("\x1b[3")) // split escape sequence
+	v.Write([]byte("2mG\xe4"))
+	v.Write([]byte("\xb8\xad"))
+	if v.plain(3) != "ababG中" {
+		t.Fatalf("split sequences: %q", v.plain(3))
+	}
+}

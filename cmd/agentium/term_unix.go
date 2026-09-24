@@ -5,6 +5,7 @@ package main
 import (
 	"io"
 	"os"
+	"os/signal"
 	"syscall"
 	"unsafe"
 )
@@ -50,6 +51,9 @@ func makeRawOS(f *os.File) (func(), error) {
 }
 
 func termWidth(f *os.File) int {
+	if fs := activeFS(); fs != nil && f == fs.pw {
+		return fs.width()
+	}
 	var ws struct{ Row, Col, X, Y uint16 }
 	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
 	if e != 0 || ws.Col == 0 {
@@ -60,6 +64,9 @@ func termWidth(f *os.File) int {
 
 // termRows is the terminal height (24 when unknown).
 func termRows(f *os.File) int {
+	if fs := activeFS(); fs != nil && f == fs.pw {
+		return fs.height()
+	}
 	var ws struct{ Row, Col, X, Y uint16 }
 	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
 	if e != 0 || ws.Row == 0 {
@@ -69,3 +76,23 @@ func termRows(f *os.File) int {
 }
 
 const lineEditing = true
+
+// noEcho stops the terminal from echoing keys and buffering lines, but
+// keeps Ctrl-C as a signal (the full-screen UI's resting state).
+func noEcho(f *os.File) (func(), error) {
+	fd := f.Fd()
+	old, err := tcget(fd)
+	if err != nil {
+		return nil, err
+	}
+	t := old
+	t.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON
+	t.Cc[syscall.VMIN] = 1
+	t.Cc[syscall.VTIME] = 0
+	if err := tcset(fd, &t); err != nil {
+		return nil, err
+	}
+	return func() { _ = tcset(fd, &old) }, nil
+}
+
+func notifyResize(ch chan os.Signal) { signal.Notify(ch, syscall.SIGWINCH) }

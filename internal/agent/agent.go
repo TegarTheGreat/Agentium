@@ -27,6 +27,8 @@ type Events struct {
 	Notice func(msg string)
 	// SubToolStart observes tool calls made by sub-agents.
 	SubToolStart func(call provider.ToolCall)
+	// SubAgentTool also names the sub-agent: its task prompt.
+	SubAgentTool func(task string, c provider.ToolCall)
 	// ToolOutput receives a running command's output as it arrives.
 	ToolOutput func(call provider.ToolCall, chunk []byte)
 }

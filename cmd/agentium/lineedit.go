@@ -70,6 +70,10 @@ type editor struct {
 	pos    int
 	prompt string
 	draft  []rune // text to start with (typed during the last turn)
+	// echo, if set, renders a submitted input for the transcript.
+	echo func(line string) string
+	// placeholder is shown dimmed while the input is empty.
+	placeholder string
 }
 
 // key reads one input event (a rune or an escape sequence).
@@ -96,7 +100,7 @@ func (e *editor) key() (string, error) {
 	if !inputReady(e.in, 40*time.Millisecond) {
 		return "\x1b", nil // Esc on its own
 	}
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 32; i++ { // SGR mouse reports run long
 		if _, err := e.in.Read(b[:]); err != nil {
 			return string(seq), nil
 		}
@@ -145,6 +149,14 @@ func (e *editor) render(width int) {
 		cursor += runeWidth(r)
 	}
 	var sb strings.Builder
+	if len(e.buf) == 0 && e.placeholder != "" {
+		sb.WriteString("\r" + e.prompt + "\x1b[2m" + truncate(e.placeholder, avail) + "\x1b[0m\x1b[K\r")
+		if promptW > 0 {
+			sb.WriteString("\x1b[" + itoa(promptW) + "C")
+		}
+		e.out.WriteString(sb.String())
+		return
+	}
 	sb.WriteString("\r" + e.prompt + string(display[start:end]) + "\x1b[K")
 	sb.WriteString("\r")
 	if cursor > 0 {
@@ -237,6 +249,10 @@ func (e *editor) readLine() (string, error) {
 	defer restore()
 	e.out.WriteString("\x1b[?2004h") // bracketed paste on
 	defer e.out.WriteString("\x1b[?2004l")
+	if f := activeFS(); f != nil {
+		f.setInput(true)
+		defer f.setInput(false)
+	}
 	e.buf, e.pos = e.draft, len(e.draft)
 	e.draft = nil
 	hi := len(e.hist.items)
@@ -270,6 +286,9 @@ func (e *editor) readLine() (string, error) {
 			e.render(width)
 			continue
 		}
+		if scrollKey(k) {
+			continue
+		}
 		switch k {
 		case "\x1b[200~":
 			pasting = true
@@ -281,8 +300,12 @@ func (e *editor) readLine() (string, error) {
 				break
 			}
 			line := string(e.buf)
-			// Replace the scrolled one-row view with the whole input.
-			e.out.WriteString("\r\x1b[K" + e.prompt + strings.ReplaceAll(line, "\n", "\r\n  ") + "\r\n")
+			if e.echo != nil {
+				e.out.WriteString("\r\x1b[K" + e.echo(line))
+			} else {
+				// Replace the scrolled one-row view with the whole input.
+				e.out.WriteString("\r\x1b[K" + e.prompt + strings.ReplaceAll(line, "\n", "\r\n  ") + "\r\n")
+			}
 			e.hist.add(line)
 			return line, nil
 		case "\x03": // Ctrl-C
@@ -348,7 +371,11 @@ func (e *editor) readLine() (string, error) {
 			}
 			e.buf, e.pos = append(e.buf[:i], e.buf[e.pos:]...), i
 		case "\x0c": // Ctrl-L
-			e.out.WriteString("\x1b[H\x1b[2J")
+			if f := activeFS(); f != nil {
+				f.redraw()
+			} else {
+				e.out.WriteString("\x1b[H\x1b[2J")
+			}
 		case "\x1b[A", "\x10": // Up
 			if hi > 0 {
 				if hi == len(e.hist.items) {

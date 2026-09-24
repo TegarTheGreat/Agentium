@@ -105,10 +105,21 @@ On first run Agentium asks for a provider and key, then saves them. Environment 
 
 ### Interactive session
 
+On Linux and macOS, `agentium` opens a full-screen chat:
+
+- **Header:** the model, mode and folder.
+- **Office:** a small pixel-art strip where Agentium visibly works at its desk. It reads a document, types, watches a terminal, browses, or hands a folder to a sub-agent, who appears as a staff member at their own desk.
+- **Conversation:** your messages as bubbles, and the replies with every step.
+- **Input box and status bar:** at the bottom.
+
+The animation runs at 4 frames per second and redraws only what changed. On exit, the conversation is printed to the terminal, so it stays in the scrollback.
+
+The screen needs a terminal of at least 50×16, and the office appears from 60×24. Use `agentium --classic` (or `"ui": "classic"` in the config) for the inline interface; Windows always uses it.
+
 | | |
 |---|---|
-| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/exit` |
-| **Keys** | ↑/↓ history · Ctrl-A/E/U/K/W · pastes keep their newlines · end a line with `\` for a newline · Ctrl-C interrupts a running turn · typing during a turn queues a message |
+| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/update` `/exit` |
+| **Keys** | ↑/↓ history · Ctrl-A/E/U/K/W · pastes keep their newlines · end a line with `\` for a newline · Ctrl-C interrupts a running turn · typing during a turn queues a message · PgUp/PgDn or the mouse wheel scroll · Shift+drag selects text |
 
 ### Subcommands
 
@@ -163,6 +174,7 @@ Subscription logins are offered only where the provider's terms allow third-part
   "fallback": ["openrouter/anthropic/claude-sonnet-5"],
   "effort": "high",
   "mode": "auto",
+  "ui": "fullscreen",
   "sandbox": { "network": "ask", "write": ["~/data"] },
   "hooks": { "post_edit": ["gofmt -w {path}"], "stop": ["notify-send agentium done"] },
   "mcp": {
@@ -295,7 +307,7 @@ make cross   # binaries for Linux, macOS and Windows in dist/
 
 Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
 
-> **Status:** v0.14.2. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
+> **Status:** v0.15.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
 
 ## License
 

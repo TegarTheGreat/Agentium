@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"os/signal"
@@ -34,7 +35,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.14.2"
+var version = "0.15.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -64,6 +65,7 @@ Flags:
   --plan              plan mode: read-only investigation that ends in a plan (same as --mode plan)
   --no-sandbox        run shell commands unconfined
   --effort LEVEL      reasoning effort: low|medium|high|xhigh|max (model default if unset)
+  --classic           inline terminal UI instead of the full-screen one (config: "ui": "classic")
   --fast              provider fast mode where available (Claude Opus: up to 2.5x output speed)
   -q                  quiet: no tool lines or stats
   --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
@@ -157,6 +159,9 @@ func exitCode(err error) int {
 }
 
 func isTTY(f *os.File) bool {
+	if fs := activeFS(); fs != nil && f == fs.pw {
+		return true
+	}
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
 }
@@ -468,6 +473,7 @@ func run(args []string) error {
 	bestOf := fs.Int("best-of", 0, "")
 	check := fs.String("check", "", "")
 	fast := fs.Bool("fast", false, "")
+	classic := fs.Bool("classic", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -553,6 +559,12 @@ func run(args []string) error {
 	}
 	if *asJSON {
 		*quiet = true
+	}
+	var screen *fullscreen
+	if *prompt == "" && !*asJSON && !*quiet && *bestOf <= 1 && fullscreenWanted(*classic || strings.EqualFold(cfg.UI, "classic")) {
+		if screen, err = enterFullscreen(); err == nil {
+			defer screen.leave()
+		}
 	}
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
 	u.live = isTTY(os.Stderr) && !*quiet && os.Getenv("TERM") != "dumb"
@@ -743,6 +755,7 @@ func run(args []string) error {
 		a.Events.ToolDone = u.toolDone
 		a.Events.ToolOutput = u.toolOutput
 		a.Events.Notice = func(msg string) { u.line("· " + msg); u.think() }
+		a.Events.SubAgentTool = u.subAgentTool
 		u.startTicker()
 	}
 
@@ -770,6 +783,9 @@ func run(args []string) error {
 	}()
 
 	interactive := false // type-ahead only where queued input gets sent
+	// Session totals for the full-screen status bar.
+	var totalTok atomic.Int64
+	var totalCost atomic.Uint64 // float64 bits
 	turn := func(input string) error {
 		curPrompt = input
 		replies, edited = nil, nil
@@ -802,6 +818,8 @@ func run(args []string) error {
 		}
 		checkpoints := len(sess.Checkpoints)
 		st, err := a.Run(ctx, send)
+		totalTok.Store(int64(a.Usage.Input + a.Usage.CacheRead + a.Usage.CacheWrite + a.Usage.Output))
+		totalCost.Store(math.Float64bits(a.Spent))
 		stopTyping()
 		u.endTurn()
 		if store != nil && len(sess.Checkpoints) > checkpoints {
@@ -905,7 +923,34 @@ func run(args []string) error {
 	if a.Env.Sandbox != nil {
 		box = "sandboxed"
 	}
-	if u.live {
+	if screen != nil {
+		a.Events.TurnFinish = func(prev func(provider.Response)) func(provider.Response) {
+			return func(r provider.Response) {
+				if prev != nil {
+					prev(r)
+				}
+				// Sub-agents add their usage only between these calls.
+				totalTok.Store(int64(a.Usage.Input + a.Usage.CacheRead + a.Usage.CacheWrite + a.Usage.Output))
+				totalCost.Store(math.Float64bits(a.Spent))
+			}
+		}(a.Events.TurnFinish)
+		screen.mu.Lock()
+		screen.header = func() string {
+			return sess.Model + " · " + string(gate.GetMode()) + " · " + box + " · " + shortPath(cwd)
+		}
+		screen.status = func() string {
+			s := fmtK(int(totalTok.Load())) + " tokens"
+			if c := math.Float64frombits(totalCost.Load()); c > 0 {
+				s += fmt.Sprintf(" · $%.4f", c)
+			}
+			return s
+		}
+		screen.mu.Unlock()
+		u.welcome(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)
+		if v := updateNotice(); v != "" {
+			u.note(u.paint(cYellow, "agentium "+v+" is available") + u.paint(cDim, " · type /update"))
+		}
+	} else if u.live {
 		u.banner(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)
 		if v := updateNotice(); v != "" {
 			u.note(u.paint(cYellow, "agentium "+v+" is available") + u.paint(cDim, " · run `agentium update`"))
@@ -923,6 +968,10 @@ func run(args []string) error {
 	var ed *editor
 	if lineEditing && isTTY(os.Stderr) {
 		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
+		if screen != nil {
+			ed.echo = u.userMessage
+			ed.placeholder = "Message Agentium…  (/ for commands)"
+		}
 	}
 	// afterPlan is the mode /go switches to.
 	afterPlan := policy.Auto
@@ -943,7 +992,11 @@ func run(args []string) error {
 		if queued {
 			// A message typed while the last turn ran.
 			line = next
-			fmt.Fprintln(os.Stderr, "\n"+ps+line)
+			if screen != nil {
+				os.Stderr.WriteString("\n" + u.userMessage(line))
+			} else {
+				fmt.Fprintln(os.Stderr, "\n"+ps+line)
+			}
 			if ed != nil {
 				ed.hist.add(line)
 			}

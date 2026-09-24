@@ -20,3 +20,7 @@ const lineEditing = false
 func inputReady(*os.File, time.Duration) bool { return true }
 
 func termRows(*os.File) int { return 24 }
+
+func noEcho(*os.File) (func(), error) { return nil, errors.New("not supported") }
+
+func notifyResize(chan os.Signal) {}

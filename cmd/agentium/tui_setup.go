@@ -131,6 +131,9 @@ func (u *ui) help() {
 	sb.WriteString("\n" + u.paint(cBold, "Keys") + "\n")
 	sb.WriteString(u.paint(cDim, "  ↑/↓ history · Ctrl-A/E start/end · Ctrl-U/K/W delete · end a line with \\ for a newline\n"))
 	sb.WriteString(u.paint(cDim, "  @file.png attaches an image · Ctrl-C interrupts a running turn\n"))
+	if activeFS() != nil {
+		sb.WriteString(u.paint(cDim, "  PgUp/PgDn or the mouse wheel scroll · Shift+drag selects text · agentium --classic for the inline UI\n"))
+	}
 	os.Stderr.WriteString(sb.String())
 }
 
@@ -609,8 +612,10 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
 		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no ›"))
 	u.mu.Unlock()
+	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	asked := time.Now()
 	defer func() {
+		u.inOffice(func(o *office) { o.setLead(actThink, "") })
 		u.mu.Lock()
 		u.paused = false
 		u.approvalWait += time.Since(asked)

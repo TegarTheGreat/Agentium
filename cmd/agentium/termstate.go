@@ -22,6 +22,9 @@ func setTermRestore(f func()) {
 
 // restoreTerm undoes raw mode and shows the cursor again.
 func restoreTerm() {
+	if fs := activeFS(); fs != nil {
+		fs.leave()
+	}
 	termMu.Lock()
 	f := termRestore
 	termRestore = nil

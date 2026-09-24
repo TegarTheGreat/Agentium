@@ -2,6 +2,33 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-09-25
+
+### Added
+
+- **A full-screen chat interface (Linux and macOS).** The screen has:
+  - a header;
+  - your messages as bubbles, and the replies with every step;
+  - an input box that stays at the bottom;
+  - a status bar with the session's tokens and cost.
+
+  Scroll back with PgUp/PgDn or the mouse wheel. On exit, the conversation is printed to the terminal. `--classic` (or `"ui": "classic"`) keeps the inline interface.
+- **The office.** A small pixel-art strip shows what Agentium is doing:
+  - reading a document;
+  - typing code;
+  - watching a terminal;
+  - browsing;
+  - planning on a clipboard;
+  - raising a "?" when it needs your answer.
+
+  Each sub-agent walks in as a staff member at their own desk and shows its own work. The strip animates at 4 frames per second and redraws only what changed.
+- **Sub-agent tasks take a short title,** shown instead of the start of the prompt.
+
+### Fixed
+
+- **Sub-agents that run out of steps still report.** Before, a sub-agent that hit its limit returned nothing, and its work was invisible to the main agent. It is now asked for a report of what is done and what is left. The limit is also higher: 60 steps, up from 40.
+- **`agentium update` retries** network errors and server errors (such as 502) before giving up.
+
 ## [0.14.2] - 2026-09-24
 
 ### Added

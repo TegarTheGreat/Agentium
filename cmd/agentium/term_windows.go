@@ -96,3 +96,7 @@ func termRows(f *os.File) int {
 	}
 	return int(info.Bottom-info.Top) + 1
 }
+
+func noEcho(*os.File) (func(), error) { return nil, errors.New("not supported") }
+
+func notifyResize(chan os.Signal) {}
