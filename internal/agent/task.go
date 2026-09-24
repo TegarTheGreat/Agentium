@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	subMaxTurns  = 40
+	subMaxTurns  = 60
 	subReportMax = 6000
 )
 
@@ -28,8 +28,8 @@ func (a *Agent) TaskTool() tool.Tool {
 	return tool.Tool{
 		Def: provider.ToolDef{
 			Name:        "task",
-			Description: "Delegate a self-contained subtask (broad investigation, or a well-specified change) to a sub-agent with a fresh context; returns a short report. Calls in one turn run in parallel. explore=true: read-only.",
-			Schema:      json.RawMessage(`{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"explore":{"type":"boolean"}}}`),
+			Description: "Delegate a self-contained subtask (broad investigation, or a well-specified change) to a sub-agent with a fresh context; returns a short report. Calls in one turn run in parallel. explore=true: read-only. title: a 3-6 word label shown to the user.",
+			Schema:      json.RawMessage(`{"type":"object","required":["prompt"],"properties":{"title":{"type":"string"},"prompt":{"type":"string"},"explore":{"type":"boolean"}}}`),
 		},
 		Run: func(ctx context.Context, env *tool.Env, raw json.RawMessage) (string, error) {
 			var in struct {
@@ -78,6 +78,14 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 		a.mu.Unlock()
 	}
 	_, err := sub.Run(ctx, subBrief+prompt)
+	if (errors.Is(err, ErrMaxTurns) || errors.Is(err, ErrStuck)) && ctx.Err() == nil {
+		// Out of steps: the work done so far is only useful with a report,
+		// so ask for one. Tools stay declared (the history holds tool
+		// calls and the prompt cache is reused) but no longer run.
+		sub.MaxTurns, sub.Verify = 1, false
+		sub.Tools = refuseAll(sub.Tools)
+		sub.Run(ctx, "[agentium] You have used all your steps. Do not call tools. Reply now with your report: what is done (exact paths), what is verified, what is left undone and how to finish it.")
+	}
 	a.mu.Lock()
 	a.Usage.Add(sub.Usage)
 	a.Spent += sub.Spent
@@ -99,6 +107,17 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 		report += "\n[sub-agent stopped early: " + err.Error() + "]"
 	}
 	return fmt.Sprintf("[sub-agent: %d turns, %s]\n%s", sub.Turns, pickMode(explore), report), nil
+}
+
+// refuseAll keeps the tools' definitions but makes every call fail.
+func refuseAll(tools []tool.Tool) []tool.Tool {
+	out := make([]tool.Tool, len(tools))
+	for i, t := range tools {
+		out[i] = tool.Tool{Def: t.Def, Run: func(context.Context, *tool.Env, json.RawMessage) (string, error) {
+			return "", errors.New("not run: step limit reached; write your report instead")
+		}}
+	}
+	return out
 }
 
 func pickMode(explore bool) string {

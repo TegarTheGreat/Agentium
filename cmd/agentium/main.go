@@ -291,7 +291,7 @@ func summarizeCall(c provider.ToolCall) string {
 		}
 		return ""
 	}
-	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "prompt")
+	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "title", "prompt")
 	if j, ok := m["job"].(float64); ok {
 		s = fmt.Sprintf("job %d", int(j))
 		if pick("stdin") != "" {

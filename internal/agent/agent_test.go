@@ -715,3 +715,40 @@ func TestKeepRawBlocksOnTruncation(t *testing.T) {
 		t.Fatal("overflow not recognized")
 	}
 }
+
+func TestSubAgentReportsWhenOutOfSteps(t *testing.T) {
+	// The sub-agent keeps reading until its step limit, then is asked for
+	// a report; a tool call at that point must not run.
+	var reads int
+	client := clientFunc(func(req provider.Request) (provider.Response, error) {
+		first := req.Messages[0].Text
+		last := req.Messages[len(req.Messages)-1]
+		if strings.HasPrefix(first, "[sub-agent]") {
+			if last.Role == provider.RoleUser && strings.Contains(last.Text, "used all your steps") {
+				return provider.Response{Text: "report: read a.txt many times, not finished"}, nil
+			}
+			reads++
+			return provider.Response{ToolCalls: []provider.ToolCall{tc(fmt.Sprintf("r%d", reads), "read", fmt.Sprintf(`{"path":"a.txt","offset":%d}`, reads))}}, nil
+		}
+		if last.Role == provider.RoleUser {
+			return provider.Response{ToolCalls: []provider.ToolCall{tc("t1", "task", `{"prompt":"loop"}`)}}, nil
+		}
+		return provider.Response{Text: "done"}, nil
+	})
+	a := newAgent(t, &script{})
+	a.Client = client
+	a.Tools = append(a.Tools, a.TaskTool())
+	os.WriteFile(filepath.Join(a.Env.Root, "a.txt"), []byte("hi\nthere\n"), 0o644)
+	if _, err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	var result string
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleTool {
+			result = m.Text
+		}
+	}
+	if !strings.Contains(result, "report: read a.txt many times") || reads != subMaxTurns {
+		t.Fatalf("reads %d, result: %s", reads, result)
+	}
+}
