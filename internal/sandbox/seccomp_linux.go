@@ -48,8 +48,8 @@ func denyDatagrams() error {
 	p.jeq(afInet, "type", "")
 	p.jeq(afInet6, "type", "allow")
 	p.label("type")
-	p.ld(24)       // args[1]: type
-	p.and(0xf)     // without SOCK_NONBLOCK / SOCK_CLOEXEC
+	p.ld(24)   // args[1]: type
+	p.and(0xf) // without SOCK_NONBLOCK / SOCK_CLOEXEC
 	p.jeq(sockDgram, "deny", "")
 	p.jeq(sockRaw, "deny", "allow")
 	p.label("allow")
@@ -92,9 +92,9 @@ type jump struct {
 }
 
 func (b *bpf) emit(code uint16, k uint32) { b.ins = append(b.ins, sockFilter{code: code, k: k}) }
-func (b *bpf) ld(off uint32)             { b.emit(0x20, off) } // BPF_LD|BPF_W|BPF_ABS
-func (b *bpf) and(k uint32)              { b.emit(0x54, k) }   // BPF_ALU|BPF_AND|BPF_K
-func (b *bpf) ret(k uint32)              { b.emit(0x06, k) }   // BPF_RET|BPF_K
+func (b *bpf) ld(off uint32)              { b.emit(0x20, off) } // BPF_LD|BPF_W|BPF_ABS
+func (b *bpf) and(k uint32)               { b.emit(0x54, k) }   // BPF_ALU|BPF_AND|BPF_K
+func (b *bpf) ret(k uint32)               { b.emit(0x06, k) }   // BPF_RET|BPF_K
 func (b *bpf) jeq(k uint32, jt, jf string) {
 	b.jumps = append(b.jumps, jump{len(b.ins), jt, jf})
 	b.emit(0x15, k) // BPF_JMP|BPF_JEQ|BPF_K
