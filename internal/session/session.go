@@ -156,7 +156,8 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 	return out, nil
 }
 
-// Prune deletes sessions beyond the newest keep that are older than maxAge.
+// Prune deletes sessions beyond the newest keep, and any older than
+// maxAge, so heavy use cannot fill the disk.
 func Prune(keep int, maxAge time.Duration) {
 	ents, err := os.ReadDir(dir())
 	if err != nil {
@@ -169,12 +170,11 @@ func Prune(keep int, maxAge time.Duration) {
 		}
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
-	if len(names) <= keep {
-		return
-	}
-	for _, n := range names[keep:] {
+	for i, n := range names {
 		p := filepath.Join(dir(), n)
-		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > maxAge {
+		if i >= keep {
+			_ = os.Remove(p)
+		} else if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > maxAge {
 			_ = os.Remove(p)
 		}
 	}

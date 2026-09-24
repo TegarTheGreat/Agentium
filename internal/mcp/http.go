@@ -170,7 +170,7 @@ func startSSE(ctx context.Context, c *Client, cfg Config) (*sseTransport, error)
 		cancel()
 		return nil, err
 	}
-	headers := expand(cfg.Headers)
+	headers := cfg.expand(cfg.Headers)
 	req.Header.Set("Accept", "text/event-stream")
 	for k, v := range headers {
 		req.Header.Set(k, v)

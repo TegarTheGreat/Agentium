@@ -410,7 +410,7 @@ func startMCP(servers map[string]config.MCPServer, dir string, report func(strin
 	for name, sc := range servers {
 		go func(name string, sc config.MCPServer) {
 			c, err := mcp.Start(ctx, name, mcp.Config{Command: sc.Command, Args: sc.Args, Env: sc.Env,
-				URL: sc.URL, Type: sc.Type, Headers: sc.Headers, Tokens: mcpTokens(),
+				URL: sc.URL, Type: sc.Type, Headers: sc.Headers, Tokens: mcpTokens(), Literal: sc.Literal,
 				LogPath: filepath.Join(config.Home(), "logs", "mcp-"+name+".log")}, dir)
 			ch <- res{c, err}
 		}(name, sc)

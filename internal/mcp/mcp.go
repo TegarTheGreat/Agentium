@@ -37,6 +37,9 @@ type Config struct {
 	LogPath string `json:"-"`
 	// Tokens holds OAuth grants for remote servers (nil = no OAuth).
 	Tokens *TokenStore `json:"-"`
+	// Literal: Env and Headers are used as given, without $VAR expansion
+	// (values from an editor over ACP, which may contain '$').
+	Literal bool `json:"-"`
 }
 
 // Tool is a tool offered by a server.
@@ -97,7 +100,7 @@ func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, e
 		}
 		c.tr = tr
 	case cfg.URL != "":
-		c.tr = &httpTransport{c: c, url: cfg.URL, headers: expand(cfg.Headers), tokens: cfg.Tokens}
+		c.tr = &httpTransport{c: c, url: cfg.URL, headers: cfg.expand(cfg.Headers), tokens: cfg.Tokens}
 	case cfg.Command != "":
 		tr, err := startStdio(c, cfg, dir)
 		if err != nil {
@@ -147,12 +150,19 @@ func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, e
 	return c, nil
 }
 
-func expand(h map[string]string) map[string]string {
+func (cfg Config) expand(h map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range h {
-		out[k] = os.ExpandEnv(v)
+		out[k] = cfg.value(v)
 	}
 	return out
+}
+
+func (cfg Config) value(v string) string {
+	if cfg.Literal {
+		return v
+	}
+	return os.ExpandEnv(v)
 }
 
 // logTail returns the last lines of a server's stderr log, to explain a
@@ -254,7 +264,7 @@ func startStdio(c *Client, cfg Config, dir string) (*stdioTransport, error) {
 	// the session.
 	cmd.Env = policy.ScrubEnv(os.Environ(), nil)
 	for k, v := range cfg.Env {
-		cmd.Env = append(cmd.Env, k+"="+os.ExpandEnv(v))
+		cmd.Env = append(cmd.Env, k+"="+cfg.value(v))
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

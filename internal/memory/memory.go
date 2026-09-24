@@ -58,6 +58,7 @@ func Open(home, root string) (*Store, error) {
 		return nil, err
 	}
 	_ = os.WriteFile(filepath.Join(dir, "root"), []byte(root+"\n"), 0o600)
+	pruneJournal(filepath.Join(dir, "journal"), 12)
 	return &Store{
 		UserPath:     filepath.Join(home, "USER.md"),
 		MemoryPath:   filepath.Join(dir, "MEMORY.md"),
@@ -427,4 +428,20 @@ func (s *Store) Lessons(ls []string, trusted bool) []string {
 		}
 	}
 	return out
+}
+
+// pruneJournal deletes monthly journal files older than months, so the
+// journal (read by recall and lessons every turn) stays bounded.
+func pruneJournal(dir string, months int) {
+	cutoff := time.Now().AddDate(0, -months, 0).Format("2006-01")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		name := strings.TrimSuffix(e.Name(), ".md")
+		if len(name) == 7 && name < cutoff {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }

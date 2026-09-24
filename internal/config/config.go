@@ -77,6 +77,9 @@ type MCPServer struct {
 	URL     string            `json:"url,omitempty"`
 	Type    string            `json:"type,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+	// Literal: env and header values are not $VAR-expanded (set for
+	// servers an editor passes over ACP).
+	Literal bool `json:"-"`
 }
 
 // SandboxConf configures confinement of shell commands.

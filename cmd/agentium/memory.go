@@ -28,6 +28,9 @@ type memCtl struct {
 	skip  string // current session id: its content is already in context
 	ready chan struct{}
 	once  sync.Once
+	// One index build at a time; a request during a build runs one more
+	// build after it instead of piling up.
+	building, again atomic.Bool
 }
 
 func memoryWanted(cfg config.Config) bool { return cfg.Memory == nil || *cfg.Memory }
@@ -46,6 +49,21 @@ func openMemory(cfg config.Config, cwd string) *memCtl {
 // buildIndex indexes decisions, journal and past sessions of this
 // directory. It runs in the background; recall is skipped until ready.
 func (m *memCtl) buildIndex() {
+	if !m.building.CompareAndSwap(false, true) {
+		m.again.Store(true)
+		return
+	}
+	for {
+		m.again.Store(false)
+		m.build()
+		m.building.Store(false)
+		if !m.again.Load() || !m.building.CompareAndSwap(false, true) {
+			return
+		}
+	}
+}
+
+func (m *memCtl) build() {
 	docs := m.store.Docs()
 	sessions, _ := session.ForCwd(m.cwd, 50)
 	for _, s := range sessions {

@@ -323,10 +323,17 @@ func (s *server) readLoop(r *bufio.Reader) {
 		case msg.Method == "textDocument/publishDiagnostics":
 			var p struct {
 				URI         string       `json:"uri"`
+				Version     *int         `json:"version"`
 				Diagnostics []Diagnostic `json:"diagnostics"`
 			}
 			if json.Unmarshal(msg.Params, &p) == nil {
 				s.mu.Lock()
+				if p.Version != nil && *p.Version < s.versions[p.URI] {
+					// A late publish for an older version of the file: its
+					// errors may be ones the latest edit fixed.
+					s.mu.Unlock()
+					continue
+				}
 				s.diags[p.URI] = p.Diagnostics
 				if ch, ok := s.notify[p.URI]; ok {
 					close(ch)
@@ -370,6 +377,7 @@ func (s *server) diagnose(ctx context.Context, path, lang, text string, wait tim
 	v, open := s.versions[u]
 	v++
 	s.versions[u] = v
+	delete(s.diags, u) // results for the previous text no longer apply
 	s.mu.Unlock()
 	if !open {
 		s.send(map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{

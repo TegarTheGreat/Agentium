@@ -73,6 +73,21 @@ type acpSession struct {
 	cancel   context.CancelFunc
 	lastTool string
 	allowed  map[string]bool // "allow always" answers, by action kind
+	lastUsed time.Time       // for evicting idle sessions
+}
+
+// maxACPSessions bounds live sessions: each holds MCP servers, language
+// servers and jobs, and editors open a new session per thread.
+const maxACPSessions = 8
+
+// close releases what the session holds.
+func (ss *acpSession) close() {
+	for _, f := range ss.cleanup {
+		f()
+	}
+	for _, c := range ss.clients {
+		c.Close()
+	}
 }
 
 func cmdACP(args []string) error {
@@ -190,7 +205,9 @@ func (s *acpServer) handle(m rpcMsg) {
 	case "authenticate":
 		s.reply(m.ID, map[string]any{})
 	case "session/new":
-		s.newSession(m)
+		// Starting MCP servers can take seconds: don't hold up replies
+		// (e.g. permission answers) for other sessions meanwhile.
+		go s.newSession(m)
 	case "session/set_mode":
 		var p struct{ SessionID, ModeID string }
 		json.Unmarshal(m.Params, &p)
@@ -225,7 +242,11 @@ func (s *acpServer) handle(m rpcMsg) {
 func (s *acpServer) session(id string) *acpSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sess[id]
+	if ss := s.sess[id]; ss != nil {
+		ss.lastUsed = time.Now()
+		return ss
+	}
+	return nil
 }
 
 type acpNameValue struct {
@@ -273,7 +294,7 @@ func (s *acpServer) newSession(m rpcMsg) {
 		servers[name] = sc
 	}
 	for _, ms := range p.McpServers {
-		sc := config.MCPServer{Command: ms.Command, Args: ms.Args, URL: ms.URL, Type: ms.Type}
+		sc := config.MCPServer{Command: ms.Command, Args: ms.Args, URL: ms.URL, Type: ms.Type, Literal: true}
 		if ms.Type == "http" {
 			sc.Type = ""
 		}
@@ -333,9 +354,31 @@ func (s *acpServer) newSession(m rpcMsg) {
 	}
 	ss.a, ss.mem = a, mem
 	ss.cleanup = append(ss.cleanup, a.Env.KillJobs)
+	ss.lastUsed = time.Now()
 	s.mu.Lock()
 	s.sess[ss.id] = ss
+	var evict []*acpSession
+	for len(s.sess) > maxACPSessions {
+		// Drop the least recently used idle session.
+		var old *acpSession
+		for _, c := range s.sess {
+			c.mu.Lock()
+			busy := c.cancel != nil
+			c.mu.Unlock()
+			if c != ss && !busy && (old == nil || c.lastUsed.Before(old.lastUsed)) {
+				old = c
+			}
+		}
+		if old == nil {
+			break
+		}
+		delete(s.sess, old.id)
+		evict = append(evict, old)
+	}
 	s.mu.Unlock()
+	for _, old := range evict {
+		old.close()
+	}
 	modes := []map[string]any{
 		{"id": "auto", "name": "Auto", "description": "Ask only before risky actions"},
 		{"id": "ask", "name": "Ask", "description": "Ask before every command and edit"},
@@ -566,11 +609,6 @@ func (s *acpServer) closeAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ss := range s.sess {
-		for _, f := range ss.cleanup {
-			f()
-		}
-		for _, c := range ss.clients {
-			c.Close()
-		}
+		ss.close()
 	}
 }
