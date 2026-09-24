@@ -147,8 +147,11 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		maxTurns = 100
 	}
 	defs := tool.Defs(a.Tools)
+	before := a.Usage
 	done := func(err error) (Stats, error) {
 		st.Elapsed = time.Since(start)
+		// Include sub-agents' usage, which is added to a.Usage directly.
+		st.Usage = a.Usage.Minus(before)
 		return st, err
 	}
 	for st.Turns < maxTurns {

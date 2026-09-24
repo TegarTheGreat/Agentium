@@ -85,6 +85,12 @@ type Usage struct {
 	CacheWrite int `json:"cache_write"`
 }
 
+// Minus returns u - u2 (usage since an earlier snapshot).
+func (u Usage) Minus(u2 Usage) Usage {
+	return Usage{Input: u.Input - u2.Input, Output: u.Output - u2.Output,
+		CacheRead: u.CacheRead - u2.CacheRead, CacheWrite: u.CacheWrite - u2.CacheWrite}
+}
+
 // Add accumulates u2 into u.
 func (u *Usage) Add(u2 Usage) {
 	u.Input += u2.Input
