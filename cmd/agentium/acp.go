@@ -307,7 +307,7 @@ func (s *acpServer) newSession(m rpcMsg) {
 		Client: res.Client, Model: res.Model, System: agent.SystemPrompt(cwd, mem != nil, snapshot) + skill.Prompt(skills),
 		Reasoning: res.Reasoning(s.cfg.Effort), FastMode: s.cfg.Fast, Tools: tools,
 		Env:      &tool.Env{Root: cwd, Gate: ss.gate, AllowPrivateNet: s.cfg.FetchPrivate, Vision: res.Vision(), CodeCache: codeCache(cwd)},
-		MaxTurns: s.cfg.MaxTurns, MaxTokens: s.cfg.MaxTokens,
+		MaxTurns: s.cfg.MaxTurns, MaxTokens: s.cfg.MaxTokens, MaxOutput: res.Info.Output,
 		ContextTokens: firstPositive(s.cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        s.cfg.Verify == nil || *s.cfg.Verify,
 	}

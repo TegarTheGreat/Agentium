@@ -610,7 +610,7 @@ func run(args []string) error {
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
 		MaxCost: *maxCost,
 		Tools:   tools, Env: &tool.Env{Root: cwd, Gate: gate, AllowPrivateNet: cfg.FetchPrivate, Vision: res.Vision(), CodeCache: codeCache(cwd)},
-		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens,
+		MaxTurns: firstPositive(*maxTurns, cfg.MaxTurns), MaxTokens: cfg.MaxTokens, MaxOutput: res.Info.Output,
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
@@ -1028,9 +1028,10 @@ func (e *slashEnv) switchModel(ref string) error {
 	a.Env.Vision = res.Vision()
 	// The new model's reasoning capabilities, same requested effort.
 	a.Reasoning = res.Reasoning(a.Reasoning.Effort)
-	if res.Info.Context > 0 {
-		a.ContextTokens = res.Info.Context
-	}
+	// The new model's limits (a guess from its name when unknown), so
+	// compaction triggers at the right size.
+	a.ContextTokens = firstPositive(e.cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model))
+	a.MaxOutput = res.Info.Output
 	*e.res = res
 	e.sess.Model = res.Provider + "/" + res.Model
 	_ = config.Set("model", e.sess.Model)

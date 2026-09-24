@@ -30,7 +30,8 @@ func ListModels(ctx context.Context, pid string, cfg config.Config, auth config.
 	defer cancel()
 	url := strings.TrimRight(s.BaseURL, "/") + "/models"
 	if s.Protocol == "anthropic" {
-		url = strings.TrimRight(s.BaseURL, "/") + "/v1/models?limit=100"
+		base := strings.TrimSuffix(strings.TrimRight(s.BaseURL, "/"), "/v1")
+		url = base + "/v1/models?limit=100"
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

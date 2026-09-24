@@ -42,10 +42,19 @@ func (a *Agent) budgets() (int, int) {
 func (a *Agent) size() int {
 	n := len(a.System)
 	for _, m := range a.Messages {
-		n += len(m.Text) + len(m.Images)*imageChars
+		n += len(m.Text) + len(m.Images)*imageChars + len(m.Reasoning)
+		if len(m.Raw) > 0 {
+			// Replayed provider blocks (thinking, full tool inputs) are what
+			// is really sent; they overlap Text and ToolCalls.
+			n += len(m.Raw)
+			continue
+		}
 		for _, c := range m.ToolCalls {
 			n += len(c.Args) + len(c.Name)
 		}
+	}
+	for _, t := range a.Tools {
+		n += len(t.Def.Description) + len(t.Def.Schema)
 	}
 	return n
 }
@@ -106,11 +115,19 @@ func (a *Agent) elide(keep int) {
 			if seen <= keep {
 				continue
 			}
+			shortened := false
 			for j := range m.ToolCalls {
 				if e := elideArgs(m.ToolCalls[j].Args); len(e) != len(m.ToolCalls[j].Args) {
 					m.ToolCalls[j].Args = e
 					first = i
+					shortened = true
 				}
+			}
+			if shortened {
+				// Raw would replay the full arguments; without it the
+				// shortened calls are sent (an old turn's thinking block is
+				// not needed).
+				m.Raw = nil
 			}
 		}
 	}
@@ -230,15 +247,21 @@ func (a *Agent) compact(ctx context.Context) error {
 	}
 	a.notice("compacting older conversation")
 	resp, err := client.Stream(ctx, provider.Request{
-		Model:     model,
-		System:    "You compress coding-agent conversations into precise working notes.",
-		Messages:  []provider.Message{{Role: provider.RoleUser, Text: clip(tr.String(), 400000) + "\n\n---\n" + compactPrompt}},
+		Model:  model,
+		System: "You compress coding-agent conversations into precise working notes.",
+		// The most recent history matters most: keep the end if too long.
+		Messages:  []provider.Message{{Role: provider.RoleUser, Text: clipHead(tr.String(), 400000) + "\n\n---\n" + compactPrompt}},
 		MaxTokens: 4000,
 	}, nil)
 	if err != nil {
 		return err
 	}
+	a.mu.Lock()
 	a.Usage.Add(resp.Usage)
+	if a.Cost != nil {
+		a.Spent += a.Cost(resp.Usage)
+	}
+	a.mu.Unlock()
 	summary := strings.TrimSpace(resp.Text)
 	if summary == "" {
 		return fmt.Errorf("empty summary")
@@ -272,4 +295,12 @@ func clip(s string, n int) string {
 		return s
 	}
 	return strings.ToValidUTF8(s[:n], "") + "…"
+}
+
+// clipHead keeps the last n bytes of s.
+func clipHead(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "[earlier part omitted]\n" + strings.ToValidUTF8(s[len(s)-n:], "")
 }

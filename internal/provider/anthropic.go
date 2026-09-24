@@ -109,7 +109,7 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 			for _, im := range m.Images {
 				push("user", anImage(im))
 			}
-			if m.Text != "" {
+			if strings.TrimSpace(m.Text) != "" {
 				push("user", mustJSON(anBlock{Type: "text", Text: m.Text}))
 			}
 		case RoleAssistant:
@@ -122,11 +122,11 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 					continue
 				}
 			}
-			if m.Text != "" {
+			if strings.TrimSpace(m.Text) != "" {
 				push("assistant", mustJSON(anBlock{Type: "text", Text: m.Text}))
 			}
 			for _, tc := range m.ToolCalls {
-				push("assistant", mustJSON(anBlock{Type: "tool_use", ID: tc.ID, Name: tc.Name, Input: validArgs(tc.Args)}))
+				push("assistant", mustJSON(anBlock{Type: "tool_use", ID: toolID(tc.ID), Name: tc.Name, Input: validArgs(tc.Args)}))
 			}
 		case RoleTool:
 			content := m.Text
@@ -138,10 +138,10 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 				for _, im := range m.Images {
 					parts = append(parts, anImage(im))
 				}
-				push("user", mustJSON(map[string]any{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": parts, "is_error": m.IsError}))
+				push("user", mustJSON(map[string]any{"type": "tool_result", "tool_use_id": toolID(m.ToolCallID), "content": parts, "is_error": m.IsError}))
 				continue
 			}
-			push("user", mustJSON(anBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: content, IsError: m.IsError}))
+			push("user", mustJSON(anBlock{Type: "tool_result", ToolUseID: toolID(m.ToolCallID), Content: content, IsError: m.IsError}))
 		}
 	}
 	// Cache breakpoint on the newest block (it must not be a thinking block).
@@ -161,6 +161,9 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 	maxTok := req.MaxTokens
 	if maxTok <= 0 {
 		maxTok = 32000
+	}
+	if req.MaxOutput > 0 && maxTok > req.MaxOutput {
+		maxTok = req.MaxOutput
 	}
 	b := map[string]any{
 		"max_tokens": maxTok,
@@ -190,6 +193,12 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 		b["tools"] = tools
 	}
 	r := req.Reasoning
+	if !openRoundHasThinking(msgs) {
+		// A tool round whose assistant turn carries no thinking block (it
+		// came from another model, or was cut off) cannot continue with
+		// thinking on: the API would reject it. Thinking resumes next turn.
+		r = Reasoning{}
+	}
 	switch {
 	case len(r.Efforts) > 0: // adaptive-thinking models (4.6+)
 		th := map[string]any{"type": "adaptive"}
@@ -208,8 +217,15 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 		if budget == 0 {
 			budget = 8000
 		}
+		if req.MaxOutput > 0 && budget > req.MaxOutput-4096 {
+			budget = max(1024, req.MaxOutput-4096)
+		}
 		if maxTok <= budget {
-			b["max_tokens"] = budget + 8000
+			mt := budget + 8000
+			if req.MaxOutput > 0 && mt > req.MaxOutput {
+				mt = req.MaxOutput
+			}
+			b["max_tokens"] = mt
 		}
 		b["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
 	}
@@ -421,10 +437,61 @@ func handleAnthropicEvent(out *Response, ev anEvent, blocks map[int]*anPartial, 
 		return false
 	case "error":
 		*streamErr = fmt.Errorf("stream error: %s: %s", ev.Error.Type, ev.Error.Message)
-		if ev.Error.Type == "overloaded_error" {
+		switch ev.Error.Type {
+		case "overloaded_error":
 			*streamErr = &HTTPError{Status: 529, Body: ev.Error.Message}
+		case "api_error":
+			*streamErr = &HTTPError{Status: 500, Body: ev.Error.Message}
+		case "rate_limit_error":
+			*streamErr = &HTTPError{Status: 429, Body: ev.Error.Message}
 		}
 		return false
 	}
 	return true
+}
+
+// openRoundHasThinking reports false when the conversation ends in tool
+// results whose assistant turn has no thinking block.
+func openRoundHasThinking(msgs []anMsg) bool {
+	n := len(msgs)
+	if n < 2 || msgs[n-1].Role != "user" {
+		return true
+	}
+	hasResult := false
+	for _, b := range msgs[n-1].Content {
+		if blockType(b) == "tool_result" {
+			hasResult = true
+		}
+	}
+	if !hasResult || msgs[n-2].Role != "assistant" {
+		return true
+	}
+	for _, b := range msgs[n-2].Content {
+		if t := blockType(b); t == "thinking" || t == "redacted_thinking" {
+			return true
+		}
+	}
+	return false
+}
+
+func blockType(b json.RawMessage) string {
+	var h struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(b, &h)
+	return h.Type
+}
+
+// toolID makes a tool-call id from another provider valid for this API
+// (letters, digits, _ and - only), the same way for calls and results.
+func toolID(id string) string {
+	if id == "" {
+		return "call"
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			return r
+		}
+		return '_'
+	}, id)
 }

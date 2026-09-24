@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,8 @@ type Events struct {
 
 // Agent holds one conversation.
 type Agent struct {
+	// MaxOutput is the model's output token limit (0 if unknown).
+	MaxOutput int
 	Client    provider.Client
 	Model     string
 	System    string
@@ -118,6 +121,9 @@ type runState struct {
 	sigs        []string
 	failStreak  int // consecutive tool batches with a failure
 	escalations int
+	// overflowRetried: the provider said the prompt was too long once
+	// this turn and the history was shrunk.
+	overflowRetried bool
 }
 
 // Run sends input and loops until the model stops calling tools.
@@ -161,7 +167,7 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		a.manageContext(ctx, st.Turns == 0)
 		resp, err := a.call(ctx, provider.Request{
 			Model: a.Model, System: a.System, Messages: a.Messages, Tools: defs, MaxTokens: a.MaxTokens,
-			Reasoning: a.Reasoning, Fast: a.FastMode,
+			MaxOutput: a.MaxOutput, Reasoning: a.Reasoning, Fast: a.FastMode,
 		})
 		st.Turns++
 		a.Turns++
@@ -170,9 +176,21 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		if a.Cost != nil {
 			a.Spent += a.Cost(resp.Usage)
 		}
+		if err != nil && contextOverflow(err) && !rs.overflowRetried && ctx.Err() == nil {
+			// The estimate was off (thinking blocks, tool schemas): shrink
+			// the history hard and try once more instead of failing every
+			// turn from now on.
+			rs.overflowRetried = true
+			a.notice("the conversation no longer fits the model's context; compacting")
+			if cerr := a.compact(ctx); cerr != nil {
+				a.elide(1)
+			}
+			continue
+		}
 		if err != nil {
-			// Keep whatever text streamed so the conversation stays coherent.
-			if resp.Text != "" {
+			// Keep whatever text streamed so the conversation stays coherent
+			// (whitespace alone would be rejected on the next request).
+			if strings.TrimSpace(resp.Text) != "" {
 				a.Messages = append(a.Messages, provider.Message{Role: provider.RoleAssistant, Text: resp.Text})
 			}
 			return done(err)
@@ -180,15 +198,22 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		truncated := resp.StopReason == "max_tokens" || resp.StopReason == "length"
 		if truncated {
 			resp.ToolCalls = validCalls(resp.ToolCalls)
+			// The call being generated when the output limit hit is cut off
+			// even if its arguments happen to parse ("" becomes "{}").
+			if n := len(resp.ToolCalls); n > 0 && lastBlockIsToolUse(resp.Raw) {
+				resp.ToolCalls = resp.ToolCalls[:n-1]
+			}
 		}
 		served := a.Model
 		if resp.Model != "" {
 			served = resp.Model
 		}
 		msg := provider.Message{Role: provider.RoleAssistant, Text: resp.Text, ToolCalls: resp.ToolCalls,
-			Raw: resp.Raw, RawModel: served, Reasoning: resp.Reasoning}
+			Raw: resp.Raw, RawModel: served, Reasoning: resp.Reasoning, ReasoningField: resp.ReasoningField}
 		if truncated {
-			msg.Raw = nil // it may hold a cut-off tool call we dropped
+			// Keep thinking and text (the API requires the thinking block
+			// before this turn's tool results), drop cut-off tool calls.
+			msg.Raw = keepRawBlocks(resp.Raw, resp.ToolCalls)
 		}
 		a.Messages = append(a.Messages, msg)
 		if resp.StopReason == "refusal" {
@@ -251,6 +276,66 @@ func (a *Agent) notice(msg string) {
 }
 
 // validCalls drops tool calls whose arguments were cut off mid-JSON.
+// contextOverflow reports a provider error saying the prompt is too long.
+func contextOverflow(err error) bool {
+	m := strings.ToLower(err.Error())
+	for _, s := range []string{"prompt is too long", "context_length_exceeded", "maximum context length",
+		"context length", "too many tokens", "input is too long", "exceeds the context window", "request too large"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastBlockIsToolUse reports whether an Anthropic-style raw content list
+// ends with a tool_use block (without raw blocks: assume it does).
+func lastBlockIsToolUse(raw json.RawMessage) bool {
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &blocks) != nil || len(blocks) == 0 {
+		return true
+	}
+	return blocks[len(blocks)-1].Type == "tool_use"
+}
+
+// keepRawBlocks filters raw content blocks to thinking, text and the
+// tool_use blocks of calls that are kept.
+func keepRawBlocks(raw json.RawMessage, keep []provider.ToolCall) json.RawMessage {
+	var blocks []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &blocks) != nil {
+		return nil
+	}
+	ids := map[string]bool{}
+	for _, c := range keep {
+		ids[c.ID] = true
+	}
+	var out []json.RawMessage
+	for _, b := range blocks {
+		var h struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+		}
+		if json.Unmarshal(b, &h) != nil {
+			continue
+		}
+		switch h.Type {
+		case "thinking", "redacted_thinking", "text":
+			out = append(out, b)
+		case "tool_use":
+			if ids[h.ID] {
+				out = append(out, b)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	r, _ := json.Marshal(out)
+	return r
+}
+
 func validCalls(calls []provider.ToolCall) []provider.ToolCall {
 	var out []provider.ToolCall
 	for _, c := range calls {

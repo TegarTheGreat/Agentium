@@ -55,6 +55,9 @@ type Message struct {
 	// Reasoning is visible reasoning text some OpenAI-compatible models
 	// return (reasoning_content) and need back on later turns.
 	Reasoning string `json:"reasoning,omitempty"`
+	// ReasoningField is where Reasoning came from, to send it back the
+	// same way when the registry does not say.
+	ReasoningField string `json:"reasoning_field,omitempty"`
 	// Images attached to a user message or a tool result.
 	Images []Image `json:"images,omitempty"`
 }
@@ -115,6 +118,9 @@ type Request struct {
 	Messages  []Message
 	Tools     []ToolDef
 	MaxTokens int
+	// MaxOutput is the model's output limit (0 if unknown): max_tokens and
+	// thinking budgets stay below it.
+	MaxOutput int
 	Reasoning Reasoning
 	// Fast asks for the provider's fast output mode when available.
 	Fast bool
@@ -122,12 +128,15 @@ type Request struct {
 
 // Response is the assembled result of a streamed model call.
 type Response struct {
-	Text       string
-	ToolCalls  []ToolCall
-	Usage      Usage
-	StopReason string
-	Raw        json.RawMessage // provider-native assistant content, see Message.Raw
-	Reasoning  string
+	// ReasoningField is the delta field reasoning arrived in
+	// (OpenAI-compatible: "reasoning_content" or "reasoning").
+	ReasoningField string
+	Text           string
+	ToolCalls      []ToolCall
+	Usage          Usage
+	StopReason     string
+	Raw            json.RawMessage // provider-native assistant content, see Message.Raw
+	Reasoning      string
 	// Model is the model that actually served the reply when it differs
 	// from the request (fallback); "" means the requested model.
 	Model string

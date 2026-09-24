@@ -701,3 +701,17 @@ type clientFunc func(provider.Request) (provider.Response, error)
 func (f clientFunc) Stream(_ context.Context, req provider.Request, _ func(string)) (provider.Response, error) {
 	return f(req)
 }
+
+func TestKeepRawBlocksOnTruncation(t *testing.T) {
+	raw := json.RawMessage(`[{"type":"thinking","thinking":"t","signature":"s"},{"type":"tool_use","id":"a","name":"read","input":{}},{"type":"tool_use","id":"b","name":"read","input":{}}]`)
+	if !lastBlockIsToolUse(raw) {
+		t.Fatal("last block is a tool_use")
+	}
+	got := string(keepRawBlocks(raw, []provider.ToolCall{{ID: "a"}}))
+	if !strings.Contains(got, `"thinking"`) || !strings.Contains(got, `"id":"a"`) || strings.Contains(got, `"id":"b"`) {
+		t.Fatalf("got %s", got)
+	}
+	if !contextOverflow(errors.New("api error 400: prompt is too long: 210000 tokens > 200000 maximum")) {
+		t.Fatal("overflow not recognized")
+	}
+}

@@ -567,3 +567,51 @@ func TestListModels(t *testing.T) {
 		t.Fatalf("%v %v", ids, err)
 	}
 }
+
+func TestOpenAIToolCallsWithoutIndex(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, d := range []string{
+			`{"choices":[{"delta":{"tool_calls":[{"id":"a","function":{"name":"read","arguments":"{\"path\""}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":":\"x\"}"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"read","arguments":"{\"path\":\"y\"}"}}]}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", d)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	c := &OpenAI{BaseURL: srv.URL}
+	resp, err := c.Stream(context.Background(), Request{Model: "m"}, nil)
+	if err != nil || len(resp.ToolCalls) != 2 || string(resp.ToolCalls[0].Args) != `{"path":"x"}` || string(resp.ToolCalls[1].Args) != `{"path":"y"}` {
+		t.Fatalf("%+v %v", resp.ToolCalls, err)
+	}
+}
+
+func TestAnthropicBodySafety(t *testing.T) {
+	c := &Anthropic{}
+	req := Request{Model: "claude-x", Reasoning: Reasoning{Effort: "high", Budget: true}, Messages: []Message{
+		{Role: RoleUser, Text: "hi"},
+		{Role: RoleAssistant, Text: "  \n", ToolCalls: []ToolCall{{ID: "functions.read:0", Name: "read", Args: json.RawMessage(`{}`)}}},
+		{Role: RoleTool, ToolCallID: "functions.read:0", Text: "ok"},
+	}}
+	b, _ := c.body(req)
+	raw, _ := json.Marshal(b)
+	s := string(raw)
+	if strings.Contains(s, `"thinking":{`) {
+		t.Error("thinking enabled for a tool round without a thinking block")
+	}
+	if strings.Contains(s, "functions.read:0") || !strings.Contains(s, "functions_read_0") {
+		t.Error("tool id not made valid")
+	}
+	if strings.Contains(s, `"text":"  \n"`) {
+		t.Error("whitespace-only text block sent")
+	}
+	req.MaxOutput = 8192
+	req.Messages = req.Messages[:1]
+	b, _ = c.body(req)
+	if mt := b["max_tokens"].(int); mt > 8192 {
+		t.Errorf("max_tokens %d above the model's output limit", mt)
+	}
+}

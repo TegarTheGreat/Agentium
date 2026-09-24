@@ -67,13 +67,15 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 		// Same system prompt and tools as the parent: the provider's
 		// prompt cache is reused (the task tool refuses at depth 1).
 		System: a.System, Tools: a.Tools, Env: childEnv,
-		MaxTurns: subMaxTurns, MaxTokens: a.MaxTokens, ContextTokens: a.ContextTokens, ContextChars: a.ContextChars,
+		MaxTurns: subMaxTurns, MaxTokens: a.MaxTokens, MaxOutput: a.MaxOutput, ContextTokens: a.ContextTokens, ContextChars: a.ContextChars,
 		Fast: a.Fast, FastModel: a.FastModel, Verify: !explore, Reasoning: a.Reasoning, FastMode: a.FastMode,
 		Cost: a.Cost, depth: a.depth + 1,
 		Events: Events{Notice: a.Events.Notice, ToolStart: a.Events.SubToolStart, Retry: a.Events.Retry},
 	}
 	if a.MaxCost > 0 {
+		a.mu.Lock()
 		sub.MaxCost = a.MaxCost - a.Spent
+		a.mu.Unlock()
 	}
 	_, err := sub.Run(ctx, subBrief+prompt)
 	a.mu.Lock()

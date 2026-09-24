@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -76,7 +77,9 @@ type oaChunk struct {
 		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 	Error *struct {
-		Message string `json:"message"`
+		Message string          `json:"message"`
+		Code    json.RawMessage `json:"code"`
+		Type    string          `json:"type"`
 	} `json:"error"`
 }
 
@@ -110,7 +113,11 @@ func (c *OpenAI) body(req Request) map[string]any {
 				om.ToolCalls = append(om.ToolCalls, otc)
 			}
 			if m.Reasoning != "" && m.RawModel == req.Model {
-				switch req.Reasoning.Interleaved {
+				field := req.Reasoning.Interleaved
+				if field == "" {
+					field = m.ReasoningField // the field the model itself used
+				}
+				switch field {
 				case "reasoning_content":
 					om.ReasoningContent = strp(m.Reasoning)
 				case "reasoning":
@@ -138,7 +145,7 @@ func (c *OpenAI) body(req Request) map[string]any {
 		b["stream_options"] = map[string]any{"include_usage": true}
 	}
 	if req.MaxTokens > 0 {
-		if c.official() {
+		if c.completionTokens() {
 			b["max_completion_tokens"] = req.MaxTokens // OpenAI's reasoning models reject max_tokens
 		} else {
 			b["max_tokens"] = req.MaxTokens
@@ -160,6 +167,16 @@ func (c *OpenAI) body(req Request) map[string]any {
 }
 
 func (c *OpenAI) official() bool { return strings.Contains(c.BaseURL, "api.openai.com") }
+
+// completionTokens reports endpoints that want max_completion_tokens
+// (their reasoning models reject max_tokens): OpenAI, Azure OpenAI and
+// GitHub Models.
+func (c *OpenAI) completionTokens() bool {
+	return c.official() || strings.Contains(c.BaseURL, ".openai.azure.com") || strings.Contains(c.BaseURL, "models.github.ai") ||
+		strings.Contains(c.BaseURL, "models.inference.ai.azure.com")
+}
+
+var callSeq atomic.Int64
 
 // Stream implements Client.
 func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (Response, error) {
@@ -192,6 +209,7 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 	}
 	var reasoning strings.Builder
 	calls := map[int]*partial{}
+	lastIdx, maxIdx := 0, 0
 	var streamErr error
 	done := false
 	err = readSSE(resp.Body, func(_, data string) bool {
@@ -205,6 +223,15 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 		}
 		if ch.Error != nil {
 			streamErr = fmt.Errorf("stream error: %s", ch.Error.Message)
+			// A numeric code (OpenRouter relays upstream 429/5xx this way)
+			// makes the error retryable like the HTTP status would.
+			code, _ := strconv.Atoi(strings.Trim(string(ch.Error.Code), `"`))
+			if code == 429 || code == 408 || code >= 500 && code < 600 || ch.Error.Type == "server_error" {
+				if code == 0 {
+					code = 500
+				}
+				streamErr = &HTTPError{Status: code, Body: ch.Error.Message}
+			}
 			return false
 		}
 		if ch.Usage != nil {
@@ -217,16 +244,30 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 		for _, choice := range ch.Choices {
 			reasoning.WriteString(choice.Delta.ReasoningContent)
 			reasoning.WriteString(choice.Delta.Reasoning)
+			if choice.Delta.ReasoningContent != "" {
+				out.ReasoningField = "reasoning_content"
+			} else if choice.Delta.Reasoning != "" && out.ReasoningField == "" {
+				out.ReasoningField = "reasoning"
+			}
 			if d := choice.Delta.Content; d != "" {
 				text.WriteString(d)
 				if onText != nil {
 					onText(d)
 				}
 			}
-			for i, tc := range choice.Delta.ToolCalls {
-				idx := i
-				if tc.Index != nil {
+			for _, tc := range choice.Delta.ToolCalls {
+				idx := lastIdx
+				switch {
+				case tc.Index != nil:
 					idx = *tc.Index
+				case tc.ID != "" && calls[lastIdx] != nil && calls[lastIdx].id != "" && calls[lastIdx].id != tc.ID:
+					// No index: a new id starts a new call; deltas without an
+					// id continue the latest one.
+					idx = maxIdx + 1
+				}
+				lastIdx = idx
+				if idx > maxIdx {
+					maxIdx = idx
 				}
 				p := calls[idx]
 				if p == nil {
@@ -274,7 +315,8 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 		}
 		id := p.id
 		if id == "" {
-			id = fmt.Sprintf("call_%d", n)
+			// Unique across turns: the history must not repeat an id.
+			id = fmt.Sprintf("call_%d_%d", callSeq.Add(1), n)
 		}
 		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: id, Name: p.name, Args: json.RawMessage(args), Extra: p.extra})
 	}
