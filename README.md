@@ -123,6 +123,7 @@ On first run Agentium asks for a provider and key, then saves them. Environment 
 | `agentium mcp [list\|login\|logout <name>]` | Manage remote MCP servers and their login |
 | `agentium acp [-m model]` | Serve the Agent Client Protocol on stdio |
 | `agentium bench [-m model]` | Measure performance; with `-m`, run live tasks |
+| `agentium update` | Update to the latest release |
 
 Set `AGENTIUM_RAW=1` or `NO_COLOR` for unrendered output. Run `agentium --help` for every flag.
 
@@ -208,8 +209,8 @@ The model has seven tools, plus any tools from configured MCP servers.
 
 | Layer | Behavior |
 |---|---|
-| **OS sandbox** | Shell commands can write only to the workspace, temp directories and build caches. Network access is blocked unless a command requests it and you approve. |
-| **Approval gate** | Risky actions need approval, for example `rm -rf`, force pushes, `sudo`, piping downloads to a shell, credential files and handing work to processes outside the sandbox. Modes: `ask` (every action), `auto` (risky only, default), `yolo` (never), `plan` (read-only). |
+| **OS sandbox** | Shell commands can write only to the workspace, temp directories and build caches. Servers may listen, and local servers can be reached; other network access is blocked unless a command requests it and you approve. |
+| **Approval gate** | Risky actions need approval, for example `rm -rf`, force pushes, `sudo`, piping downloads to a shell, credential files and handing work to processes outside the sandbox. Modes: `ask` (every action), `auto` (risky only, default), `yolo` (never), `plan` (read-only). Answering *always* covers the same program, file changes or host for the session. |
 | **Credential isolation** | Commands, hooks and MCP servers run without credential-like environment variables (`sandbox.pass_env` allows specific ones). `fetch` refuses URLs that carry secrets, and private or metadata addresses. `.env` files need approval to read. |
 | **Repository guard** | Git settings or hooks that would run programs outside the sandbox are undone and reported. Edits inside `.git` need approval. |
 | **Checkpoints** | Each turn is snapshotted in a shadow repository; your own `.git` is never touched. `/undo` restores the previous state. |
@@ -294,7 +295,7 @@ make cross   # binaries for Linux, macOS and Windows in dist/
 
 Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
 
-> **Status:** v0.12.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
+> **Status:** v0.13.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
 
 ## License
 

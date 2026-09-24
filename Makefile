@@ -1,5 +1,5 @@
 BIN := agentium
-VERSION ?= 0.12.0
+VERSION ?= 0.13.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: build test bench install cross clean

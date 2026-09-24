@@ -10,6 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -47,6 +50,7 @@ const (
 
 	netBindTCP    = 1 << 0 // ABI 4
 	netConnectTCP = 1 << 1
+	ruleNetPort   = 2
 
 	fileOnly = fsExecute | fsWriteFile | fsReadFile | fsTruncate | fsIoctlDev
 )
@@ -93,6 +97,9 @@ func command(shell, cmdline string, cfg Config) (*exec.Cmd, bool, error) {
 	if err != nil {
 		return exec.Command(shell, "-c", cmdline), false, nil
 	}
+	if !cfg.Network {
+		cfg.LocalPorts = listeningPorts()
+	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, false, err
@@ -113,7 +120,8 @@ func confineAndExec(cfg Config, argv []string) error {
 	binary.LittleEndian.PutUint64(attr[0:], fsAll)
 	size := uintptr(8)
 	if v >= 4 && !cfg.Network {
-		binary.LittleEndian.PutUint64(attr[8:], netBindTCP|netConnectTCP)
+		// Only outbound connections are confined: servers may listen.
+		binary.LittleEndian.PutUint64(attr[8:], netConnectTCP)
 		size = 16
 	}
 	fd, _, e := syscall.Syscall(sysLandlockCreateRuleset, uintptr(unsafe.Pointer(&attr[0])), size, 0)
@@ -127,6 +135,17 @@ func confineAndExec(cfg Config, argv []string) error {
 	for _, p := range cfg.Write {
 		if err := addRule(int(fd), p, fsAll); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("rule %s: %w", p, err)
+		}
+	}
+	if v >= 4 && !cfg.Network {
+		for _, port := range cfg.LocalPorts {
+			// struct landlock_net_port_attr: u64 allowed_access, u64 port.
+			buf := make([]byte, 16)
+			binary.LittleEndian.PutUint64(buf[0:], netConnectTCP)
+			binary.LittleEndian.PutUint64(buf[8:], uint64(port))
+			if _, _, e := syscall.Syscall6(sysLandlockAddRule, fd, ruleNetPort, uintptr(unsafe.Pointer(&buf[0])), 0, 0, 0); e != 0 {
+				return fmt.Errorf("port rule %d: %v", port, e)
+			}
 		}
 	}
 	if _, _, e := syscall.Syscall6(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0, 0, 0, 0); e != 0 {
@@ -160,4 +179,42 @@ func addRule(rulesetFD int, path string, access uint64) error {
 		return e
 	}
 	return nil
+}
+
+// remotePorts are never opened to commands without network access, even
+// when something listens on them locally: they are how data would leave
+// the machine (ssh, mail, DNS, web).
+var remotePorts = map[int]bool{21: true, 22: true, 23: true, 25: true, 53: true, 80: true, 443: true,
+	465: true, 587: true, 853: true, 993: true, 995: true, 1080: true, 3128: true, 8443: true}
+
+// listeningPorts returns the TCP ports something on this machine listens
+// on, from /proc/net/tcp and tcp6.
+func listeningPorts() []int {
+	seen := map[int]bool{}
+	for _, f := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n")[1:] {
+			fs := strings.Fields(line)
+			if len(fs) < 4 || fs[3] != "0A" { // 0A = LISTEN
+				continue
+			}
+			i := strings.LastIndexByte(fs[1], ':')
+			if i < 0 {
+				continue
+			}
+			p, err := strconv.ParseUint(fs[1][i+1:], 16, 16)
+			if err == nil && p > 0 && !remotePorts[int(p)] {
+				seen[int(p)] = true
+			}
+		}
+	}
+	ports := make([]int, 0, len(seen))
+	for p := range seen {
+		ports = append(ports, p)
+	}
+	sort.Ints(ports)
+	return ports
 }

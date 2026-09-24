@@ -36,3 +36,30 @@ func TestStrWidthIgnoresANSI(t *testing.T) {
 		t.Fatalf("truncate %q", s)
 	}
 }
+
+func TestAlwaysScope(t *testing.T) {
+	for _, c := range []struct{ action, key string }{
+		{"bash: npm install three", "bash:npm"},
+		{"network: FOO=1 /usr/bin/curl -sS x", "network:curl"},
+		{"write: /a/b.go", "write"},
+		{"fetch: https://example.com/x?y", "fetch:example.com"},
+	} {
+		if k, _ := alwaysScope(c.action); k != c.key {
+			t.Errorf("%q: key %q, want %q", c.action, k, c.key)
+		}
+	}
+}
+
+func TestNewer(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{{"0.12.1", "0.12.0", true}, {"0.13.0", "0.12.9", true}, {"0.12.0", "0.12.0", false}, {"0.9.0", "0.12.0", false}, {"1.0.0", "0.99.9", true}} {
+		if newer(c.a, c.b) != c.want {
+			t.Errorf("newer(%s, %s) != %v", c.a, c.b, c.want)
+		}
+	}
+	if !checksumListed("abc  agentium_linux_amd64.tar.gz\n", "agentium_linux_amd64.tar.gz", "ABC") {
+		t.Error("checksum line not matched")
+	}
+}

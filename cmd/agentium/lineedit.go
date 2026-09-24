@@ -269,7 +269,8 @@ func (e *editor) readLine() (string, error) {
 				break
 			}
 			line := string(e.buf)
-			e.out.WriteString("\r\n")
+			// Replace the scrolled one-row view with the whole input.
+			e.out.WriteString("\r\x1b[K" + e.prompt + strings.ReplaceAll(line, "\n", "\r\n  ") + "\r\n")
 			e.hist.add(line)
 			return line, nil
 		case "\x03": // Ctrl-C

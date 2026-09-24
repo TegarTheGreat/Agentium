@@ -331,6 +331,25 @@ func (e *Env) KillJobs() {
 	}
 }
 
+// RunningJobs lists the commands of background jobs still running.
+func (e *Env) RunningJobs() []string {
+	e.mu.Lock()
+	t := e.jobs
+	e.mu.Unlock()
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []string
+	for _, j := range t.jobs {
+		if j.running() {
+			out = append(out, oneLineCmd(j.cmd))
+		}
+	}
+	return out
+}
+
 func oneLineCmd(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > 100 {

@@ -1,6 +1,7 @@
 // Package sandbox confines shell commands: the workspace (plus temp and
 // build caches) is writable, the rest of the filesystem is read-only, and
-// TCP networking is off unless allowed. It uses Landlock on Linux and
+// Outbound TCP is off unless allowed; servers may listen, and ports
+// that are listening locally may be connected to. It uses Landlock on Linux and
 // sandbox-exec on macOS; no root, containers or extra binaries needed.
 //
 // On Linux the agent re-executes itself as a tiny helper that applies the
@@ -21,7 +22,11 @@ import (
 // Config describes one confinement.
 type Config struct {
 	Write   []string `json:"write"`   // writable directory trees
-	Network bool     `json:"network"` // allow TCP connect/bind
+	Network bool     `json:"network"` // allow outbound TCP connections
+	// LocalPorts may be connected to without Network: ports that servers
+	// on this machine listen on (a dev server the agent started, a local
+	// database), so they can be tested. Filled in when a command starts.
+	LocalPorts []int `json:"local_ports,omitempty"`
 	// NetworkUnenforced: this machine cannot block the network, so
 	// commands must not be told it is blocked.
 	NetworkUnenforced bool `json:"-"`

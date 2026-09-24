@@ -77,8 +77,8 @@ finish() {
     *":$dir:"*) ;;
     *) printf '\n    Add it to your PATH:\n      %sexport PATH="%s:$PATH"%s\n' "$bold" "$dir" "$reset" >&2 ;;
   esac
-  printf '\n    Get started:\n      %sagentium login anthropic%s   %s# or openai, gemini, openrouter, ...%s\n      %sagentium%s\n\n' \
-    "$bold" "$reset" "$dim" "$reset" "$bold" "$reset" >&2
+  printf '\n    Get started:\n      %sagentium%s   %s# the first run asks for a provider and API key%s\n\n' \
+    "$bold" "$reset" "$dim" "$reset" >&2
 }
 
 printf '\n%sAgentium installer%s\n\n' "$bold" "$reset" >&2

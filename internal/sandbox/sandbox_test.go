@@ -85,11 +85,30 @@ func TestNetworkConfinement(t *testing.T) {
 			t.Skip("python3 needed for the TCP probe")
 		}
 	}
-	if out, err := run(t, work, script, Config{Write: []string{work, "/dev"}}); err == nil {
-		t.Fatalf("TCP connect should be blocked, got %q", out)
+	box := Config{Write: []string{work, "/dev"}}
+	// A server listening on this machine can be reached (dev servers).
+	if out, err := run(t, work, script, box); err != nil || !strings.Contains(out, "hello") {
+		t.Fatalf("connecting to a local listening port should work: %v %q", err, out)
 	}
-	if out, err := run(t, work, script, Config{Write: []string{work, "/dev"}, Network: true}); err != nil || !strings.Contains(out, "hello") {
+	if out, err := run(t, work, script, Config{Write: box.Write, Network: true}); err != nil || !strings.Contains(out, "hello") {
 		t.Fatalf("TCP connect should work when allowed: %v %q", err, out)
+	}
+	// Servers may listen without network access.
+	listen := `python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print('listening')"`
+	if out, err := run(t, work, listen, box); err != nil || !strings.Contains(out, "listening") {
+		t.Fatalf("listening should be allowed: %v %q", err, out)
+	}
+	// Outbound connections elsewhere are denied at once (not a timeout).
+	out := `python3 -c "
+import socket
+try:
+    socket.create_connection(('192.0.2.1', 9), 3)
+    print('connected')
+except OSError as e:
+    print('errno', e.errno)
+"`
+	if got, _ := run(t, work, out, box); !strings.Contains(got, "errno 13") && !strings.Contains(got, "errno 1\n") {
+		t.Fatalf("outbound connect should be denied, got %q", got)
 	}
 }
 

@@ -73,3 +73,17 @@ func TestRuneWidth(t *testing.T) {
 		t.Fatal("runeWidth")
 	}
 }
+
+func TestWordWrap(t *testing.T) {
+	var sb strings.Builder
+	m := newMD(newWrap(&sb, func() int { return 24 }))
+	m.Write("- one two three four five six seven\n```\nthis long code line is never wrapped at all\n```\nend")
+	m.End()
+	got := stripANSI(sb.String())
+	want := "• one two three four\n  five six seven\n```\nthis long code line is never wrapped at all\n```\nend\n"
+	if got != want {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }

@@ -82,7 +82,18 @@ func (u *ui) banner(model, mode, box, cwd string) {
 		sb.WriteString(u.paint(cGray, "│") + " " + r + strings.Repeat(" ", pad) + " " + u.paint(cGray, "│") + "\n")
 	}
 	sb.WriteString(u.paint(cGray, "╰"+strings.Repeat("─", w+2)+"╯") + "\n")
-	sb.WriteString(u.paint(cDim, "  /help commands · /model switch model · /login add a provider · Ctrl-C interrupt") + "\n")
+	hint, max := "", termWidth(os.Stderr)-3
+	for _, h := range []string{"/help commands", "/model switch model", "/login add a provider", "Ctrl-C interrupt"} {
+		next := h
+		if hint != "" {
+			next = hint + " · " + h
+		}
+		if strWidth(next) > max {
+			break
+		}
+		hint = next
+	}
+	sb.WriteString(u.paint(cDim, "  "+hint) + "\n")
 	os.Stderr.WriteString(sb.String())
 }
 
@@ -563,8 +574,9 @@ func approvalTitle(action, reason string) (title, what string) {
 }
 
 // approve asks for permission with a single key press.
-func (u *ui) approve(action, reason string) (string, error) {
+func (u *ui) approve(action, reason, scope string) (string, error) {
 	title, what := approvalTitle(action, reason)
+	what = u.relative(what)
 	u.mu.Lock()
 	u.paused = true
 	u.clearLive()
@@ -573,7 +585,7 @@ func (u *ui) approve(action, reason string) (string, error) {
 	width := termWidth(os.Stderr) - 4
 	fmt.Fprintf(os.Stderr, "\n%s %s\n  %s\n  %s ",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), u.paint(cCyan, truncate(what, width)),
-		u.paint(cDim, "[y] yes  [a] always  [n] no ›"))
+		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no ›"))
 	u.mu.Unlock()
 	defer func() {
 		u.mu.Lock()

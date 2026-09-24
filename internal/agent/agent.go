@@ -333,6 +333,9 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 				a.Events.ToolDone(c, res, err, time.Since(t0))
 			}
 			msg := provider.Message{Role: provider.RoleTool, ToolCallID: c.ID, Text: res, Images: imgs}
+			if errors.Is(err, context.Canceled) {
+				err = errors.New("interrupted by the user before it finished")
+			}
 			if err != nil {
 				msg.IsError = true
 				if res != "" {

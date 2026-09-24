@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,7 +252,9 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 		}
 	}
 	icon, fail := u.paint(cGreen, "✓"), ""
-	if err != nil {
+	if errors.Is(err, context.Canceled) {
+		icon, fail = u.paint(cYellow, "■"), "interrupted"
+	} else if err != nil {
 		icon, fail = u.paint(cRed, "✗"), firstLine(err.Error())
 	} else if m := exitRE.FindStringSubmatch(out); m != nil {
 		icon, fail = u.paint(cRed, "✗"), "exit "+m[1]
@@ -345,6 +349,17 @@ func (u *ui) detail(c provider.ToolCall) string {
 		return s
 	}
 	s := strings.TrimPrefix(summarizeCall(c), c.Name+" ")
+	if cmd, _ := m["cmd"].(string); c.Name == "bash" && strings.Contains(strings.TrimSpace(cmd), "\n") {
+		// A script: its first line and how much follows.
+		lines := strings.Split(strings.TrimSpace(cmd), "\n")
+		s = strings.TrimSpace(lines[0]) + fmt.Sprintf("  (+%d lines)", len(lines)-1)
+	}
+	s = u.relative(s)
+	return s
+}
+
+// relative strips the workspace from paths and leading "cd <workspace>".
+func (u *ui) relative(s string) string {
 	if u.cwd != "" {
 		s = strings.TrimPrefix(s, "cd "+u.cwd+" && ")
 		s = strings.TrimPrefix(s, "cd "+u.cwd+"; ")

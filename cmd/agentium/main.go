@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -32,7 +33,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.12.0"
+var version = "0.13.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -50,6 +51,7 @@ Usage:
   agentium mcp [list|login|logout <name>]   remote MCP servers and their OAuth login
   agentium acp [-m model]       serve the Agent Client Protocol on stdio (Zed, JetBrains)
   agentium bench [-m model]     measure startup/RAM/prompt; with -m also run live tasks
+  agentium update               update to the latest release
   agentium version
 
 Flags:
@@ -111,6 +113,9 @@ func main() {
 			return
 		case "mcp":
 			exit(cmdMCP(os.Args[2:]))
+			return
+		case "update", "upgrade":
+			exit(cmdUpdate(os.Args[2:]))
 			return
 		}
 	}
@@ -334,6 +339,7 @@ type approver struct {
 	ui     *ui
 	gate   *policy.Gate
 	enable bool
+	always map[string]bool // scopes approved with "always"
 }
 
 func (a *approver) ask(action, reason string) bool {
@@ -342,30 +348,69 @@ func (a *approver) ask(action, reason string) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.gate.GetMode() == policy.Yolo { // "always" chosen meanwhile
+	key, scope := alwaysScope(action)
+	if a.gate.GetMode() == policy.Yolo || a.always[key] { // "always" chosen earlier
 		return true
 	}
+	remember := func() {
+		if a.always == nil {
+			a.always = map[string]bool{}
+		}
+		a.always[key] = true
+	}
 	if a.ui.live && lineEditing {
-		if k, err := a.ui.approve(action, reason); err == nil {
+		if k, err := a.ui.approve(action, reason, scope); err == nil {
 			if k == "a" {
-				a.gate.SetMode(policy.Yolo)
+				remember()
 			}
 			return k == "y" || k == "a"
 		}
 	}
 	a.ui.mu.Lock()
 	a.ui.endLine()
-	fmt.Fprintf(os.Stderr, "⚠ %s  (%s)\n  allow? [y]es / [N]o / [a]lways: ", action, reason)
+	fmt.Fprintf(os.Stderr, "⚠ %s  (%s)\n  allow? [y]es / [N]o / [a]lways %s: ", action, reason, scope)
 	a.ui.mu.Unlock()
 	line, _ := a.in.ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true
 	case "a", "always":
-		a.gate.SetMode(policy.Yolo)
+		remember()
 		return true
 	}
 	return false
+}
+
+// alwaysScope is what "always" approves for the rest of the session: the
+// same program for commands, file changes, the same host for fetches.
+func alwaysScope(action string) (key, label string) {
+	kind, rest, _ := strings.Cut(action, ": ")
+	switch kind {
+	case "bash", "network":
+		prog := ""
+		for _, w := range strings.Fields(rest) {
+			if strings.Contains(w, "=") && !strings.HasPrefix(w, "-") && prog == "" {
+				continue // VAR=value prefix
+			}
+			prog = filepath.Base(w)
+			break
+		}
+		if kind == "network" {
+			return kind + ":" + prog, "for `" + prog + "` with network"
+		}
+		return kind + ":" + prog, "for `" + prog + "`"
+	case "write":
+		return "write", "for file changes"
+	case "read":
+		return "read:" + rest, "for this file"
+	case "fetch":
+		host := rest
+		if u, err := url.Parse(rest); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		return "fetch:" + host, "for " + host
+	}
+	return action, "for this"
 }
 
 func run(args []string) error {
@@ -475,7 +520,7 @@ func run(args []string) error {
 	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
 	u.live = isTTY(os.Stderr) && !*quiet && os.Getenv("TERM") != "dumb"
 	if !*asJSON && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" && os.Getenv("AGENTIUM_RAW") == "" {
-		u.md = newMD(os.Stdout)
+		u.md = newMD(newWrap(os.Stdout, func() int { return termWidth(os.Stdout) - 1 }))
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
@@ -810,10 +855,19 @@ func run(args []string) error {
 	}
 	if u.live {
 		u.banner(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)
+		if v := updateNotice(); v != "" {
+			u.note(u.paint(cYellow, "agentium "+v+" is available") + u.paint(cDim, " · run `agentium update`"))
+		}
 	} else {
 		fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
 	}
 	interactive = true
+	defer func() {
+		// Background servers end with the session; say which.
+		if jobs := a.Env.RunningJobs(); len(jobs) > 0 && !*quiet {
+			u.note("stopping background jobs: " + strings.Join(jobs, " · "))
+		}
+	}()
 	var ed *editor
 	if lineEditing && isTTY(os.Stderr) {
 		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}

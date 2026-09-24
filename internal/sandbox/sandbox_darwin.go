@@ -33,7 +33,11 @@ func profile(cfg Config) string {
 	}
 	sb.WriteString("  (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\"))\n")
 	if !cfg.Network {
-		sb.WriteString("(deny network*)\n(allow network* (remote unix-socket))\n")
+		// Outbound connections are denied except to this machine; servers
+		// may listen.
+		sb.WriteString("(deny network*)\n(allow network* (remote unix-socket))\n" +
+			"(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n" +
+			"(allow network-outbound (remote ip \"localhost:*\"))\n")
 	}
 	return sb.String()
 }

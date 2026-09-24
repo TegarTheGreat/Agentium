@@ -47,12 +47,23 @@ func (m *mdStream) Write(d string) {
 			m.head.WriteRune(r)
 			if r == '\n' || m.decidable() {
 				m.block(&out)
+				m.syncWrap(&out)
 			}
 			continue
 		}
 		m.inline(&out, r)
 	}
 	io.WriteString(m.w, out.String())
+}
+
+// syncWrap stops word-wrapping inside code blocks: text so far is
+// written with the old setting before it changes.
+func (m *mdStream) syncWrap(out *strings.Builder) {
+	if ww, ok := m.w.(*wrapWriter); ok && ww.raw != m.fence {
+		io.WriteString(m.w, out.String())
+		out.Reset()
+		ww.raw = m.fence
+	}
 }
 
 // Pending reports whether part of a line is held back.
@@ -68,6 +79,9 @@ func (m *mdStream) Flush() {
 		m.inline(&out, '\n')
 	}
 	io.WriteString(m.w, out.String())
+	if ww, ok := m.w.(*wrapWriter); ok {
+		ww.Flush()
+	}
 }
 
 // End finishes a reply: whatever is held is written and block state (an
@@ -78,6 +92,10 @@ func (m *mdStream) End() {
 	}
 	if m.styled {
 		io.WriteString(m.w, sgrReset)
+	}
+	if ww, ok := m.w.(*wrapWriter); ok {
+		ww.Flush()
+		ww.raw = false
 	}
 	*m = mdStream{w: m.w, lineStart: true}
 }

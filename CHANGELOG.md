@@ -2,6 +2,34 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-09-24
+
+Fixes found by using Agentium on real tasks with a live model: building and serving a web app, installing packages, and answering questions about a large codebase.
+
+### Added
+
+- **`agentium update`** installs the latest release in place (checksum verified). The session banner mentions a newer release; the check runs in the background at most once a day, and `AGENTIUM_NO_UPDATE_CHECK=1` turns it off.
+- **Remote sessions:** over SSH, the agent gives URLs with the server's address (`http://<ip>:PORT`) instead of `localhost`.
+- On exit, Agentium lists the background jobs it stops, such as a dev server.
+
+### Changed
+
+- **Local servers work in the sandbox.** Commands may listen on any port. Ports that something on this machine listens on (a dev server, a local database) can be reached without network approval. Outbound connections elsewhere, and to common remote ports (22, 80, 443 and similar), still need `net`.
+- **"Always" is scoped.** Answering *always* approves the same program (`npm`), all file changes, or the same host for the rest of the session, instead of switching the whole session to yolo mode.
+- **Word wrap:** replies wrap at word boundaries, list items and quotes keep their indent, and code blocks are never wrapped.
+- Long prompts are shown in full after Enter. Multi-line commands show their first line and a line count. Approval prompts no longer repeat `cd <workspace> &&`.
+- An interrupted step shows as *interrupted*, and the model is told the user stopped it.
+- The model writes files with `edit` rather than shell heredocs, and runs servers as background jobs and reports their URL.
+- The installer's closing hint now points to the in-app setup.
+
+### Install
+
+```sh
+agentium update
+# or
+curl -fsSL https://raw.githubusercontent.com/TegarTheGreat/Agentium/main/install.sh | sh
+```
+
 ## [0.12.0] - 2026-09-23
 
 A redesigned terminal experience, tested end to end against a live model (DeepSeek).
@@ -98,5 +126,6 @@ go install github.com/tegarthegreat/agentium/cmd/agentium@v0.11.0
 
 Windows users can download the `.zip` archive below.
 
+[0.13.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.13.0
 [0.12.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.12.0
 [0.11.0]: https://github.com/TegarTheGreat/Agentium/releases/tag/v0.11.0
