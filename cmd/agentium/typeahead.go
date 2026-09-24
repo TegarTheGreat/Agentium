@@ -60,9 +60,10 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 			u.mu.Lock()
 			if u.paused { // an approval prompt is waiting for this key
 				u.mu.Unlock()
-				select {
+				select { // it reads every key (a typed reason must not lose letters)
 				case keys <- k:
-				default:
+				case <-done:
+					return
 				}
 				continue
 			}

@@ -103,9 +103,18 @@ func editDiff(root string, args []byte) (path string, lines []diffLine, start in
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(root, p)
 	}
-	if a.Old != "" && a.New != "" {
+	if a.Old != "" {
 		if b, err := os.ReadFile(p); err == nil {
-			if i := strings.Index(string(b), a.New); i >= 0 {
+			// After the edit the new text is in the file; before it (an
+			// approval preview), the old text is.
+			i := -1
+			if a.New != "" {
+				i = strings.Index(string(b), a.New)
+			}
+			if i < 0 {
+				i = strings.Index(string(b), a.Old)
+			}
+			if i >= 0 {
 				start = strings.Count(string(b[:i]), "\n") + 1
 			}
 		}

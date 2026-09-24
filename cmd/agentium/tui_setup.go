@@ -60,7 +60,7 @@ func (u *ui) banner(model, mode, box, cwd string) {
 		cwd = "~" + strings.TrimPrefix(cwd, home)
 	}
 	rows := []string{
-		u.paint(cCyan, "◆") + " " + u.paint(cBold, "Agentium") + " " + u.paint(cDim, version),
+		u.paint(cAccent, "◆") + " " + u.paint(cBold, "Agentium") + " " + u.paint(cDim, version),
 		"",
 		u.paint(cDim, "model   ") + model,
 		u.paint(cDim, "mode    ") + mode + u.paint(cDim, " · "+box),
@@ -86,7 +86,7 @@ func (u *ui) banner(model, mode, box, cwd string) {
 	}
 	sb.WriteString(u.paint(cGray, "╰"+strings.Repeat("─", w+2)+"╯") + "\n")
 	hint, max := "", termWidth(os.Stderr)-3
-	for _, h := range []string{"/help commands", "/model switch model", "/login add a provider", "Ctrl-C interrupt"} {
+	for _, h := range []string{"/ commands", "@ files", "esc stop", "shift+tab mode", "? keys"} {
 		next := h
 		if hint != "" {
 			next = hint + " · " + h
@@ -582,6 +582,34 @@ func (u *ui) showConfig(model, mode, effort, box string) {
 }
 
 // approvalTitle turns a gate action ("bash: cmd") into a question.
+// readReply reads one line typed after an approval prompt (Enter ends
+// it, Esc gives up).
+func (u *ui) readReply() string {
+	var r []rune
+	for {
+		k, err := u.nextKey()
+		if err != nil {
+			return string(r)
+		}
+		switch {
+		case k == "\r" || k == "\n":
+			fmt.Fprintln(os.Stderr)
+			return string(r)
+		case k == "\x1b" || k == "\x03":
+			fmt.Fprintln(os.Stderr)
+			return ""
+		case k == "\x7f" || k == "\x08":
+			if len(r) > 0 {
+				r = r[:len(r)-1]
+				fmt.Fprint(os.Stderr, "\b \b")
+			}
+		case !strings.HasPrefix(k, "\x1b") && k[0] >= 0x20:
+			r = append(r, []rune(k)...)
+			fmt.Fprint(os.Stderr, k)
+		}
+	}
+}
+
 func approvalTitle(action, reason string) (title, what string) {
 	kind, what, ok := strings.Cut(action, ": ")
 	if !ok {
@@ -628,16 +656,39 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 		}
 		body.WriteString("  " + u.paint(cCyan, row) + "\n")
 	}
+	// A file change shows what would change.
+	if kind, path, _ := strings.Cut(action, ": "); kind == "write" {
+		for _, t := range u.tools {
+			if t.call.Name != "edit" {
+				continue
+			}
+			var m struct{ Path string }
+			_ = jsonUnmarshal(t.call.Args, &m)
+			p := m.Path
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(u.cwd, p)
+			}
+			if filepath.Clean(p) == filepath.Clean(path) || u.relative(p) == u.relative(path) {
+				for _, l := range u.diffCard(t.call.Args, termWidth(os.Stderr)-1) {
+					body.WriteString(l + "\n")
+				}
+				break
+			}
+		}
+	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
-		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no ›"))
+		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no  [t] no, and say why ›"))
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
-		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always · n no", "", nil)
+		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always · n no · t tell why", "", nil)
 	}
+	u.setTitle("needs you")
+	u.notify("Agentium needs your answer: " + title)
 	asked := time.Now()
 	defer func() {
+		u.setTitle("working")
 		u.inOffice(func(o *office) { o.setLead(actThink, "") })
 		u.mu.Lock()
 		u.paused = false
@@ -667,7 +718,7 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 		gap := time.Since(last)
 		last = time.Now()
 		ans := strings.ToLower(k)
-		isAnswer := ans == "y" || ans == "a" || ans == "n" || ans == "\r" || ans == "\n"
+		isAnswer := ans == "y" || ans == "a" || ans == "n" || ans == "t" || ans == "\r" || ans == "\n"
 		if gap >= 400*time.Millisecond && isAnswer {
 			if next, ok := u.keyWithin(400 * time.Millisecond); !ok {
 				switch ans {
@@ -677,6 +728,9 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 				case "a":
 					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always"))
 					return "a", nil
+				case "t":
+					fmt.Fprint(os.Stderr, u.paint(cRed, "no")+"\n  "+u.paint(cInk, "tell Agentium:")+" ")
+					return "t:" + u.readReply(), nil
 				default:
 					fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
 					return "n", nil

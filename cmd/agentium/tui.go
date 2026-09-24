@@ -293,6 +293,8 @@ func (u *ui) subAgentTool(task string, c provider.ToolCall) {
 
 func (u *ui) beginTurn() {
 	u.inOffice(func(o *office) { o.setLead(actThink, "") })
+	u.setTitle("working")
+	u.turnStart = time.Now()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.replyStart = true
@@ -307,6 +309,10 @@ func (u *ui) beginTurn() {
 
 func (u *ui) endTurn() {
 	u.inOffice(func(o *office) { o.setLead(actDone, ""); o.finished() })
+	u.setTitle("ready")
+	if time.Since(u.turnStart) > 20*time.Second {
+		u.notify("Agentium finished")
+	}
 	if f := activeFS(); f != nil {
 		f.setBusy(false, "", "", nil)
 	}
@@ -378,13 +384,17 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 	} else if m := exitRE.FindStringSubmatch(out); m != nil {
 		icon, fail = u.paint(cRed, "✗"), "exit "+m[1]
 	}
+	if strings.Contains(fail, "the user declined") {
+		fail = "declined" // what was said is already on screen
+	}
 	width := termWidth(os.Stderr) - 1
 	dur := ""
 	if d >= 500*time.Millisecond {
 		dur = fmt.Sprintf(" %.1fs", d.Seconds())
 	}
 	name := toolLabel(c.Name)
-	detail := truncate(u.detail(c), width-strWidth(name)-len(dur)-len(fail)-6)
+	fail = truncate(fail, max(width/2, 20))
+	detail := truncate(u.detail(c), width-strWidth(name)-len(dur)-strWidth(fail)-8)
 	key := name + " " + detail
 	// Commands are not collapsed (running one twice can matter), except
 	// polling a background job.

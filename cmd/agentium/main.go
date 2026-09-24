@@ -226,6 +226,7 @@ type ui struct {
 	lastCount    int
 	lastDur      time.Duration
 	outputs      []stepOutput // recent step output, for Ctrl-O
+	turnStart    time.Time
 
 	// Type-ahead while a turn runs (see typeahead.go).
 	keys   chan string
@@ -372,6 +373,17 @@ type approver struct {
 	gate   *policy.Gate
 	enable bool
 	always map[string]bool // scopes approved with "always"
+	// feedback is what the user said when declining, for the model.
+	feedback string
+}
+
+// takeFeedback returns the user's reason for the last refusal, once.
+func (a *approver) takeFeedback() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	fb := a.feedback
+	a.feedback = ""
+	return fb
 }
 
 func (a *approver) ask(action, reason string) bool {
@@ -394,6 +406,9 @@ func (a *approver) ask(action, reason string) bool {
 		if k, err := a.ui.approve(action, reason, scope); err == nil {
 			if k == "a" {
 				remember()
+			}
+			if fb, ok := strings.CutPrefix(k, "t:"); ok {
+				a.feedback = fb
 			}
 			return k == "y" || k == "a"
 		}
@@ -577,11 +592,11 @@ func run(args []string) error {
 		*quiet = true
 	}
 	if *prompt == "" && !*asJSON && !*quiet && isTTY(os.Stderr) && os.Getenv("NO_COLOR") == "" {
-		applyTheme(cfg.Theme)
+		applyTheme(firstNonEmpty(os.Getenv("AGENTIUM_THEME"), cfg.Theme))
 	}
 	var screen *fullscreen
 	if *prompt == "" && !*asJSON && !*quiet && *bestOf <= 1 && fullscreenWanted(*classic || strings.EqualFold(cfg.UI, "classic")) {
-		if screen, err = enterFullscreen(); err == nil {
+		if screen, err = enterFullscreen(cfg.Mouse == nil || *cfg.Mouse); err == nil {
 			defer screen.leave()
 		}
 	}
@@ -595,7 +610,7 @@ func run(args []string) error {
 	gate := &policy.Gate{Mode: m, Root: cwd}
 	gate.Protected = gitProtected(cwd)
 	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}
-	gate.Approve = ap.ask
+	gate.Approve, gate.Feedback = ap.ask, ap.takeFeedback
 
 	sess := session.New(cwd, res.Provider+"/"+res.Model)
 	curModel.Store(sess.Model)

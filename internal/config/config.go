@@ -30,6 +30,7 @@ type Config struct {
 	Mode      string `json:"mode,omitempty"`       // ask | auto | yolo
 	UI        string `json:"ui,omitempty"`         // fullscreen (default) | classic
 	Theme     string `json:"theme,omitempty"`      // auto (default) | dark | light
+	Mouse     *bool  `json:"mouse,omitempty"`      // full screen: wheel scrolling (default); false keeps native selection
 	MaxTokens int    `json:"max_tokens,omitempty"`
 	MaxTurns  int    `json:"max_turns,omitempty"`
 	// FetchPrivate lets the fetch tool reach localhost/private networks.

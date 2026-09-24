@@ -4,30 +4,52 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [0.15.0] - 2026-09-25
 
+A new interface, designed from a study of Claude Code, Codex CLI, Gemini CLI, opencode, Crush, Amp, Cursor CLI and Mobbin references.
+
 ### Added
 
-- **A full-screen chat interface (Linux and macOS).** The screen has:
-  - a header;
-  - your messages as bubbles, and the replies with every step;
-  - an input box that stays at the bottom;
-  - a status bar with the session's tokens and cost.
-
-  Scroll back with PgUp/PgDn or the mouse wheel. On exit, the conversation is printed to the terminal. `--classic` (or `"ui": "classic"`) keeps the inline interface.
-- **The office.** A small pixel-art strip shows what Agentium is doing:
-  - reading a document;
-  - typing code;
-  - watching a terminal;
-  - browsing;
-  - planning on a clipboard;
-  - raising a "?" when it needs your answer.
-
-  Each sub-agent walks in as a staff member at their own desk and shows its own work. The strip animates at 4 frames per second and redraws only what changed.
-- **Sub-agent tasks take a short title,** shown instead of the start of the prompt.
+- **Full-screen workspace (Linux and macOS).**
+  - Conversation on the left.
+  - An ops panel on the right, toggled with `Ctrl-T`, with four parts:
+    - **Office:** Agentium and its sub-agents work at pixel-art desks, each showing what they are doing.
+    - **Plan:** the todo list, with progress.
+    - **Changes:** files changed so far, with +/− counts.
+    - **Context:** a meter of the context window.
+  - A composer whose border shows what is running.
+  - A status line with model, mode, tokens and cost.
+  - Scroll with PgUp/PgDn or the wheel. On exit, the conversation is printed to the terminal.
+  - `--classic` or `"ui": "classic"` keeps the inline interface.
+- **Night Shift look, in both interfaces.**
+  - A truecolor palette that follows the terminal's light or dark background (`"theme"` overrides it).
+  - Replies open with ◆, and your messages carry a ▌ bar.
+  - Edits show diff cards with line numbers, and commands show the end of their output.
+  - Code blocks are drawn as cards, and each turn ends with a receipt.
+- **Typing comforts.**
+  - `/` pops up commands with what they do.
+  - `@` fuzzy-finds project files.
+  - Big pastes become chips.
+  - `Ctrl-J`/`Shift-Enter` insert a new line.
+  - `Ctrl-R` searches earlier messages.
+  - `Ctrl-G` opens `$EDITOR`.
+  - `?` lists commands and keys.
+- **Control.**
+  - `Esc` stops a turn.
+  - `Esc Esc` or `/rewind` reverts file changes back to a chosen turn.
+  - `Shift-Tab` cycles approval modes.
+  - `Ctrl-O` shows the full output of recent steps.
+  - `/copy` puts the last reply on the clipboard, via OSC 52 as well, so it works over SSH.
+- **Approvals.**
+  - File changes show their diff before you answer.
+  - A new `t` answer declines and tells Agentium why; the model gets your words instead of a bare "denied".
+- **Attention.**
+  - The terminal title shows working, needs you or ready.
+  - A bell or desktop notification says when Agentium needs an answer or has finished a long turn.
+- **Sub-agent tasks take a short title**, shown instead of the start of the prompt.
 
 ### Fixed
 
 - **Sub-agents that run out of steps still report.** Before, a sub-agent that hit its limit returned nothing, and its work was invisible to the main agent. It is now asked for a report of what is done and what is left. The limit is also higher: 60 steps, up from 40.
-- **`agentium update` retries** network errors and server errors (such as 502) before giving up.
+- **`agentium update` retries** on network errors and server errors (such as 502) before giving up.
 
 ## [0.14.2] - 2026-09-24
 

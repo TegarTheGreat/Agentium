@@ -220,3 +220,19 @@ func TestRiskyAuditBypasses(t *testing.T) {
 		t.Error(".GIT not recognized")
 	}
 }
+
+func TestDeclineReason(t *testing.T) {
+	fb := "use the helper in util.go instead"
+	g := &Gate{Mode: Ask, Root: "/w", Approve: func(string, string) bool { return false }, Feedback: func() string { return fb }}
+	if ok, why := g.Write("/w/a.go"); ok || !strings.Contains(why, "the user declined and said: use the helper") {
+		t.Fatalf("with feedback: %v %q", ok, why)
+	}
+	fb = ""
+	if ok, why := g.Bash("ls"); ok || why != "the user declined (ask mode)" {
+		t.Fatalf("without feedback: %v %q", ok, why)
+	}
+	g.Approve = nil // not interactive: the reason says why approval was needed
+	if ok, why := g.Bash("ls"); ok || why != "ask mode" {
+		t.Fatalf("no approver: %v %q", ok, why)
+	}
+}

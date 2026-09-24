@@ -297,6 +297,8 @@ type Gate struct {
 	Mode    Mode
 	Root    string
 	Approve Approver // nil means deny whatever needs approval
+	// Feedback, if set, returns (once) what the user said when declining.
+	Feedback func() string
 	// Protected lists more paths git runs or reads settings from (a
 	// core.hooksPath such as .husky, included config files); writing them
 	// needs approval like .git itself.
@@ -326,6 +328,23 @@ func (g *Gate) ask(action, reason string) bool {
 	return g.Approve(action, reason)
 }
 
+// askWhy asks, and on a refusal says so in the reason (with the user's
+// words, if they gave any), so the model knows it was a decision.
+func (g *Gate) askWhy(action, reason string) (bool, string) {
+	if g.ask(action, reason) {
+		return true, reason
+	}
+	if g.Approve == nil {
+		return false, reason
+	}
+	if g.Feedback != nil {
+		if fb := strings.TrimSpace(g.Feedback()); fb != "" {
+			return false, "the user declined and said: " + fb
+		}
+	}
+	return false, "the user declined (" + reason + ")"
+}
+
 // PlanNote tells the model what plan mode means; it is added to the user
 // message (not the system prompt, which must stay cacheable).
 const PlanNote = "[plan mode: read-only. Investigate as needed, then reply with a short numbered plan: files to change, what changes, how to verify. Do not try to edit files.]"
@@ -353,7 +372,7 @@ func (g *Gate) Bash(cmd string) (bool, string) {
 	if reason == "" {
 		return true, ""
 	}
-	return g.ask("bash: "+cmd, reason), reason
+	return g.askWhy("bash: "+cmd, reason)
 }
 
 // Write reports whether path may be written.
@@ -378,7 +397,7 @@ func (g *Gate) Write(path string) (bool, string) {
 	if reason == "" {
 		return true, ""
 	}
-	return g.ask("write: "+path, reason), reason
+	return g.askWhy("write: "+path, reason)
 }
 
 func (g *Gate) protected(path string) bool {
@@ -418,7 +437,7 @@ func (g *Gate) Net(cmd string, p NetPolicy) (bool, string) {
 	case p == NetAllow || g.GetMode() == Yolo:
 		return true, ""
 	}
-	return g.ask("network: "+cmd, "needs network access"), "needs network access"
+	return g.askWhy("network: "+cmd, "needs network access")
 }
 
 var secretPath = regexp.MustCompile(`/\.(ssh|aws|gnupg|kube|docker|netrc|npmrc|pypirc|git-credentials|config/gcloud|config/gh|agentium/auth\.json)(/|$)|^/etc/(shadow|gshadow|sudoers)`)
@@ -430,7 +449,7 @@ func (g *Gate) Read(path string) (bool, string) {
 	if g.GetMode() == Yolo || !secretPath.MatchString(filepath.ToSlash(path)) && !dotEnv(path) {
 		return true, ""
 	}
-	return g.ask("read: "+path, "credential file"), "credential file"
+	return g.askWhy("read: "+path, "credential file")
 }
 
 // External reports whether an external (MCP) tool may run. Ask mode gates
@@ -439,9 +458,9 @@ func (g *Gate) Read(path string) (bool, string) {
 func (g *Gate) External(name string) (bool, string) {
 	switch g.GetMode() {
 	case Ask:
-		return g.ask("mcp: "+name, "ask mode"), "ask mode"
+		return g.askWhy("mcp: "+name, "ask mode")
 	case Plan:
-		return g.ask("mcp: "+name, "plan mode"), "plan mode"
+		return g.askWhy("mcp: "+name, "plan mode")
 	}
 	return true, ""
 }
@@ -529,7 +548,7 @@ func (g *Gate) Fetch(url string) (bool, string) {
 		return false, "the URL contains a credential"
 	}
 	if g.GetMode() == Ask {
-		return g.ask("fetch: "+url, "ask mode"), "ask mode"
+		return g.askWhy("fetch: "+url, "ask mode")
 	}
 	return true, ""
 }

@@ -105,21 +105,36 @@ On first run Agentium asks for a provider and key, then saves them. Environment 
 
 ### Interactive session
 
-On Linux and macOS, `agentium` opens a full-screen chat:
+On Linux and macOS, `agentium` opens a full-screen workspace; Windows uses the inline interface. The design comes from a study of the leading agent CLIs.
 
-- **Header:** the model, mode and folder.
-- **Office:** a small pixel-art strip where Agentium visibly works at its desk. It reads a document, types, watches a terminal, browses, or hands a folder to a sub-agent, who appears as a staff member at their own desk.
-- **Conversation:** your messages as bubbles, and the replies with every step.
-- **Input box and status bar:** at the bottom.
+- **Conversation.**
+  - Your messages carry an ink `▌` bar.
+  - Agentium's replies open with an amber `◆`.
+  - Every step is one line, and edits show a diff card with line numbers.
+  - Commands show the end of their output, and code blocks are drawn as cards.
+  - A receipt closes each turn (time, steps, tokens, cost).
+- **Ops panel** (terminals from 110 columns wide, toggled with `Ctrl-T`):
+  - **Office:** a pixel-art office where Agentium visibly works: reading, typing, watching a terminal, browsing, or handing a folder to a sub-agent. Each sub-agent appears as a staff member at their own desk, in their own color.
+  - **Plan:** the todo list, with progress.
+  - **Changes:** the files changed so far.
+  - **Context:** a meter of how much of the context window is used.
+- **Composer.** Its border shows what is running (`◐ Running go test · 0:04 · esc to stop`). Messages typed during a turn queue up there.
+- **Approvals.** File changes show their diff before you answer:
+  - `y` yes
+  - `a` always
+  - `n` no
+  - `t` no, and tell Agentium why; your words go to the model.
+- **Status line.** Model, mode, tokens and cost.
+- **Attention.** The terminal title shows the state (working, needs you, ready). A bell or a desktop notification says when Agentium needs an answer or has finished a long turn.
 
-The animation runs at 4 frames per second and redraws only what changed. On exit, the conversation is printed to the terminal, so it stays in the scrollback.
-
-The screen needs a terminal of at least 50×16, and the office appears from 60×24. Use `agentium --classic` (or `"ui": "classic"` in the config) for the inline interface; Windows always uses it.
+Night Shift, the default palette, uses truecolor and follows your terminal's light or dark background (`"theme": "light"` or `"dark"` overrides it). On exit, the conversation is printed to the terminal. `agentium --classic` (or `"ui": "classic"`) gives the inline interface with the same look. `"mouse": false` keeps the terminal's own text selection.
 
 | | |
 |---|---|
-| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/update` `/exit` |
-| **Keys** | ↑/↓ history · Ctrl-A/E/U/K/W · pastes keep their newlines · end a line with `\` for a newline · Ctrl-C interrupts a running turn · typing during a turn queues a message · PgUp/PgDn or the mouse wheel scroll · Shift+drag selects text |
+| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/update` `/exit` |
+| **Typing** | `/` shows commands with what they do · `@` fuzzy-finds project files · big pastes become `[Pasted text #1 +40 lines]` chips · `Ctrl-J`, `Shift-Enter` or a trailing `\` for a new line · `Ctrl-R` searches earlier messages · `Ctrl-G` writes the message in `$EDITOR` · `↑`/`↓` history |
+| **While it works** | `Esc` stops the turn · typing queues a message for when it ends · `Ctrl-O` shows the full output of recent steps |
+| **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds file changes to an earlier turn · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
 
 ### Subcommands
 
@@ -175,6 +190,7 @@ Subscription logins are offered only where the provider's terms allow third-part
   "effort": "high",
   "mode": "auto",
   "ui": "fullscreen",
+  "theme": "auto",
   "sandbox": { "network": "ask", "write": ["~/data"] },
   "hooks": { "post_edit": ["gofmt -w {path}"], "stop": ["notify-send agentium done"] },
   "mcp": {

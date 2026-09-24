@@ -83,6 +83,7 @@ type fullscreen struct {
 
 	pager     *pager // Ctrl-O: a full-screen view of tool output
 	suspended bool   // an external program owns the terminal
+	mouse     bool   // wheel reporting on (native selection then needs Shift)
 
 	done     chan struct{}
 	readDone chan struct{}
@@ -118,7 +119,7 @@ func fullscreenWanted(classic bool) bool {
 
 // enterFullscreen switches to the full-screen UI. The caller defers
 // leave().
-func enterFullscreen() (*fullscreen, error) {
+func enterFullscreen(mouse bool) (*fullscreen, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -133,7 +134,8 @@ func enterFullscreen() (*fullscreen, error) {
 		f.restore = restore
 	}
 	// Alternate screen, hidden cursor, mouse wheel reporting (SGR).
-	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[H\x1b[2J")
+	f.mouse = mouse
+	f.tty.WriteString("\x1b[?1049h\x1b[?25l" + f.mouseOn() + "\x1b[H\x1b[2J")
 	os.Stdout, os.Stderr = pw, pw
 	fsMu.Lock()
 	fs = f
@@ -223,6 +225,13 @@ func (f *fullscreen) leave() {
 	}
 	f.mu.Unlock()
 	f.tty.WriteString(sb.String())
+}
+
+func (f *fullscreen) mouseOn() string {
+	if f.mouse {
+		return "\x1b[?1000h\x1b[?1006h"
+	}
+	return ""
 }
 
 // sidebar reports whether the sidebar is shown; the caller holds f.mu.
@@ -360,7 +369,7 @@ func (f *fullscreen) suspend() {
 
 func (f *fullscreen) resume() {
 	f.mu.Lock()
-	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[H\x1b[2J")
+	f.tty.WriteString("\x1b[?1049h\x1b[?25l" + f.mouseOn() + "\x1b[H\x1b[2J")
 	f.suspended, f.prev, f.dirty = false, nil, true
 	f.mu.Unlock()
 }

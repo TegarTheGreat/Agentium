@@ -286,9 +286,12 @@ func (e *editor) drawPopup(width int) {
 		f.setPopup(e.sugg, e.sel)
 		return
 	}
+	rows := popupRows(e.sugg, e.sel, width)
+	if len(rows) == 0 && e.drawnBelow == 0 {
+		return
+	}
 	var sb strings.Builder
 	sb.WriteString("\x1b7") // save the cursor
-	rows := popupRows(e.sugg, e.sel, width)
 	for _, r := range rows {
 		sb.WriteString("\r\n\x1b[2K" + r)
 	}
@@ -300,9 +303,7 @@ func (e *editor) drawPopup(width int) {
 	}
 	sb.WriteString("\x1b8") // restore it
 	e.drawnBelow = len(rows)
-	if len(rows) > 0 || e.drawnBelow > 0 {
-		e.out.WriteString(sb.String())
-	}
+	e.out.WriteString(sb.String())
 }
 
 // popupRows renders up to 8 suggestions around the selected one.
