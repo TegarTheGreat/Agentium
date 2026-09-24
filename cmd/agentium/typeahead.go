@@ -81,7 +81,11 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 					u.queued = append(u.queued, t)
 				}
 				u.typing = nil
-			case k == "\x03":
+			case k == "\x0f": // Ctrl-O
+				u.mu.Unlock()
+				u.openViewer()
+				continue
+			case k == "\x03" || k == "\x1b": // Ctrl-C or Esc
 				if len(u.typing) > 0 {
 					u.typing = nil
 				} else {
@@ -178,7 +182,7 @@ func (u *ui) typeaheadLines(width int) []string {
 		}
 		lines = append(lines, u.paint(cCyan, "❯ ")+t+u.paint(cDim, "▏"))
 	} else if len(u.queued) == 0 && u.keys != nil && activeFS() == nil { // full screen: in the status bar
-		lines = append(lines, u.paint(cDim, "  type to queue a message · Ctrl-C to interrupt"))
+		lines = append(lines, u.paint(cDim, "  type to queue a message · Esc or Ctrl-C to interrupt"))
 	}
 	return lines
 }

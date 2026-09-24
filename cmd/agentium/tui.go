@@ -192,7 +192,7 @@ func (u *ui) stripText(spin string) string {
 	default:
 		what = "Thinking · " + elapsed(time.Since(u.thinkT))
 	}
-	return u.paint(cAccent, spin) + " " + what + u.paint(cGray, " · ctrl+c to stop")
+	return u.paint(cAccent, spin) + " " + what + u.paint(cGray, " · esc to stop")
 }
 
 func elapsed(d time.Duration) string {
@@ -369,6 +369,7 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 			break
 		}
 	}
+	u.keepOutput(c, out)
 	icon, fail := u.paint(cGreen, "✓"), ""
 	if errors.Is(err, context.Canceled) {
 		icon, fail = u.paint(cYellow, "■"), "interrupted"

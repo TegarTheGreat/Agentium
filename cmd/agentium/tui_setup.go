@@ -110,37 +110,54 @@ func (u *ui) prompt(plan bool) string {
 
 var helpRows = [][2]string{
 	{"/model", "choose a model (or /model provider/model)"},
-	{"/login", "add or change a provider's API key"},
-	{"/logout", "remove a provider's stored key"},
-	{"/mode", "approvals: ask · auto · yolo · plan"},
+	{"/login  /logout", "add, change or remove a provider's API key"},
+	{"/mode", "approvals: ask · auto · yolo · plan (shift+tab cycles)"},
 	{"/effort", "reasoning effort: low · medium · high · xhigh · max"},
 	{"/plan  /go", "investigate read-only, then carry out the plan"},
-	{"/undo", "revert the last turn's file changes"},
+	{"/undo  /rewind", "revert the last turn, or back to an earlier one (esc esc)"},
+	{"/copy", "copy the last reply to the clipboard"},
 	{"/sessions  /resume", "list and continue saved conversations"},
 	{"/clear", "start a new conversation"},
 	{"/skills", "list skills; /<skill> [task] runs one"},
-	{"/usage", "tokens used in this session"},
-	{"/config", "show current settings"},
+	{"/usage  /config", "tokens used · current settings"},
 	{"/update", "install the latest release"},
-	{"/exit", "quit (also Ctrl-D)"},
+	{"/exit", "quit (also ctrl+d)"},
+}
+
+var keyRows = [][2]string{
+	{"enter", "send · while a turn runs: queue it for after"},
+	{"ctrl+j  shift+enter", "new line (or end a line with \\)"},
+	{"/  @", "commands · mention a file (tab or enter picks)"},
+	{"esc", "stop the running turn · esc esc: rewind"},
+	{"shift+tab", "next approval mode"},
+	{"ctrl+r", "search your earlier messages"},
+	{"ctrl+g", "write the message in $EDITOR"},
+	{"ctrl+o", "full output of recent steps"},
+	{"↑ ↓", "history · ctrl+a/e/u/k/w edit the line"},
+	{"@file.png", "attach an image"},
 }
 
 func (u *ui) help() {
 	var sb strings.Builder
+	row := func(k, v string) {
+		sb.WriteString("  " + u.paint(cAccent, fmt.Sprintf("%-22s", k)) + u.paint(cDim, v) + "\n")
+	}
 	sb.WriteString("\n" + u.paint(cBold, "Commands") + "\n")
 	for _, r := range helpRows {
-		sb.WriteString("  " + u.paint(cCyan, fmt.Sprintf("%-20s", r[0])) + u.paint(cDim, r[1]) + "\n")
+		row(r[0], r[1])
 	}
 	sb.WriteString("\n" + u.paint(cBold, "Keys") + "\n")
-	sb.WriteString(u.paint(cDim, "  ↑/↓ history · Ctrl-A/E start/end · Ctrl-U/K/W delete · end a line with \\ for a newline\n"))
-	sb.WriteString(u.paint(cDim, "  @file.png attaches an image · Ctrl-C interrupts a running turn\n"))
+	for _, r := range keyRows {
+		row(r[0], r[1])
+	}
 	if activeFS() != nil {
-		sb.WriteString(u.paint(cDim, "  PgUp/PgDn or the mouse wheel scroll · Shift+drag selects text · agentium --classic for the inline UI\n"))
+		row("pgup pgdn  wheel", "scroll · shift+drag selects text")
+		row("ctrl+t", "show or hide the side panel")
+		row("agentium --classic", "the inline interface instead")
 	}
 	os.Stderr.WriteString(sb.String())
 }
 
-// note prints a dim status line.
 func (u *ui) note(s string) { fmt.Fprintln(os.Stderr, u.paint(cDim, "  "+s)) }
 
 // success prints a green check line.

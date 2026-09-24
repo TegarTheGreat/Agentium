@@ -100,3 +100,5 @@ func termRows(f *os.File) int {
 func noEcho(*os.File) (func(), error) { return nil, errors.New("not supported") }
 
 func notifyResize(chan os.Signal) {}
+
+func withCookedTerm(_ *os.File, fn func() error) error { return fn() }

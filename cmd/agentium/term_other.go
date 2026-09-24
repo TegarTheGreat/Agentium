@@ -24,3 +24,5 @@ func termRows(*os.File) int { return 24 }
 func noEcho(*os.File) (func(), error) { return nil, errors.New("not supported") }
 
 func notifyResize(chan os.Signal) {}
+
+func withCookedTerm(_ *os.File, fn func() error) error { return fn() }

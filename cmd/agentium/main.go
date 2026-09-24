@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -224,6 +225,7 @@ type ui struct {
 	lastKey      string // the last tool line, for collapsing repeats
 	lastCount    int
 	lastDur      time.Duration
+	outputs      []stepOutput // recent step output, for Ctrl-O
 
 	// Type-ahead while a turn runs (see typeahead.go).
 	keys   chan string
@@ -989,6 +991,45 @@ func run(args []string) error {
 			ed.echo = u.userMessage
 			ed.placeholder = "Message Agentium…  / commands · @ files"
 		}
+		ed.complete = (&completer{root: cwd, skills: skills}).complete
+		var lastEsc time.Time
+		ed.hook = func(e *editor, k string) bool {
+			submit := func(cmd string) bool {
+				e.buf, e.pos, e.autoSubmit = []rune(cmd), len([]rune(cmd)), true
+				return true
+			}
+			switch {
+			case k == "\x1b[Z": // Shift-Tab: the next approval mode
+				next := map[policy.Mode]policy.Mode{policy.Ask: policy.Auto, policy.Auto: policy.Plan, policy.Plan: policy.Ask, policy.Yolo: policy.Ask}
+				gate.SetMode(next[gate.GetMode()])
+				e.prompt = u.prompt(gate.GetMode() == policy.Plan)
+				if activeFS() == nil {
+					e.out.WriteString("\r\x1b[K" + u.paint(cDim, "  mode: "+string(gate.GetMode())+" (shift+tab to change)") + "\r\n")
+				}
+				return true
+			case k == "\x1b" && len(e.buf) == 0: // Esc Esc: rewind
+				if time.Since(lastEsc) < 800*time.Millisecond {
+					lastEsc = time.Time{}
+					return submit("/rewind")
+				}
+				lastEsc = time.Now()
+				return true
+			case k == "?" && len(e.buf) == 0:
+				return submit("/help")
+			case k == "\x0f": // Ctrl-O: the full output of recent steps
+				u.openViewer()
+				return true
+			case k == "\x07": // Ctrl-G: write the message in an editor
+				text, err := externalEdit(e.text())
+				if err != nil {
+					e.out.WriteString("\r\x1b[K" + u.paint(cDim, "  "+err.Error()) + "\r\n")
+				}
+				e.buf, e.pastes = []rune(text), nil
+				e.pos = len(e.buf)
+				return true
+			}
+			return false
+		}
 	}
 	// afterPlan is the mode /go switches to.
 	afterPlan := policy.Auto
@@ -1318,6 +1359,52 @@ func slash(line string, e *slashEnv) (exit bool) {
 			return false
 		}
 		a.Note = note
+		_ = sess.Save()
+	case "/copy":
+		text := ""
+		for i := len(a.Messages) - 1; i >= 0; i-- {
+			if m := a.Messages[i]; m.Role == provider.RoleAssistant && strings.TrimSpace(m.Text) != "" {
+				text = m.Text
+				break
+			}
+		}
+		if text == "" {
+			fmt.Fprintln(os.Stderr, "· nothing to copy yet")
+			return false
+		}
+		how := copyToClipboard(text)
+		u.success(fmt.Sprintf("Copied the last reply (%d characters) %s", len(text), how))
+	case "/rewind":
+		if store == nil {
+			fmt.Fprintln(os.Stderr, "· checkpoints are disabled (needs git, and \"checkpoints\" not false)")
+			return false
+		}
+		if len(sess.Checkpoints) == 0 {
+			fmt.Fprintln(os.Stderr, "· nothing to rewind: no turn has changed files yet")
+			return false
+		}
+		var items []menuItem
+		for i := len(sess.Checkpoints) - 1; i >= 0; i-- {
+			cp := sess.Checkpoints[i]
+			items = append(items, menuItem{value: strconv.Itoa(i), label: firstLine(cp.Prompt), hint: cp.Time.Format("15:04")})
+		}
+		pick, err := u.choose("Rewind: revert the file changes of this turn and every later one", items, "", false)
+		if err != nil {
+			return false
+		}
+		k, _ := strconv.Atoi(pick)
+		var notes []string
+		for len(sess.Checkpoints) > k {
+			note, err := undoLast(store, sess)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "·", err)
+				break
+			}
+			if note != "" {
+				notes = append(notes, note)
+			}
+		}
+		a.Note = strings.Join(notes, "\n")
 		_ = sess.Save()
 	case "/usage":
 		u := a.Usage

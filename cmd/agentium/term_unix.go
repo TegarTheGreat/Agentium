@@ -96,3 +96,20 @@ func noEcho(f *os.File) (func(), error) {
 }
 
 func notifyResize(ch chan os.Signal) { signal.Notify(ch, syscall.SIGWINCH) }
+
+// withCookedTerm runs fn with the terminal in its normal (line, echo,
+// signals) mode, e.g. for an external editor, then restores the mode.
+func withCookedTerm(f *os.File, fn func() error) error {
+	fd := f.Fd()
+	cur, err := tcget(fd)
+	if err != nil {
+		return fn()
+	}
+	sane := cur
+	sane.Iflag |= syscall.ICRNL
+	sane.Oflag |= syscall.OPOST
+	sane.Lflag |= syscall.ECHO | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+	_ = tcset(fd, &sane)
+	defer tcset(fd, &cur)
+	return fn()
+}

@@ -78,6 +78,11 @@ type fullscreen struct {
 	queued  []string
 	todos   []todoItem
 	changes []fileChange
+	popup   []suggestion
+	sel     int
+
+	pager     *pager // Ctrl-O: a full-screen view of tool output
+	suspended bool   // an external program owns the terminal
 
 	done     chan struct{}
 	readDone chan struct{}
@@ -285,6 +290,14 @@ func (f *fullscreen) setBusy(busy bool, strip, typing string, queued []string) {
 	f.dirty = true
 }
 
+// setPopup shows the editor's suggestions above the composer.
+func (f *fullscreen) setPopup(items []suggestion, sel int) {
+	f.mu.Lock()
+	f.popup, f.sel = append([]suggestion(nil), items...), sel
+	f.dirty = true
+	f.mu.Unlock()
+}
+
 func (f *fullscreen) setTodos(items []todoItem) {
 	f.mu.Lock()
 	f.todos = items
@@ -337,9 +350,27 @@ func padTo(s string, w int) string {
 	return s + strings.Repeat(" ", max(w-strWidth(s), 0))
 }
 
+// suspend hands the terminal to another program (an editor).
+func (f *fullscreen) suspend() {
+	f.mu.Lock()
+	f.suspended = true
+	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l")
+	f.mu.Unlock()
+}
+
+func (f *fullscreen) resume() {
+	f.mu.Lock()
+	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[H\x1b[2J")
+	f.suspended, f.prev, f.dirty = false, nil, true
+	f.mu.Unlock()
+}
+
 // draw composes the screen and writes the rows that changed; the caller
 // holds f.mu.
 func (f *fullscreen) draw() {
+	if f.suspended {
+		return
+	}
 	mainW := f.mainWidth()
 	h := f.transcriptRows()
 	var side []string
@@ -371,6 +402,29 @@ func (f *fullscreen) draw() {
 			row, w = f.vt.renderW(first+i, mainW-3)
 		}
 		left = append(left, " "+row+strings.Repeat(" ", max(mainW-1-w, 0)))
+	}
+	if len(f.popup) > 0 && f.input {
+		// The suggestions float over the bottom of the transcript.
+		rows := popupRows(f.popup, f.sel, mainW-6)
+		boxW := 0
+		for _, r := range rows {
+			boxW = max(boxW, strWidth(r))
+		}
+		boxW = min(boxW+2, mainW-4)
+		border := sgr(cGray)
+		box := []string{border + "╭" + strings.Repeat("─", boxW) + "╮\x1b[0m"}
+		for _, r := range rows {
+			box = append(box, border+"│\x1b[0m"+padTo(r, boxW)+border+"│\x1b[0m")
+		}
+		for i, b := range box {
+			at := len(left) - len(box) + i
+			if at >= 0 {
+				left[at] = " " + padTo(b, mainW-1)
+			}
+		}
+	}
+	if f.pager != nil {
+		left = f.pager.rows(mainW, len(left))
 	}
 	left = append(left, f.composer(mainW, inputRow)...)
 
@@ -449,7 +503,7 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 	rows = append(rows, border+"│\x1b[0m "+padTo(line, inner)+" "+border+"│\x1b[0m")
 	hint := "enter send · ctrl+j new line · / commands · pgup scroll"
 	if f.busy {
-		hint = "enter queue · ctrl+c stop · pgup scroll"
+		hint = "enter queue · esc stop · pgup scroll"
 	}
 	if f.cols >= sideMinW {
 		hint += " · ctrl+t panel"
@@ -611,6 +665,16 @@ func scrollKey(k string) bool {
 	if f == nil {
 		return false
 	}
+	f.mu.Lock()
+	if f.pager != nil {
+		if f.pager.key(k) {
+			f.pager = nil
+		}
+		f.dirty = true
+		f.mu.Unlock()
+		return true
+	}
+	f.mu.Unlock()
 	switch {
 	case k == "\x1b[5~":
 		f.scrollBy(f.height() - 2)
