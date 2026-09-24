@@ -217,13 +217,22 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	case err = <-done:
 	case <-ctx.Done():
 		killProcessGroup(cmd)
-		err = <-done
+		select {
+		case err = <-done:
+		case <-time.After(5 * time.Second):
+			// Something keeps the output pipe open; do not hang the turn.
+			err = errors.New("process did not exit after being killed")
+		}
 		timedOut = ctx.Err() == context.DeadlineExceeded
 	}
+	// Anything the command left running in its process group (a server
+	// started with "&") is stopped: long-running processes belong in
+	// background jobs, which are tracked and stopped at the end.
+	killProcessGroup(cmd)
 	s := Clip(out.String(), bashMaxOutput)
 	if errors.Is(err, exec.ErrWaitDelay) {
 		err = nil
-		s += "\n[background process still running]"
+		s += "\n[processes left running were stopped; start servers with background=true]"
 	}
 	switch {
 	case timedOut:

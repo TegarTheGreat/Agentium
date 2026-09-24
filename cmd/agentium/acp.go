@@ -264,7 +264,7 @@ func (s *acpServer) newSession(m rpcMsg) {
 		return
 	}
 	ss := &acpSession{id: session.New(cwd, "").ID, cwd: cwd, allowed: map[string]bool{}}
-	ss.gate = &policy.Gate{Mode: policy.ParseMode(s.cfg.Mode), Root: cwd}
+	ss.gate = &policy.Gate{Mode: policy.ParseMode(s.cfg.Mode), Root: cwd, Protected: gitProtected(cwd)}
 	ss.gate.Approve = func(action, reason string) bool { return s.askPermission(ss, action, reason) }
 
 	tools := tool.All()

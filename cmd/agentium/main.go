@@ -555,6 +555,7 @@ func run(args []string) error {
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
+	gate.Protected = gitProtected(cwd)
 	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}
 	gate.Approve = ap.ask
 

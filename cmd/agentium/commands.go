@@ -511,3 +511,11 @@ func cmdMCP(args []string) error {
 	fmt.Fprintln(os.Stderr, "logged in to", args[1])
 	return nil
 }
+
+// gitProtected lists hook directories and included config files outside
+// .git that git runs or reads (Husky's .husky, includes): edits to them
+// need approval like .git itself.
+func gitProtected(root string) []string {
+	hooks, includes := tool.GitExtras(root)
+	return append(hooks, includes...)
+}

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -122,9 +123,11 @@ func (j *job) status() string {
 }
 
 type jobTable struct {
-	mu   sync.Mutex
-	next int
-	jobs map[int]*job
+	mu       sync.Mutex
+	next     int
+	jobs     map[int]*job
+	starting int  // jobs being started (they count toward the limit)
+	closed   bool // KillJobs ran: the session is over
 }
 
 func (e *Env) jobTable() *jobTable {
@@ -147,13 +150,19 @@ func (e *Env) startJob(cmdline string, box *sandbox.Config, tty bool) (string, e
 			live++
 		}
 	}
-	if live >= maxJobs {
+	if live+t.starting >= maxJobs {
 		t.mu.Unlock()
 		return "", fmt.Errorf("%d background jobs are already running; stop one first (bash {job:N, kill:true})", live)
 	}
 	t.next++
 	id := t.next
+	t.starting++ // holds the slot while the process starts
 	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.starting--
+		t.mu.Unlock()
+	}()
 
 	cmd := exec.Command(shellPath(), shellArgs(shellPath(), cmdline)...)
 	if box != nil {
@@ -215,7 +224,12 @@ func (e *Env) startJob(cmdline string, box *sandbox.Config, tty bool) (string, e
 	}
 	t.mu.Lock()
 	t.jobs[id] = j
+	closed := t.closed
 	t.mu.Unlock()
+	if closed { // the session ended while this job was starting
+		j.kill()
+		return "", errors.New("the session is ending")
+	}
 	out := j.waitOutput(context.Background(), 2*time.Second)
 	return fmt.Sprintf("job %d started (%s): %s\n%s", id, j.status(), oneLineCmd(cmdline), out), nil
 }
@@ -324,10 +338,11 @@ func (e *Env) KillJobs() {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.closed = true
 	for _, j := range t.jobs {
-		if j.running() {
-			j.kill()
-		}
+		// Also jobs whose shell exited: their children may live on in
+		// the process group.
+		j.kill()
 	}
 }
 

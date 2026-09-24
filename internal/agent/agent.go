@@ -326,7 +326,9 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			default:
 				tctx, images := tool.WithImageSink(context.WithValue(ctx, agentKey{}, a))
 				if f := a.Events.ToolOutput; f != nil {
-					tctx = tool.WithLive(tctx, liveWriter(func(p []byte) { f(c, p) }))
+					lw := newLiveWriter(func(p []byte) { f(c, p) })
+					defer lw.close()
+					tctx = tool.WithLive(tctx, lw)
 				}
 				res, err = safeRun(tctx, t, a.Env, c.Args)
 				imgs = images()
@@ -354,10 +356,46 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 	return out
 }
 
-// liveWriter adapts a callback to io.Writer.
-type liveWriter func([]byte)
+// liveWriter passes a command's output to the UI without ever blocking
+// the command: chunks go through a buffer, and when the UI falls behind
+// (a paused terminal) they are dropped; the tool result is unaffected.
+type liveWriter struct {
+	mu     sync.Mutex
+	closed bool
+	ch     chan []byte
+}
 
-func (w liveWriter) Write(p []byte) (int, error) { w(p); return len(p), nil }
+func newLiveWriter(f func([]byte)) *liveWriter {
+	w := &liveWriter{ch: make(chan []byte, 64)}
+	go func() {
+		for p := range w.ch {
+			f(p)
+		}
+	}()
+	return w
+}
+
+func (w *liveWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.closed {
+		select {
+		case w.ch <- append([]byte(nil), p...):
+		default:
+		}
+	}
+	return len(p), nil
+}
+
+// close stops delivery; late writes from leftover children are dropped.
+func (w *liveWriter) close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.closed {
+		w.closed = true
+		close(w.ch)
+	}
+}
 
 func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessage) (res string, err error) {
 	defer func() {

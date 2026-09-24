@@ -736,13 +736,12 @@ func TestGitGuardVariants(t *testing.T) {
 	if !strings.Contains(out, "undid .git/modules/sub/config") {
 		t.Errorf("submodule config: %q", out)
 	}
-	// A background change after the command returns is caught next time.
+	// A background change after the command returns is either prevented
+	// (the process group is stopped when the command ends) or, for a
+	// process that escaped the group, caught at the next command.
 	call(t, bashTool, e, `{"cmd":"(sleep 0.3; git config core.sshCommand 'touch pwned') >/dev/null 2>&1 &"}`)
 	time.Sleep(600 * time.Millisecond)
-	out, _ = call(t, bashTool, e, `{"cmd":"true"}`)
-	if !strings.Contains(out, "undid .git/config") {
-		t.Errorf("late change: %q", out)
-	}
+	call(t, bashTool, e, `{"cmd":"true"}`)
 	cfg, _ := os.ReadFile(filepath.Join(e.Root, ".git", "config"))
 	if strings.Contains(string(cfg), "pwned") {
 		t.Fatalf("config still has a planted command:\n%s", cfg)
@@ -973,5 +972,32 @@ func TestBashKillWithJobNumber(t *testing.T) {
 	}
 	if out, _ := call(t, bashTool, e, `{"job":`+id+`}`); !strings.Contains(out, "exited") {
 		t.Fatalf("job still running: %q", out)
+	}
+}
+
+func TestGitGuardHooksPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git needed")
+	}
+	e := env(t)
+	run := func(c string) {
+		cmd := exec.Command("sh", "-c", c)
+		cmd.Dir = e.Root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v %s", c, err, out)
+		}
+	}
+	run("git init -q && mkdir -p .husky && printf '#!/bin/sh\\necho ok\\n' > .husky/pre-commit && git config core.hooksPath .husky")
+	hooks, _ := GitExtras(e.Root)
+	if len(hooks) != 1 || !strings.HasSuffix(hooks[0], ".husky") {
+		t.Fatalf("hooksPath not found: %v", hooks)
+	}
+	out, err := call(t, bashTool, e, `{"cmd":"printf 'echo evil\\n' >> .husky/pre-commit"}`)
+	t.Log(out, err)
+	if !strings.Contains(out, "undid") {
+		t.Fatalf("a hook change under core.hooksPath was not undone: %q", out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.Root, ".husky", "pre-commit")); strings.Contains(string(b), "evil") {
+		t.Fatal("planted hook survived")
 	}
 }

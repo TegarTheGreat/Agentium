@@ -297,6 +297,10 @@ type Gate struct {
 	Mode    Mode
 	Root    string
 	Approve Approver // nil means deny whatever needs approval
+	// Protected lists more paths git runs or reads settings from (a
+	// core.hooksPath such as .husky, included config files); writing them
+	// needs approval like .git itself.
+	Protected []string
 
 	mu sync.RWMutex
 }
@@ -364,7 +368,7 @@ func (g *Gate) Write(path string) (bool, string) {
 	reason := ""
 	if Outside(g.Root, path) {
 		reason = "outside workspace"
-	} else if inGitDir(path) {
+	} else if inGitDir(path) || g.protected(path) {
 		// .git/config and hooks hold programs git runs later, outside the
 		// sandbox; the shell's git guard covers bash, this covers edit.
 		reason = "git internals (config and hooks run programs)"
@@ -375,6 +379,15 @@ func (g *Gate) Write(path string) (bool, string) {
 		return true, ""
 	}
 	return g.ask("write: "+path, reason), reason
+}
+
+func (g *Gate) protected(path string) bool {
+	for _, p := range g.Protected {
+		if rel, err := filepath.Rel(p, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // NetPolicy controls network access for sandboxed shell commands.

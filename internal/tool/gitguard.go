@@ -118,7 +118,63 @@ func snapGit(root string) *gitGuard {
 			g.hooks[h], _ = os.ReadFile(h)
 		}
 	}
+	// A core.hooksPath already in use (Husky, lefthook) points git at hooks
+	// in the workspace, and included config files are read like config.
+	hooks, includes := GitExtras(root)
+	for _, hd := range hooks {
+		g.dirs = append(g.dirs, hd)
+		for _, h := range hookFiles(hd) {
+			g.hooks[h], _ = os.ReadFile(h)
+		}
+	}
+	for _, p := range includes {
+		if _, seen := g.configs[p]; !seen {
+			g.configs[p], _ = os.ReadFile(p)
+		}
+	}
 	return g
+}
+
+// GitExtras returns the hook directories set by core.hooksPath and the
+// config files pulled in by include/includeIf, for the repository at
+// root, as git itself resolves them.
+func GitExtras(root string) (hookDirs, includes []string) {
+	git, err := exec.LookPath("git")
+	if err != nil || len(gitDirs(root)) == 0 {
+		return nil, nil
+	}
+	cmd := exec.Command(git, "-C", root, "config", "--show-origin", "--null", "--list")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	b, err := cmd.Output()
+	if err != nil {
+		return nil, nil
+	}
+	fields := strings.Split(string(b), "\x00")
+	home, _ := os.UserHomeDir()
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(fields); i += 2 {
+		origin, entry := fields[i], fields[i+1]
+		k, v, _ := strings.Cut(entry, "\n")
+		if file, ok := strings.CutPrefix(origin, "file:"); ok && file != "" {
+			if !filepath.IsAbs(file) {
+				file = filepath.Join(root, file)
+			}
+			file = filepath.Clean(file)
+			if !seen[file] && !strings.Contains(filepath.ToSlash(file), "/.git/") {
+				seen[file] = true
+				includes = append(includes, file)
+			}
+		}
+		if strings.EqualFold(k, "core.hookspath") && v != "" {
+			if strings.HasPrefix(v, "~/") && home != "" {
+				v = filepath.Join(home, v[2:])
+			} else if !filepath.IsAbs(v) {
+				v = filepath.Join(root, v)
+			}
+			hookDirs = append(hookDirs, filepath.Clean(v))
+		}
+	}
+	return hookDirs, includes
 }
 
 func hookFiles(dir string) []string {
