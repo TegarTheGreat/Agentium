@@ -356,7 +356,7 @@ func (a *approver) ask(action, reason string) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	key, scope := alwaysScope(action, a.gate.Root)
+	key, scope := alwaysScope(action, reason, a.gate.Root)
 	if a.gate.GetMode() == policy.Yolo || a.always[key] { // "always" chosen earlier
 		return true
 	}
@@ -394,7 +394,7 @@ func (a *approver) ask(action, reason string) bool {
 // fetches. A compound command, or one run through a wrapper that could
 // run anything (sudo, sh -c, xargs, env …), is approved only verbatim, so
 // approving "cd x && go test" never approves "cd x && rm -rf ~".
-func alwaysScope(action, root string) (key, label string) {
+func alwaysScope(action, reason, root string) (key, label string) {
 	kind, rest, _ := strings.Cut(action, ": ")
 	switch kind {
 	case "bash", "network":
@@ -414,10 +414,16 @@ func alwaysScope(action, root string) (key, label string) {
 			return kind + "=" + cmd, "for this exact command"
 		}
 		if kind == "network" {
-			return kind + ":" + prog, "for `" + prog + "` with network"
+			// Network access is approved per exact command: one program
+			// (curl, npm) can reach any host.
+			return kind + "=" + cmd, "for this exact command"
 		}
 		return kind + ":" + prog, "for `" + prog + "`"
 	case "write":
+		if reason != "" && reason != "ask mode" {
+			// Outside the workspace, git internals …: only this file.
+			return "write=" + rest, "for this file"
+		}
 		return "write", "for file changes"
 	case "read":
 		return "read:" + rest, "for this file"

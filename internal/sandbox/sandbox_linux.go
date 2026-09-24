@@ -9,9 +9,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -50,7 +49,9 @@ const (
 
 	netBindTCP    = 1 << 0 // ABI 4
 	netConnectTCP = 1 << 1
-	ruleNetPort   = 2
+	// Landlock scopes (ABI 6).
+	scopeAbstractUnixSocket = 1 << 0
+	scopeSignal             = 1 << 1
 
 	fileOnly = fsExecute | fsWriteFile | fsReadFile | fsTruncate | fsIoctlDev
 )
@@ -97,9 +98,7 @@ func command(shell, cmdline string, cfg Config) (*exec.Cmd, bool, error) {
 	if err != nil {
 		return exec.Command(shell, "-c", cmdline), false, nil
 	}
-	if !cfg.Network {
-		cfg.LocalPorts = listeningPorts()
-	}
+	cfg.ReadDeny = secretPaths()
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, false, err
@@ -116,36 +115,34 @@ func confineAndExec(cfg Config, argv []string) error {
 		return errors.New("landlock unavailable")
 	}
 	fsAll := handledFS(v)
-	attr := make([]byte, 16)
+	attr := make([]byte, 24)
 	binary.LittleEndian.PutUint64(attr[0:], fsAll)
 	size := uintptr(8)
 	if v >= 4 && !cfg.Network {
-		// Only outbound connections are confined: servers may listen.
+		// Outbound TCP is confined; listening is not, so servers run and
+		// can be opened from a browser.
 		binary.LittleEndian.PutUint64(attr[8:], netConnectTCP)
 		size = 16
+	}
+	if v >= 6 {
+		// No abstract unix sockets (D-Bus, X11 …) or signals to processes
+		// outside the sandbox.
+		binary.LittleEndian.PutUint64(attr[16:], scopeAbstractUnixSocket|scopeSignal)
+		size = 24
 	}
 	fd, _, e := syscall.Syscall(sysLandlockCreateRuleset, uintptr(unsafe.Pointer(&attr[0])), size, 0)
 	if e != 0 {
 		return fmt.Errorf("create ruleset: %v", e)
 	}
+	// Landlock only grants, so "everything but the secrets" is built by
+	// granting each sibling along the way to a secret, never the secret.
 	read := uint64(fsExecute | fsReadFile | fsReadDir)
-	if err := addRule(int(fd), "/", read); err != nil {
+	if err := addExcept(int(fd), "/", read, cfg.ReadDeny); err != nil {
 		return err
 	}
 	for _, p := range cfg.Write {
-		if err := addRule(int(fd), p, fsAll); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := addExcept(int(fd), p, fsAll, cfg.ReadDeny); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("rule %s: %w", p, err)
-		}
-	}
-	if v >= 4 && !cfg.Network {
-		for _, port := range cfg.LocalPorts {
-			// struct landlock_net_port_attr: u64 allowed_access, u64 port.
-			buf := make([]byte, 16)
-			binary.LittleEndian.PutUint64(buf[0:], netConnectTCP)
-			binary.LittleEndian.PutUint64(buf[8:], uint64(port))
-			if _, _, e := syscall.Syscall6(sysLandlockAddRule, fd, ruleNetPort, uintptr(unsafe.Pointer(&buf[0])), 0, 0, 0); e != 0 {
-				return fmt.Errorf("port rule %d: %v", port, e)
-			}
 		}
 	}
 	if _, _, e := syscall.Syscall6(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0, 0, 0, 0); e != 0 {
@@ -155,7 +152,46 @@ func confineAndExec(cfg Config, argv []string) error {
 		return fmt.Errorf("restrict: %v", e)
 	}
 	syscall.Close(int(fd))
+	if !cfg.Network {
+		// Landlock confines TCP only: UDP (and so DNS lookups that could
+		// carry data out) and raw sockets are refused with seccomp.
+		if err := denyDatagrams(); err != nil {
+			return fmt.Errorf("seccomp: %w", err)
+		}
+	}
 	return syscall.Exec(argv[0], argv, os.Environ())
+}
+
+// addExcept grants access to path, except to the denied paths below it:
+// a directory holding a denied path gets rules for its other entries.
+func addExcept(rulesetFD int, path string, access uint64, deny []string) error {
+	clean := filepath.Clean(path)
+	holds := false
+	for _, d := range deny {
+		if d == clean {
+			return nil // denied itself
+		}
+		if strings.HasPrefix(d, strings.TrimSuffix(clean, "/")+"/") {
+			holds = true
+		}
+	}
+	if !holds {
+		return addRule(rulesetFD, clean, access)
+	}
+	entries, err := os.ReadDir(clean)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.ErrNotExist
+		}
+		return nil // unreadable: grant nothing below it
+	}
+	for _, e := range entries {
+		if err := addExcept(rulesetFD, filepath.Join(clean, e.Name()), access, deny); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// Entries can vanish or be unopenable (sockets); skip them.
+			continue
+		}
+	}
+	return nil
 }
 
 func addRule(rulesetFD int, path string, access uint64) error {
@@ -179,42 +215,4 @@ func addRule(rulesetFD int, path string, access uint64) error {
 		return e
 	}
 	return nil
-}
-
-// remotePorts are never opened to commands without network access, even
-// when something listens on them locally: they are how data would leave
-// the machine (ssh, mail, DNS, web).
-var remotePorts = map[int]bool{21: true, 22: true, 23: true, 25: true, 53: true, 80: true, 443: true,
-	465: true, 587: true, 853: true, 993: true, 995: true, 1080: true, 3128: true, 8443: true}
-
-// listeningPorts returns the TCP ports something on this machine listens
-// on, from /proc/net/tcp and tcp6.
-func listeningPorts() []int {
-	seen := map[int]bool{}
-	for _, f := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(b), "\n")[1:] {
-			fs := strings.Fields(line)
-			if len(fs) < 4 || fs[3] != "0A" { // 0A = LISTEN
-				continue
-			}
-			i := strings.LastIndexByte(fs[1], ':')
-			if i < 0 {
-				continue
-			}
-			p, err := strconv.ParseUint(fs[1][i+1:], 16, 16)
-			if err == nil && p > 0 && !remotePorts[int(p)] {
-				seen[int(p)] = true
-			}
-		}
-	}
-	ports := make([]int, 0, len(seen))
-	for p := range seen {
-		ports = append(ports, p)
-	}
-	sort.Ints(ports)
-	return ports
 }

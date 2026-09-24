@@ -114,8 +114,13 @@ func (e *editor) key() (string, error) {
 func (e *editor) render(width int) {
 	display := make([]rune, len(e.buf))
 	for i, r := range e.buf {
-		if r == '\n' {
+		switch {
+		case r == '\n':
 			r = '↵'
+		case r == '\t':
+			r = ' ' // one column, so cursor math stays exact
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0):
+			r = '·'
 		}
 		display[i] = r
 	}

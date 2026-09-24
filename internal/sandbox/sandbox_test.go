@@ -86,9 +86,10 @@ func TestNetworkConfinement(t *testing.T) {
 		}
 	}
 	box := Config{Write: []string{work, "/dev"}}
-	// A server listening on this machine can be reached (dev servers).
-	if out, err := run(t, work, script, box); err != nil || !strings.Contains(out, "hello") {
-		t.Fatalf("connecting to a local listening port should work: %v %q", err, out)
+	// Without network, even a local listening port cannot be reached: a
+	// port rule cannot tell hosts apart (a local proxy would be a way out).
+	if out, err := run(t, work, script, box); err == nil {
+		t.Fatalf("TCP connect should be blocked, got %q", out)
 	}
 	if out, err := run(t, work, script, Config{Write: box.Write, Network: true}); err != nil || !strings.Contains(out, "hello") {
 		t.Fatalf("TCP connect should work when allowed: %v %q", err, out)
@@ -98,17 +99,42 @@ func TestNetworkConfinement(t *testing.T) {
 	if out, err := run(t, work, listen, box); err != nil || !strings.Contains(out, "listening") {
 		t.Fatalf("listening should be allowed: %v %q", err, out)
 	}
-	// Outbound connections elsewhere are denied at once (not a timeout).
-	out := `python3 -c "
+	// UDP (DNS lookups carrying data) is refused too, when the kernel
+	// filter applies.
+	udp := `python3 -c "
 import socket
 try:
-    socket.create_connection(('192.0.2.1', 9), 3)
-    print('connected')
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'x', ('192.0.2.1', 53))
+    print('sent')
 except OSError as e:
     print('errno', e.errno)
 "`
-	if got, _ := run(t, work, out, box); !strings.Contains(got, "errno 13") && !strings.Contains(got, "errno 1\n") {
-		t.Fatalf("outbound connect should be denied, got %q", got)
+	if got, _ := run(t, work, udp, box); !strings.Contains(got, "errno") {
+		t.Fatalf("UDP should be denied without network, got %q", got)
+	}
+	if got, _ := run(t, work, udp, Config{Write: box.Write, Network: true}); !strings.Contains(got, "sent") {
+		t.Fatalf("UDP should work with network, got %q", got)
+	}
+}
+
+func TestSecretsUnreadable(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	os.MkdirAll(filepath.Join(home, ".ssh"), 0o700)
+	os.WriteFile(filepath.Join(home, ".ssh", "id_ed25519"), []byte("PRIVATE"), 0o600)
+	os.WriteFile(filepath.Join(home, ".bashrc"), []byte("PUBLIC"), 0o644)
+	work := filepath.Join(home, "work")
+	os.MkdirAll(work, 0o755)
+	box := Config{Write: []string{work, "/dev"}}
+	if out, _ := run(t, work, "cat "+filepath.Join(home, ".ssh", "id_ed25519"), box); strings.Contains(out, "PRIVATE") {
+		t.Fatal("an SSH key was readable in the sandbox")
+	}
+	if out, err := run(t, work, "cat "+filepath.Join(home, ".bashrc"), box); err != nil || !strings.Contains(out, "PUBLIC") {
+		t.Fatalf("ordinary home files should stay readable: %v %q", err, out)
+	}
+	// Even when the workspace is the home directory itself.
+	if out, _ := run(t, home, "cat .ssh/id_ed25519", Config{Write: []string{home, "/dev"}}); strings.Contains(out, "PRIVATE") {
+		t.Fatal("an SSH key was readable with home as the workspace")
 	}
 }
 

@@ -121,7 +121,7 @@ func TestIPCRisky(t *testing.T) {
 			t.Errorf("%q should be risky", c)
 		}
 	}
-	for _, c := range []string{`echo "look at this"`, "docker ps", "tmux ls", "git log --format=%at"} {
+	for _, c := range []string{`echo "look at this"`, "docker ps", "git log --format=%at"} {
 		if r := RiskyCommand(c); r != "" {
 			t.Errorf("%q flagged: %s", c, r)
 		}
@@ -192,5 +192,31 @@ func TestScrubEnvAndSecrets(t *testing.T) {
 		if ok == want {
 			t.Errorf("Read(%s) allowed=%v", p, ok)
 		}
+	}
+}
+
+func TestRiskyAuditBypasses(t *testing.T) {
+	for _, cmd := range []string{
+		"rm --recursive --force .",
+		"rm -r --force x",
+		"tmux neww id",
+		"tmux send -t 0 'make deploy' Enter",
+		"screen -S s -X stuff x",
+		"docker -H unix:///var/run/docker.sock run -v /:/h alpine",
+		"docker --context default run alpine",
+		"curl --unix-socket /var/run/docker.sock http://x/containers/json",
+		"busctl --user call org.freedesktop.systemd1",
+	} {
+		if RiskyCommand(cmd) == "" {
+			t.Errorf("not flagged: %s", cmd)
+		}
+	}
+	for _, ok := range []string{"rm file.txt", "go test ./...", "echo tmuxinator"} {
+		if r := RiskyCommand(ok); r != "" {
+			t.Errorf("false positive %q: %s", ok, r)
+		}
+	}
+	if !inGitDir("/w/.GIT/hooks/pre-commit") || !inGitDir("/w/.git./config") {
+		t.Error(".GIT not recognized")
 	}
 }

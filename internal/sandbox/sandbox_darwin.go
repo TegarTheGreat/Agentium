@@ -33,11 +33,15 @@ func profile(cfg Config) string {
 	}
 	sb.WriteString("  (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\"))\n")
 	if !cfg.Network {
-		// Outbound connections are denied except to this machine; servers
-		// may listen.
+		// Outbound connections are denied; servers may listen.
 		sb.WriteString("(deny network*)\n(allow network* (remote unix-socket))\n" +
 			"(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n" +
-			"(allow network-outbound (remote ip \"localhost:*\"))\n")
+			// DNS lookups go through mDNSResponder and could carry data out.
+			"(deny network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n")
+	}
+	// Credentials stay unreadable.
+	for _, p := range secretPaths() {
+		fmt.Fprintf(&sb, "(deny file-read* (subpath %s))\n", quote(p))
 	}
 	return sb.String()
 }

@@ -1,7 +1,7 @@
 // Package sandbox confines shell commands: the workspace (plus temp and
 // build caches) is writable, the rest of the filesystem is read-only, and
-// Outbound TCP is off unless allowed; servers may listen, and ports
-// that are listening locally may be connected to. It uses Landlock on Linux and
+// Outbound networking is off unless allowed (servers may still listen),
+// and credential files stay unreadable. It uses Landlock on Linux and
 // sandbox-exec on macOS; no root, containers or extra binaries needed.
 //
 // On Linux the agent re-executes itself as a tiny helper that applies the
@@ -22,11 +22,11 @@ import (
 // Config describes one confinement.
 type Config struct {
 	Write   []string `json:"write"`   // writable directory trees
-	Network bool     `json:"network"` // allow outbound TCP connections
-	// LocalPorts may be connected to without Network: ports that servers
-	// on this machine listen on (a dev server the agent started, a local
-	// database), so they can be tested. Filled in when a command starts.
-	LocalPorts []int `json:"local_ports,omitempty"`
+	Network bool     `json:"network"` // allow outbound connections (TCP and UDP)
+	// ReadDeny lists credential files and directories that stay
+	// unreadable inside the sandbox (SSH keys, cloud credentials,
+	// Agentium's own keys). Filled in when a command starts.
+	ReadDeny []string `json:"read_deny,omitempty"`
 	// NetworkUnenforced: this machine cannot block the network, so
 	// commands must not be told it is blocked.
 	NetworkUnenforced bool `json:"-"`
@@ -74,6 +74,35 @@ func DefaultWrite(root string) []string {
 		paths = append(paths, filepath.Join(v, "registry"), filepath.Join(v, "git")) // not CARGO_HOME/bin
 	}
 	return uniqueExisting(paths)
+}
+
+// SecretPaths are the credential files and directories under home that
+// sandboxed commands may not read, whether or not they exist.
+func SecretPaths(home string) []string {
+	var out []string
+	for _, p := range []string{".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker/config.json", ".netrc",
+		".pgpass", ".git-credentials", ".config/gh", ".config/gcloud", ".config/hub", ".cargo/credentials",
+		".cargo/credentials.toml", ".npmrc", ".pypirc", ".gem/credentials", ".terraform.d/credentials.tfrc.json",
+		".agentium/auth.json", ".agentium/mcp-auth.json", ".agentium/config.json", "Library/Keychains"} {
+		out = append(out, filepath.Join(home, p))
+	}
+	if h := os.Getenv("AGENTIUM_HOME"); h != "" {
+		for _, f := range []string{"auth.json", "mcp-auth.json", "config.json"} {
+			out = append(out, filepath.Join(h, f))
+		}
+	}
+	return out
+}
+
+func secretPaths() []string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	if r, err := filepath.EvalSymlinks(h); err == nil {
+		h = r
+	}
+	return SecretPaths(h)
 }
 
 // ReadOnly drops from write every path that is root, inside root, or

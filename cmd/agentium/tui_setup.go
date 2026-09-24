@@ -174,7 +174,8 @@ func (u *ui) choose(title string, items []menuItem, current string, allowCustom 
 	ed := &editor{in: os.Stdin}
 	out := os.Stderr
 	out.WriteString("\033[?25l") // hide cursor
-	fmt.Fprint(out, "\r\n"+u.paint(cBold, title)+"\r\n")
+	width := termWidth(out) - 2
+	fmt.Fprint(out, "\r\n"+u.paint(cBold, truncate(title, width))+"\r\n")
 	filter, sel, top, drawn := "", 0, 0, 0
 	defer func() {
 		// Remove the menu once answered; the caller reports the choice.
@@ -199,7 +200,6 @@ func (u *ui) choose(title string, items []menuItem, current string, allowCustom 
 		}
 		return v
 	}
-	width := termWidth(out) - 2
 	for {
 		vis := visible()
 		if sel >= len(vis) {
@@ -224,7 +224,7 @@ func (u *ui) choose(title string, items []menuItem, current string, allowCustom 
 		if filter != "" {
 			hint = "filter: " + filter
 		}
-		sb.WriteString(u.paint(cDim, "  "+hint) + "\r\n")
+		sb.WriteString(u.paint(cDim, "  "+truncate(hint, width-2)) + "\r\n")
 		lines++
 		for i := top; i < len(vis) && i < top+rows; i++ {
 			it := vis[i]
@@ -232,6 +232,7 @@ func (u *ui) choose(title string, items []menuItem, current string, allowCustom 
 			if label == "" {
 				label = it.value
 			}
+			label = truncate(label, width/2)
 			row := "  " + label
 			if it.hint != "" {
 				row += "  " + u.paint(cDim, truncate(it.hint, width-strWidth(label)-6))
@@ -248,7 +249,7 @@ func (u *ui) choose(title string, items []menuItem, current string, allowCustom 
 		if len(vis) == 0 {
 			msg := "  no match"
 			if allowCustom {
-				msg = "  Enter to use \"" + filter + "\""
+				msg = truncate("  Enter to use \""+filter+"\"", width)
 			}
 			sb.WriteString("\033[2K" + u.paint(cDim, msg) + "\r\n")
 			lines++
@@ -305,9 +306,21 @@ func readSecretMasked(prompt string) (string, error) {
 	out := os.Stderr
 	out.WriteString("\x1b[?2004h")
 	defer out.WriteString("\x1b[?2004l")
-	fmt.Fprint(out, prompt)
 	ed := &editor{in: os.Stdin}
 	var buf []rune
+	// The line is redrawn whole, with at most one row of dots, so a long
+	// key never wraps (a wrapped line cannot be erased with backspaces).
+	draw := func() {
+		n := len(buf)
+		if max := termWidth(out) - strWidth(prompt) - 2; n > max {
+			n = max
+		}
+		if n < 0 {
+			n = 0
+		}
+		out.WriteString("\r\x1b[K" + prompt + strings.Repeat("•", n))
+	}
+	draw()
 	for {
 		k, err := ed.key()
 		if err != nil {
@@ -323,22 +336,20 @@ func readSecretMasked(prompt string) (string, error) {
 		case "\x7f", "\x08":
 			if len(buf) > 0 {
 				buf = buf[:len(buf)-1]
-				out.WriteString("\b \b")
 			}
 		case "\x15":
-			out.WriteString(strings.Repeat("\b \b", len(buf)))
 			buf = nil
 		case "\x1b[200~", "\x1b[201~":
 		default:
 			if !strings.HasPrefix(k, "\x1b") {
 				for _, r := range k {
-					if r >= 0x20 {
+					if r > 0x20 && r != 0x7f {
 						buf = append(buf, r)
-						out.WriteString("•")
 					}
 				}
 			}
 		}
+		draw()
 	}
 }
 
@@ -447,18 +458,25 @@ func (u *ui) setup(pid string) (string, error) {
 			if key == "" {
 				return "", errCanceled
 			}
+			// Check the key before storing it, so a rejected key never
+			// replaces one that works. Listing models doubles as the check.
+			u.note("checking the key…")
+			trial := config.Auth{}
+			for k, v := range auth {
+				trial[k] = v
+			}
+			trial[pid] = config.Credential{APIKey: key}
+			if _, err := provider.ListModels(context.Background(), pid, cfg, trial); err != nil &&
+				(strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "403")) {
+				u.failure("the key was rejected (" + firstLine(err.Error()) + "); try again")
+				has = false
+				continue
+			}
 			where, err := saveKey(pid, key)
 			if err != nil {
 				return "", err
 			}
 			auth, _ = config.LoadAuth()
-			// Listing models doubles as a key check.
-			u.note("checking the key…")
-			if _, err := provider.ListModels(context.Background(), pid, cfg, auth); err != nil && strings.Contains(err.Error(), "401") {
-				u.failure("the key was rejected (" + firstLine(err.Error()) + "); try again")
-				has = false
-				continue
-			}
 			u.success("Saved the " + name + " key to " + where)
 			break
 		}

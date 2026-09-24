@@ -37,7 +37,7 @@ var risky = []struct {
 	re     *regexp.Regexp
 	reason string
 }{
-	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rRf][a-zA-Z]*\s+)`), "recursive/forced delete"},
+	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rRf][a-zA-Z]*\s+|.*\s--(recursive|force)\b|--(recursive|force)\b)`), "recursive/forced delete"},
 	{regexp.MustCompile(`\bgit\s+push\b.*(\s-f\b|--force)`), "force push"},
 	{regexp.MustCompile(`\bgit\s+reset\s+--hard\b`), "discards local changes"},
 	{regexp.MustCompile(`\bgit\s+clean\s+-[a-zA-Z]*f`), "deletes untracked files"},
@@ -64,8 +64,11 @@ var risky = []struct {
 	{regexp.MustCompile(`\b(nc|ncat|socat|telnet)\s+\S+\s+\d+`), "raw network connection"},
 	// These hand a command to an already-running process outside the
 	// sandbox (tmux server, container daemon, init system, desktop).
-	{regexp.MustCompile(`\b(tmux|screen)\b.*\b(run-shell|send-keys|new-window|new-session|split-window|-X\s+stuff)\b`), "runs a command outside the sandbox"},
-	{regexp.MustCompile(`\b(docker|podman|nerdctl)\s+(run|exec|create|start|compose|build)\b`), "runs a container (outside the sandbox)"},
+	// Any tmux/screen command talks to a server outside the sandbox (short
+	// aliases like "neww" or "send" make listing subcommands unreliable).
+	{regexp.MustCompile(`(^|[;&|(\s])(tmux|screen|byobu|zellij)(\s|$)`), "runs a command outside the sandbox"},
+	{regexp.MustCompile(`\b(docker|podman|nerdctl)\b.*\s(run|exec|create|start|compose|build)\b`), "runs a container (outside the sandbox)"},
+	{regexp.MustCompile(`--unix-socket\b|\b(busctl|dbus-send|gdbus|systemctl)\s`), "talks to a service outside the sandbox"},
 	{regexp.MustCompile(`\b(systemd-run|launchctl|osascript|crontab)\s|(^|[;&|]\s*)(at|batch)\s`), "schedules or runs a command outside the sandbox"},
 	{regexp.MustCompile(`\b(xdg-open|gio\s+open)\b|(^|[;&|]\s*)open\s+-a\b`), "opens a program outside the sandbox"},
 }
@@ -539,7 +542,9 @@ func dotEnv(path string) bool {
 
 func inGitDir(path string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
-		if part == ".git" {
+		// Case-insensitive: macOS and Windows file systems treat .GIT as
+		// .git; Windows also ignores trailing dots and spaces.
+		if strings.EqualFold(strings.TrimRight(part, ". "), ".git") {
 			return true
 		}
 	}
