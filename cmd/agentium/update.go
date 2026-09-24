@@ -173,20 +173,41 @@ func runUpdate(args []string) (bool, error) {
 	return true, nil
 }
 
+// fetchBytes downloads url, retrying network errors and 5xx responses.
 func fetchBytes(ctx context.Context, url string) ([]byte, error) {
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			}
+		}
+		var b []byte
+		var retry bool
+		if b, retry, err = fetchOnce(ctx, url); err == nil || !retry {
+			return b, err
+		}
+	}
+	return nil, err
+}
+
+func fetchOnce(ctx context.Context, url string) ([]byte, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, ctx.Err() == nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		return nil, resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 200<<20))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 200<<20))
+	return b, err != nil && ctx.Err() == nil, err
 }
 
 func checksumListed(sums, name, sum string) bool {
