@@ -132,6 +132,9 @@ func cmdUpdate(args []string) error {
 	if r, err := filepath.EvalSymlinks(self); err == nil {
 		self = r
 	}
+	if pm := managedInstall(self); pm != "" {
+		return fmt.Errorf("this agentium was installed by %s; update it there", pm)
+	}
 	name := fmt.Sprintf("agentium_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
 		name = strings.TrimSuffix(name, ".tar.gz") + ".zip"
@@ -225,15 +228,34 @@ func extractBinary(archive []byte, name string) ([]byte, error) {
 	}
 }
 
-// replaceExecutable swaps in the new binary. A running executable can be
-// renamed but not overwritten on Windows, so the old one is moved aside.
+// replaceExecutable swaps in the new binary: written to a temporary file
+// next to it, synced, then renamed over it, so a crash never leaves a
+// half-written binary. A running executable can be renamed but not
+// overwritten on Windows, so the old one is moved aside first (and put
+// back if the swap fails).
 func replaceExecutable(path string, bin []byte) error {
 	tmp := path + ".new"
-	if err := os.WriteFile(tmp, bin, 0o755); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
 		return err
 	}
+	if _, err := f.Write(bin); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	old := ""
 	if runtime.GOOS == "windows" {
-		old := path + ".old"
+		old = path + ".old"
 		_ = os.Remove(old)
 		if err := os.Rename(path, old); err != nil {
 			os.Remove(tmp)
@@ -242,7 +264,25 @@ func replaceExecutable(path string, bin []byte) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
+		if old != "" {
+			_ = os.Rename(old, path)
+		}
 		return err
 	}
 	return nil
+}
+
+// managedInstall reports a binary installed by a package manager, which
+// should update it instead.
+func managedInstall(path string) string {
+	p := filepath.ToSlash(path)
+	switch {
+	case strings.Contains(p, "/Cellar/") || strings.Contains(p, "/homebrew/"):
+		return "Homebrew (brew upgrade agentium)"
+	case strings.HasPrefix(p, "/nix/store/"):
+		return "Nix"
+	case strings.Contains(p, "/scoop/apps/"):
+		return "Scoop (scoop update agentium)"
+	}
+	return ""
 }

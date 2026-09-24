@@ -243,17 +243,24 @@ func (e *editor) readLine() (string, error) {
 	var draft []rune
 	width := termWidth(e.out)
 	e.render(width)
-	pasting := false
+	pasting, lastCR := false, false
 	for {
 		k, err := e.key()
 		if err != nil {
 			return "", err
 		}
 		if pasting {
+			wasCR := lastCR
+			lastCR = k == "\r"
 			switch k {
 			case "\x1b[201~":
 				pasting = false
 			case "\r":
+				e.insert("\n")
+			case "\n":
+				if e.pos > 0 && e.buf[e.pos-1] == '\n' && wasCR {
+					break // CRLF: one newline
+				}
 				e.insert("\n")
 			default:
 				if k[0] >= 0x20 || k == "\n" || k == "\t" {
