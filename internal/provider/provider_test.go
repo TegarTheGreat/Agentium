@@ -259,6 +259,40 @@ func TestOpenAIStreamOptionsFallback(t *testing.T) {
 	}
 }
 
+func TestStreamKeepAliveOnly(t *testing.T) {
+	oldIdle, oldProg := StreamIdleTimeout, StreamProgressTimeout
+	StreamIdleTimeout, StreamProgressTimeout = 200*time.Millisecond, 400*time.Millisecond
+	defer func() { StreamIdleTimeout, StreamProgressTimeout = oldIdle, oldProg }()
+
+	for name, keep := range map[string]string{
+		"comment": ": keep-alive\n\n",
+		"ping":    "event: ping\ndata: {\"type\":\"ping\"}\n\n",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			for {
+				fmt.Fprint(w, keep)
+				w.(http.Flusher).Flush()
+				select {
+				case <-r.Context().Done():
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+		}))
+		t0 := time.Now()
+		var err error
+		if name == "ping" {
+			_, err = (&Anthropic{BaseURL: srv.URL, APIKey: "k"}).Stream(context.Background(), Request{Model: "m"}, nil)
+		} else {
+			_, err = (&OpenAI{BaseURL: srv.URL}).Stream(context.Background(), Request{Model: "m"}, nil)
+		}
+		srv.Close()
+		if !errors.Is(err, ErrStalled) || time.Since(t0) > 3*time.Second {
+			t.Errorf("%s: %v after %s, want a stall", name, err, time.Since(t0))
+		}
+	}
+}
+
 func TestStreamStallAndIncomplete(t *testing.T) {
 	old := StreamIdleTimeout
 	StreamIdleTimeout = 200 * time.Millisecond

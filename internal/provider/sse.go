@@ -17,6 +17,11 @@ import (
 // Reasoning models can pause between events, so it is generous.
 var StreamIdleTimeout = 120 * time.Second
 
+// StreamProgressTimeout aborts an event stream that sends only keep-alives
+// (SSE comments, pings) for this long. Some providers hold a queued request
+// open indefinitely that way, which would otherwise hang the turn forever.
+var StreamProgressTimeout = 10 * time.Minute
+
 // httpClient has no overall timeout: streams can run for minutes. Callers
 // cancel through the request context.
 var httpClient = &http.Client{
@@ -31,19 +36,27 @@ var httpClient = &http.Client{
 }
 
 // idleBody cancels the request when no bytes arrive for the idle period.
+// Once readSSE reports events through progress, keep-alive bytes alone stop
+// counting after StreamProgressTimeout.
 type idleBody struct {
 	io.ReadCloser
-	timer   *time.Timer
-	idle    time.Duration
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	stalled bool
+	timer    *time.Timer
+	idle     time.Duration
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	stalled  bool
+	sse      bool
+	progress time.Time
 }
 
 func (b *idleBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if n > 0 {
-		b.timer.Reset(b.idle)
+		b.mu.Lock()
+		if !b.sse || time.Since(b.progress) < StreamProgressTimeout {
+			b.timer.Reset(b.idle)
+		}
+		b.mu.Unlock()
 	}
 	if err != nil && err != io.EOF {
 		b.mu.Lock()
@@ -54,6 +67,20 @@ func (b *idleBody) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// watchEvents switches the body to event-based progress tracking.
+func (b *idleBody) watchEvents() {
+	b.mu.Lock()
+	b.sse, b.progress = true, time.Now()
+	b.mu.Unlock()
+}
+
+// sawEvent records a real (non-keep-alive) event.
+func (b *idleBody) sawEvent() {
+	b.mu.Lock()
+	b.progress = time.Now()
+	b.mu.Unlock()
 }
 
 func (b *idleBody) Close() error {
@@ -128,6 +155,10 @@ func watchIdle(resp *http.Response, cancel context.CancelFunc) {
 // readSSE calls fn for each event with its event name and data payload.
 // Returning false from fn stops reading.
 func readSSE(r io.Reader, fn func(event, data string) bool) error {
+	ib, _ := r.(*idleBody)
+	if ib != nil {
+		ib.watchEvents()
+	}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	var event string
@@ -136,6 +167,9 @@ func readSSE(r io.Reader, fn func(event, data string) bool) error {
 		if data.Len() == 0 {
 			event = ""
 			return true
+		}
+		if ib != nil && event != "ping" && !strings.Contains(data.String(), `"type":"ping"`) {
+			ib.sawEvent()
 		}
 		ok := fn(event, data.String())
 		event = ""

@@ -2,6 +2,13 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.14.2] - 2026-09-24
+
+### Fixed
+
+- **A turn no longer hangs on "Thinking…" forever.** Some providers (DeepSeek among them) keep a queued request open by sending only keep-alive comments. Those used to reset the stall timer, so a turn could wait for hours. A stream that sends nothing but keep-alives or pings for 10 minutes is now dropped and retried.
+- **Repeated checks on a background job collapse into one line.** They show as `Bash job 17 ×5 54.1s` instead of a new line for every check.
+
 ## [0.14.1] - 2026-09-24
 
 Fixes from a second review of the v0.14.0 security code.

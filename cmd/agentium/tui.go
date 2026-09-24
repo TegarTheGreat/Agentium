@@ -279,13 +279,21 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 	name := toolLabel(c.Name)
 	detail := truncate(u.detail(c), width-strWidth(name)-len(dur)-len(fail)-6)
 	key := name + " " + detail
-	if fail == "" && key == u.lastKey && u.afterTool && !u.paused && c.Name != "bash" {
-		// The same step again (e.g. several edits to one file): count it
-		// on the previous line instead of adding one.
+	// Commands are not collapsed (running one twice can matter), except
+	// polling a background job.
+	collapsible := c.Name != "bash" || strings.HasPrefix(detail, "job ")
+	if fail == "" && key == u.lastKey && u.afterTool && !u.paused && collapsible {
+		// The same step again (e.g. several edits to one file, or checks
+		// on one job): count it on the previous line instead of adding one.
 		u.lastCount++
+		u.lastDur += d
+		total := ""
+		if u.lastDur >= 500*time.Millisecond {
+			total = fmt.Sprintf(" %.1fs", u.lastDur.Seconds())
+		}
 		u.clearLive()
 		os.Stderr.WriteString("\033[1A\r\033[2K")
-		fmt.Fprintln(os.Stderr, icon+" "+u.paint(cBold, name)+" "+detail+u.paint(cDim, fmt.Sprintf(" ×%d", u.lastCount)))
+		fmt.Fprintln(os.Stderr, icon+" "+u.paint(cBold, name)+" "+detail+u.paint(cDim, fmt.Sprintf(" ×%d", u.lastCount)+total))
 		u.drawLive()
 	} else {
 		line := icon + " " + u.paint(cBold, name) + " " + detail + u.paint(cDim, dur)
@@ -293,7 +301,7 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 			line += "  " + u.paint(cRed, fail)
 		}
 		u.permanent(line)
-		u.lastKey, u.lastCount = key, 1
+		u.lastKey, u.lastCount, u.lastDur = key, 1, d
 		if fail != "" || u.paused {
 			u.lastKey = ""
 		}
