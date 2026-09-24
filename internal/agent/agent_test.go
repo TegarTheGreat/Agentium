@@ -814,7 +814,9 @@ func TestOpenTodosNudgeOnce(t *testing.T) {
 	s := &script{steps: []func(provider.Request) (provider.Response, error){
 		calls(tc("1", "todo", `{"items":[{"text":"write code","status":"done"},{"text":"write docs","status":"pending"}]}`)),
 		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Done."}, nil },
-		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "Docs skipped on purpose."}, nil },
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: "Docs skipped on purpose."}, nil
+		},
 	}}
 	a := newAgent(t, s)
 	a.Tools = append(a.Tools, a.TodoTool())
