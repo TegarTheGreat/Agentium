@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var userHome = os.UserHomeDir
@@ -22,7 +25,7 @@ const (
 
 var readTool = Tool{
 	Def: providerDef("read",
-		"Read a text file (lines are shown numbered: NUMBER<tab>text; the number is not part of the file) or an image, or show a directory as a tree. Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
+		"Read a text file (lines are shown numbered: NUMBER<tab>text; the number is not part of the file), a PDF's text or an image, or show a directory as a tree. Call several in parallel for several files. outline=true returns only definitions with line numbers (a file's shape, or a code map of a whole directory) at a fraction of the tokens.",
 		`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"1-based start line"},"limit":{"type":"integer"},"outline":{"type":"boolean"}},"required":["path"]}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
@@ -71,6 +74,10 @@ var readTool = Tool{
 				}
 			}
 		}
+		if head := fileHead(p); bytes.HasPrefix(head, []byte("%PDF-")) {
+			env.markSeen(p)
+			return readPDF(ctx, p, a.Offset, a.Limit)
+		}
 		if st.Size() > readWholeMax {
 			// Never load a multi-GB log to show 60 KB of it.
 			return readLarge(p, st.Size(), a.Offset, a.Limit)
@@ -90,6 +97,46 @@ var readTool = Tool{
 		}
 		return sliceLines(string(b), a.Offset, a.Limit), nil
 	},
+}
+
+// readPDF returns a PDF's text, pages marked, through poppler's pdftotext.
+func readPDF(ctx context.Context, p string, offset, limit int) (string, error) {
+	bin, err := exec.LookPath("pdftotext")
+	if err != nil {
+		return "(PDF file: its text needs pdftotext, which is not installed: poppler-utils on Linux, `brew install poppler` on macOS)", nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "-layout", "-enc", "UTF-8", "--", p, "-")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	b, _ := io.ReadAll(io.LimitReader(out, 8<<20))
+	_ = cmd.Process.Kill() // a huge document: the first 8 MB of text is plenty
+	_ = cmd.Wait()
+	if len(bytes.TrimSpace(b)) == 0 {
+		if msg := strings.TrimSpace(errb.String()); msg != "" && ctx.Err() == nil {
+			return "", fmt.Errorf("pdftotext: %s", firstLineOf(msg))
+		}
+		return "(PDF with no extractable text: probably scanned images)", nil
+	}
+	pages := strings.Split(strings.TrimRight(string(b), "\f\n"), "\f")
+	var sb strings.Builder
+	for i, pg := range pages {
+		fmt.Fprintf(&sb, "--- page %d ---\n%s\n", i+1, strings.TrimRight(pg, "\n "))
+	}
+	return sliceLines(sb.String(), offset, limit), nil
+}
+
+func firstLineOf(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
 
 func fileHead(p string) []byte {

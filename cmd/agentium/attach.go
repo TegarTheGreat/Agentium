@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/url"
@@ -191,8 +192,14 @@ func mentionedFiles(input, cwd string, allow func(string) bool) (block string, n
 			continue
 		}
 		b, err := readCapped(p, mentionMaxBytes)
-		if err != nil || strings.ContainsRune(string(b[:min(len(b), 8000)]), 0) {
-			continue // binary, or not a plain file any more
+		if err != nil {
+			continue // not a plain file any more
+		}
+		if strings.ContainsRune(string(b[:min(len(b), 8000)]), 0) || bytes.HasPrefix(b, []byte("%PDF-")) {
+			// Binary: say so, so the model knows what was pointed at.
+			fmt.Fprintf(&sb, "<mentioned-file path=%q>(binary file, %d bytes: use the read tool; it extracts a PDF's text)</mentioned-file>\n", rel, st.Size())
+			names = append(names, rel)
+			continue
 		}
 		lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 		from, to := 1, len(lines)

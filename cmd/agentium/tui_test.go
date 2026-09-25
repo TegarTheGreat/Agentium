@@ -318,7 +318,7 @@ func TestMentionedFiles(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
 	os.WriteFile(filepath.Join(dir, "pkg", "b.go"), nil, 0o644)
 	block, names := mentionedFiles("look at @a.go:2-3, @pkg/ and @bin.dat @pic.png @missing.go me@example.com", dir, nil)
-	if strings.Join(names, " ") != "a.go:2-3 pkg/" {
+	if strings.Join(names, " ") != "a.go:2-3 pkg/ bin.dat" || !strings.Contains(block, "binary file, 3 bytes") {
 		t.Fatalf("names %q", names)
 	}
 	if !strings.Contains(block, "2\ttwo\n3\tthree\n") || strings.Contains(block, "1\tone") || !strings.Contains(block, "b.go") {
