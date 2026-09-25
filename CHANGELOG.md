@@ -6,6 +6,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Added
 
+- **Paste an image with `Ctrl-V`**, a screenshot you copied, as in Claude Code. It is saved and attached to the message. This works on macOS, Windows and Linux (Wayland or X11). Over SSH the clipboard is on your own machine, so use `@path` there.
 - **Share a conversation as a page.** `/export name.html` writes one self-contained page: your messages, the replies with their Markdown, each step with its output folded under it, and edits as line diffs. It follows the reader's light or dark setting and loads nothing from elsewhere.
 
 ### Fixed

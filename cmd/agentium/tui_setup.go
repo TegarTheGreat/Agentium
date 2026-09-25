@@ -133,7 +133,7 @@ var keyRows = [][2]string{
 	{"↑ ↓  ctrl+r", "lines of the message, then history · search history"},
 	{"ctrl+k/u/w  ctrl+y", "cut to line end / start, a word · paste it back"},
 	{"ctrl+_  ctrl+s", "undo · put the draft aside (again: bring it back)"},
-	{"ctrl+g", "write the message in $EDITOR"},
+	{"ctrl+g  ctrl+v", "write the message in $EDITOR · paste an image from the clipboard"},
 	{"While it works", ""},
 	{"enter  tab  ↑", "steer at the next step · queue for after · take back"},
 	{"esc", "stop the turn · esc esc: rewind"},

@@ -1278,6 +1278,15 @@ func run(args []string) error {
 					return submit("/model")
 				}
 				return submit("/effort")
+			case k == "\x16": // Ctrl-V: an image from the clipboard
+				if m, err := pasteImage(); err == nil {
+					e.insert(m)
+				} else if activeFS() == nil {
+					e.out.WriteString("\r\x1b[K" + u.paint(cDim, "  "+err.Error()) + "\r\n")
+				} else {
+					u.note(err.Error())
+				}
+				return true
 			case k == "\x0f": // Ctrl-O: the full output of recent steps
 				u.openViewer()
 				return true
