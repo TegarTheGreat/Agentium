@@ -697,6 +697,19 @@ func run(args []string) error {
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
+	broadRoot := tooBroad(cwd)
+	if broadRoot {
+		// The home folder (or /) as the project would make the sandbox and
+		// the workspace boundary cover everything, and the undo snapshot
+		// would copy the whole disk.
+		if *mode == "" || policy.ParseMode(*mode) == policy.Auto {
+			gate.Mode = policy.Ask
+		}
+		gate.Protected = append(gate.Protected, sensitivePaths()...)
+		if !*quiet {
+			fmt.Fprintln(os.Stderr, u.paint(cYellow, "· "+shortPath(cwd)+" holds your home folder or settings: every change asks here, and undo is off. Start agentium in a project folder to work normally."))
+		}
+	}
 	extraDirs, err := resolveDirs(addDirs, startDir)
 	if err != nil {
 		return err
@@ -860,6 +873,7 @@ func run(args []string) error {
 		}
 	}
 	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
+	gate.Unconfined = a.Env.Sandbox == nil // then auto mode asks before commands that change things
 	if a.Env.Sandbox != nil {
 		a.Env.Sandbox.Write = append(a.Env.Sandbox.Write, extraDirs...)
 	}
@@ -890,6 +904,9 @@ func run(args []string) error {
 		}
 	}
 	store := openCheckpoints(cfg, cwd)
+	if broadRoot {
+		store = nil
+	}
 	var curPrompt string
 	if store != nil {
 		a.Env.BeforeMutate = func() {

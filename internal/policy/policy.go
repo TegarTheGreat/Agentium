@@ -307,6 +307,9 @@ type Gate struct {
 	// Extra are more directories the user added as workspaces
 	// (--add-dir): writing inside them is like writing inside Root.
 	Extra []string
+	// Unconfined means no OS sandbox holds shell commands to the
+	// workspace: in auto mode a command that may change things asks.
+	Unconfined bool
 
 	mu sync.RWMutex
 }
@@ -404,6 +407,9 @@ func (g *Gate) Bash(cmd string) (bool, string) {
 	reason := RiskyCommand(cmd)
 	if reason == "" && mode == Ask {
 		reason = "ask mode"
+	}
+	if reason == "" && g.Unconfined && !ReadOnlyCommand(cmd) {
+		reason = "no sandbox here: the command is not confined to the project"
 	}
 	if reason == "" {
 		return true, ""

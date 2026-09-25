@@ -252,3 +252,15 @@ func TestAddedDirsAreWorkspace(t *testing.T) {
 		t.Fatal("git internals still need approval")
 	}
 }
+
+func TestUnconfinedAsks(t *testing.T) {
+	asked := ""
+	g := &Gate{Mode: Auto, Root: t.TempDir(), Unconfined: true,
+		Approve: func(action, reason string) bool { asked = reason; return false }}
+	if ok, _ := g.Bash("ls -la"); !ok || asked != "" {
+		t.Fatal("a read-only command runs without asking")
+	}
+	if ok, _ := g.Bash("python3 build.py"); ok || !strings.Contains(asked, "no sandbox") {
+		t.Fatalf("unconfined change: asked %q", asked)
+	}
+}

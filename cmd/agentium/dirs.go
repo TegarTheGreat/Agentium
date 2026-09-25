@@ -76,3 +76,18 @@ func tooBroad(dir string) bool {
 	}
 	return false
 }
+
+// sensitivePaths are files in the home folder that run code or hold
+// credentials later: writing them always asks.
+func sensitivePaths() []string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, p := range []string{".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile", ".zshenv", ".config/fish",
+		".ssh", ".gnupg", ".aws", ".config/systemd", ".local/bin", ".config/autostart", ".gitconfig", ".npmrc"} {
+		out = append(out, filepath.Join(h, p))
+	}
+	return append(out, config.Home())
+}
