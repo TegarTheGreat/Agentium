@@ -558,3 +558,10 @@ func TestCommandsAtHomeStayPersonal(t *testing.T) {
 		}
 	}
 }
+
+func TestRecapLines(t *testing.T) {
+	got := recapLines("one\n\n```go\ntwo\nthree\nfour\x1b[31m", 3, 40)
+	if len(got) != 3 || got[0] != "one" || got[1] != "two" || got[2] != "three …" {
+		t.Fatalf("%q", got)
+	}
+}

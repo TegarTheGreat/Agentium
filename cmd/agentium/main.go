@@ -1243,6 +1243,9 @@ func run(args []string) error {
 	} else {
 		fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
 	}
+	if *cont && len(a.Messages) > 0 && (screen != nil || u.live) {
+		recap(u, a.Messages)
+	}
 	interactive = true
 	if *resumePick {
 		u.mu.Lock()
@@ -1853,7 +1856,8 @@ func slash(line string, e *slashEnv) (exit bool) {
 			}
 		}
 		sess.SystemHash = hash
-		fmt.Fprintf(os.Stderr, "· resumed “%s” from %s (%d messages)\n", oneLine(chosen.Label(), 50), chosen.Updated.Format("2006-01-02 15:04"), len(chosen.Messages))
+		fmt.Fprintf(os.Stderr, "· resumed “%s” from %s (%d messages)\n", sanitize(oneLine(chosen.Label(), 50)), chosen.Updated.Format("2006-01-02 15:04"), len(chosen.Messages))
+		recap(u, a.Messages)
 	case "/undo":
 		note, err := undoLast(store, sess)
 		if err != nil {
