@@ -652,3 +652,18 @@ func TestAnthropicBodySafety(t *testing.T) {
 		t.Errorf("max_tokens %d above the model's output limit", mt)
 	}
 }
+
+func TestCloseToolCalls(t *testing.T) {
+	msgs := []Message{
+		{Role: RoleUser, Text: "go"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "a"}, {ID: "b"}}},
+		{Role: RoleTool, ToolCallID: "a", Text: "ok"},
+	}
+	out := CloseToolCalls(msgs)
+	if len(out) != 4 || out[3].ToolCallID != "b" || !out[3].IsError {
+		t.Fatalf("%+v", out)
+	}
+	if len(CloseToolCalls(out)) != 4 {
+		t.Fatal("a closed history changes")
+	}
+}

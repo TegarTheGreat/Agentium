@@ -111,7 +111,7 @@ func rewind(u *ui, a *agent.Agent, sess *session.Session, store *checkpoint.Stor
 		sess.Messages = a.Messages
 		ed.draft = []rune(turns[k].words) // edit it and send again
 	}
-	_ = sess.Save()
+	saveSession(sess)
 	switch choice {
 	case "both":
 		u.success("Rewound the conversation and the files · your message is back in the box")

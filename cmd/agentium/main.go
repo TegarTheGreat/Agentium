@@ -847,7 +847,7 @@ func run(args []string) error {
 	if *cont {
 		if prev, err := session.Latest(cwd); err == nil && prev != nil {
 			sess = prev
-			a.Messages = prev.Messages
+			a.Messages = provider.CloseToolCalls(prev.Messages)
 			a.Note, sess.Note = prev.Note, ""
 			if prev.SystemHash != hashString(system) {
 				// Memory or instructions changed since: signed thinking
@@ -984,6 +984,18 @@ func run(args []string) error {
 	}
 
 	var active atomic.Pointer[context.CancelFunc]
+	var turnDone atomic.Pointer[chan struct{}] // closed when the running turn returns
+	var lastStepSave time.Time
+	a.OnStep = func() {
+		// Save as the turn goes (at most every few seconds), so a crash
+		// or a closed terminal keeps the finished steps.
+		if time.Since(lastStepSave) < 3*time.Second {
+			return
+		}
+		lastStepSave = time.Now()
+		sess.Messages = a.Messages
+		saveSession(sess)
+	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	signal.Stop(early)
@@ -991,10 +1003,27 @@ func run(args []string) error {
 	go func() {
 		for s := range sig {
 			if s != os.Interrupt {
-				// Terminated or the terminal closed: leave it usable.
+				// Terminated or the terminal closed: stop the turn (and the
+				// command it runs), keep the conversation, leave the
+				// terminal usable.
+				if c := active.Load(); c != nil {
+					(*c)()
+					if d := turnDone.Load(); d != nil {
+						select {
+						case <-*d:
+						case <-time.After(3 * time.Second):
+						}
+					}
+				}
+				sess.Messages = provider.CloseToolCalls(a.Messages)
+				saveSession(sess)
 				restoreTerm()
 				a.Env.KillJobs()
-				os.Exit(128 + 15)
+				code := 128 + 15
+				if s == syscall.SIGHUP {
+					code = 128 + 1
+				}
+				os.Exit(code)
 			}
 			if c := active.Load(); c != nil {
 				(*c)()
@@ -1093,6 +1122,9 @@ func run(args []string) error {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		active.Store(&cancel)
+		done := make(chan struct{})
+		turnDone.Store(&done)
+		defer close(done)
 		u.beginTurn()
 		stopTyping := func() {}
 		if interactive {
@@ -1133,7 +1165,7 @@ func run(args []string) error {
 		active.Store(nil)
 		cancel()
 		sess.Messages = a.Messages
-		_ = sess.Save()
+		saveSession(sess)
 		u.mu.Lock()
 		u.endLine()
 		u.mu.Unlock()
@@ -1170,7 +1202,7 @@ func run(args []string) error {
 		if store != nil {
 			if id, err := store.Snapshot(ctx, "before best-of"); err == nil {
 				sess.AddCheckpoint(id, *prompt)
-				_ = sess.Save()
+				saveSession(sess)
 			}
 		}
 		return bestOfN(ctx, *bestOf, *check, *prompt, cwd, res, a, u)
@@ -1552,7 +1584,7 @@ func run(args []string) error {
 					continue
 				}
 				old := sess.Label()
-				_ = sess.Save()
+				saveSession(sess)
 				a.Reset()
 				a.Note = "" // notes about the old conversation (undone turns …)
 				if dirs := gate.Dirs(); len(dirs) > 0 {
@@ -1881,7 +1913,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 			return false
 		}
 		orig := sess.Label()
-		_ = sess.Save()
+		saveSession(sess)
 		fork := *sess
 		fork.ID = session.New(sess.Cwd, sess.Model).ID
 		fork.Messages = append([]provider.Message(nil), sess.Messages...)
@@ -1892,7 +1924,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		fork.Title = name
 		*sess = fork
-		_ = sess.Save()
+		saveSession(sess)
 		u.success("Now in “" + name + "”" + u.paint(cDim, " · the original is kept: /resume "+oneLine(orig, 30)))
 	case "/rename":
 		name := strings.TrimSpace(strings.TrimPrefix(line, "/rename"))
@@ -1904,7 +1936,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 			name = string(r[:80])
 		}
 		sess.Title = name
-		_ = sess.Save()
+		saveSession(sess)
 		u.success("This session is now “" + name + "”" + u.paint(cDim, " (/resume "+name+" continues it later)"))
 	case "/resume":
 		arg := strings.TrimSpace(strings.TrimPrefix(line, "/resume"))
@@ -1939,7 +1971,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		hash := sess.SystemHash
 		*sess = *chosen
-		a.Messages = chosen.Messages
+		a.Messages = provider.CloseToolCalls(chosen.Messages)
 		a.Env.ForgetReads()
 		if chosen.SystemHash != hash {
 			for i := range a.Messages {
@@ -1957,7 +1989,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		refreshChanges(sess.Cwd)
 		a.Note = note
-		_ = sess.Save()
+		saveSession(sess)
 	case "/export":
 		exportSession(u, a, sess, strings.Join(f[1:], " "))
 	case "/memory":
@@ -1969,7 +2001,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 	case "/compact":
 		compactNow(u, a)
 		sess.Messages = a.Messages
-		_ = sess.Save()
+		saveSession(sess)
 	case "/theme":
 		pickTheme(u, strings.Join(f[1:], " "))
 	case "/btw":
@@ -2019,7 +2051,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 			}
 		}
 		a.Note = strings.Join(notes, "\n")
-		_ = sess.Save()
+		saveSession(sess)
 	case "/permissions", "/allowed":
 		showPermissions(u, e.ap)
 	case "/add-dir":

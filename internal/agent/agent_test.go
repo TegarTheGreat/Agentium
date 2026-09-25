@@ -887,3 +887,16 @@ func TestStripToolMarkup(t *testing.T) {
 		t.Fatalf("cut real text: %q", got)
 	}
 }
+
+func TestSanitizeCalls(t *testing.T) {
+	calls := sanitizeCalls([]provider.ToolCall{
+		{ID: "x", Name: "bash", Args: json.RawMessage(`{"cmd": "echo hi`)},
+		{ID: "x", Name: "", Args: nil},
+	})
+	if calls[0].BadArgs == "" || string(calls[0].Args) != "{}" || calls[1].ID == "x" || calls[1].Name == "" {
+		t.Fatalf("%+v", calls)
+	}
+	if _, err := json.Marshal(provider.Message{Role: provider.RoleAssistant, ToolCalls: calls}); err != nil {
+		t.Fatalf("history must stay saveable: %v", err)
+	}
+}

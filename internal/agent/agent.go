@@ -100,6 +100,10 @@ type Agent struct {
 	// Steer, if set, returns messages the user sent while the agent was
 	// working; they are given to the model after the current step.
 	Steer func() []string
+	// OnStep runs after each tool round, with the history well formed
+	// (every call answered): the session saves it, so a crash mid-turn
+	// keeps the steps already done.
+	OnStep func()
 	// Attach holds images for the next Run's user message.
 	Attach []provider.Image
 	// Ledger is the harness-kept working state (files, commands, errors,
@@ -253,6 +257,7 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 				resp.ToolCalls = resp.ToolCalls[:n-1]
 			}
 		}
+		resp.ToolCalls = sanitizeCalls(resp.ToolCalls)
 		served := a.Model
 		if resp.Model != "" {
 			served = resp.Model
@@ -285,6 +290,9 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 			results := a.runTools(ctx, resp.ToolCalls)
 			stuck := a.track(&rs, resp.ToolCalls, results)
 			a.Messages = append(a.Messages, results...)
+			if a.OnStep != nil {
+				a.OnStep()
+			}
 			if ctx.Err() != nil {
 				return done(ctx.Err())
 			}
@@ -437,6 +445,31 @@ func keepRawBlocks(raw json.RawMessage, keep []provider.ToolCall) json.RawMessag
 	return r
 }
 
+// sanitizeCalls keeps a model's malformed tool calls from poisoning the
+// conversation: every call gets a name and an id unique within the reply,
+// and arguments that are not JSON are set aside (the history, saved and
+// replayed on every request, must stay valid).
+func sanitizeCalls(calls []provider.ToolCall) []provider.ToolCall {
+	seen := map[string]bool{}
+	for i := range calls {
+		c := &calls[i]
+		if c.Name == "" {
+			c.Name = "unnamed_tool"
+		}
+		if c.ID == "" || seen[c.ID] {
+			c.ID = fmt.Sprintf("call_fix_%d_%d", time.Now().UnixNano(), i)
+		}
+		seen[c.ID] = true
+		if len(c.Args) == 0 {
+			c.Args = json.RawMessage("{}")
+		} else if !json.Valid(c.Args) {
+			c.BadArgs = string(c.Args)
+			c.Args = json.RawMessage("{}")
+		}
+	}
+	return calls
+}
+
 func validCalls(calls []provider.ToolCall) []provider.ToolCall {
 	var out []provider.ToolCall
 	for _, c := range calls {
@@ -505,12 +538,14 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			var imgs []provider.Image
 			t, ok := byName[c.Name]
 			var blocked error
-			if ok && a.PreTool != nil && (len(c.Args) == 0 || json.Valid(c.Args)) {
+			if ok && a.PreTool != nil && c.BadArgs == "" && (len(c.Args) == 0 || json.Valid(c.Args)) {
 				blocked = a.PreTool(ctx, c)
 			}
 			switch {
 			case !ok:
 				err = fmt.Errorf("unknown tool %q", c.Name)
+			case c.BadArgs != "":
+				err = fmt.Errorf("the arguments were not valid JSON (cut off?): %.120s — send the call again with complete JSON", c.BadArgs)
 			case len(c.Args) > 0 && !json.Valid(c.Args):
 				err = errors.New("arguments are not valid JSON")
 			case blocked != nil:

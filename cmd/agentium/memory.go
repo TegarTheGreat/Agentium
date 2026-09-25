@@ -370,3 +370,25 @@ func printDiff(name, old, new string) int {
 	}
 	return n
 }
+
+// saveFailed is the last save error reported, so a failing disk is said
+// once, not after every message.
+var saveFailed string
+
+var saveMu sync.Mutex // the turn and a signal may both save
+
+// saveSession writes the conversation; a failure is reported (once per
+// kind), since silently losing the history is worse than a warning.
+func saveSession(sess *session.Session) {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	err := sess.Save()
+	if err == nil {
+		saveFailed = ""
+		return
+	}
+	if err.Error() != saveFailed {
+		saveFailed = err.Error()
+		fmt.Fprintln(os.Stderr, "\x1b[33m· the conversation could not be saved: "+sanitize(firstLine(err.Error()))+"\x1b[0m")
+	}
+}

@@ -34,6 +34,10 @@ type ToolCall struct {
 	// Extra is provider data that must be sent back with the call
 	// (e.g. Gemini's thought signature in extra_content).
 	Extra json.RawMessage `json:"extra,omitempty"`
+	// BadArgs holds arguments that were not valid JSON (Args is then {}
+	// so the history stays sendable and saveable); the call is answered
+	// with an error instead of run.
+	BadArgs string `json:"-"`
 }
 
 // Message is one provider-neutral conversation entry.
@@ -303,4 +307,30 @@ func UserWords(s string) string {
 			return strings.TrimSpace(s)
 		}
 	}
+}
+
+// CloseToolCalls returns msgs with an answer for every tool call: a call
+// left without its result (the process stopped mid-round) gets one saying
+// so, since providers reject a history with unanswered calls.
+func CloseToolCalls(msgs []Message) []Message {
+	var out []Message
+	for i := 0; i < len(msgs); i++ {
+		m := msgs[i]
+		out = append(out, m)
+		if m.Role != RoleAssistant || len(m.ToolCalls) == 0 {
+			continue
+		}
+		answered := map[string]bool{}
+		for i+1 < len(msgs) && msgs[i+1].Role == RoleTool {
+			i++
+			out = append(out, msgs[i])
+			answered[msgs[i].ToolCallID] = true
+		}
+		for _, c := range m.ToolCalls {
+			if !answered[c.ID] {
+				out = append(out, Message{Role: RoleTool, ToolCallID: c.ID, Text: "[not finished: agentium was stopped before this call completed]", IsError: true})
+			}
+		}
+	}
+	return out
 }
