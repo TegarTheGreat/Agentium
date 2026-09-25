@@ -9,6 +9,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - Two agentium processes editing one file at the same moment no longer lose one change silently: the edit re-checks the file under a lock shared by all processes just before writing, and refuses if someone else wrote it.
 - `read` and `edit` handle UTF-16 (with a byte-order mark) and Latin-1 files: they are shown as text and edits keep the file's encoding. Before, UTF-16 read as binary and a Latin-1 line could never be edited ("Nothing similar is in the file", again and again).
 - Shell output reaches the model without color codes and with progress bars reduced to their last frame (a 200-step bar sent 7,000 characters; now one line), for every command, not only terminal jobs.
+- With more than 40 MCP tools, the model finds them with `mcp__find` and runs them with `mcp__call` instead of receiving every schema: a 300-tool server added about 40k tokens to every request and went past OpenAI's 128-tool limit.
 - An MCP server that crashes is started again on the next call (up to 3 times a session) instead of staying dead until restart; the error shows the end of its stderr log. A call that was running when it crashed is not repeated, since it may have had effects.
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 

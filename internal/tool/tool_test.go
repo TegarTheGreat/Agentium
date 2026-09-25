@@ -1150,3 +1150,32 @@ func TestShellOutputDropsProgressBars(t *testing.T) {
 		t.Fatalf("got %d chars: %q", len(out), out[:min(len(out), 300)])
 	}
 }
+
+func TestManyMCPToolsGoThroughFindAndCall(t *testing.T) {
+	var all []Tool
+	for i := 0; i < 60; i++ {
+		i := i
+		all = append(all, Tool{
+			Def: providerDef(fmt.Sprintf("mcp__srv__tool%d", i), fmt.Sprintf("does thing number %d", i), `{"type":"object"}`),
+			Run: func(ctx context.Context, env *Env, args json.RawMessage) (string, error) {
+				return fmt.Sprintf("ran %d with %s", i, args), nil
+			},
+		})
+	}
+	ts := mcpIndirect(all)
+	if len(ts) != 2 || ts[0].Def.Name != "mcp__find" || ts[1].Def.Name != "mcp__call" {
+		t.Fatalf("tools: %v", ts)
+	}
+	e := env(t)
+	out, err := call(t, ts[0], e, `{"query":"tool42"}`)
+	if err != nil || !strings.HasPrefix(out, "mcp__srv__tool42:") {
+		t.Fatalf("find: %v %q", err, out)
+	}
+	out, err = call(t, ts[1], e, `{"name":"mcp__srv__tool42","args":{"x":1}}`)
+	if err != nil || out != `ran 42 with {"x":1}` {
+		t.Fatalf("call: %v %q", err, out)
+	}
+	if _, err := call(t, ts[1], e, `{"name":"mcp__srv__nope"}`); err == nil {
+		t.Fatal("unknown tool ran")
+	}
+}

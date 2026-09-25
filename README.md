@@ -318,7 +318,8 @@ Installation fetches without executing anything, pins the commit and lists bundl
 
 **MCP servers.**
 - Local servers use stdio. Remote servers use Streamable HTTP or SSE (`"url"`, optional `"headers"`).
-- Tools appear as `mcp__<server>__<tool>`.
+- Tools appear as `mcp__<server>__<tool>`. With more than 40 MCP tools in all, the model gets `mcp__find` (search names, descriptions and argument schemas) and `mcp__call` instead, so requests stay small and under provider tool limits.
+- A server that crashes is started again on the next call (up to 3 times a session).
 - Servers that require OAuth are supported: discovery, dynamic client registration and PKCE.
 
 ```sh
