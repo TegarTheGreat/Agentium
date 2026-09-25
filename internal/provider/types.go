@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -199,8 +201,37 @@ type HTTPError struct {
 	RetryAfter time.Duration
 }
 
+// Error is short and actionable: the provider's own message (not the
+// JSON around it, or a whole HTML error page) and what to do about it.
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("api error %d: %s", e.Status, e.Body)
+	msg := errorMessage(e.Body)
+	if t := strings.TrimSpace(msg); strings.HasPrefix(t, "<") {
+		msg = htmlText(t)
+	}
+	if r := []rune(msg); len(r) > 300 {
+		msg = string(r[:300]) + "…"
+	}
+	hint := ""
+	switch e.Status {
+	case 401, 403:
+		hint = " (check the API key: /login, or agentium login <provider>)"
+	case 402:
+		hint = " (billing: the account may be out of credit)"
+	case 404:
+		hint = " (unknown model or endpoint: agentium models <provider> lists the models)"
+	}
+	return fmt.Sprintf("api error %d: %s%s", e.Status, msg, hint)
+}
+
+var (
+	htmlDrop = regexp.MustCompile(`(?is)<(script|style|head)[^>]*>.*?</(script|style|head)>`)
+	htmlTag  = regexp.MustCompile(`<[^>]*>`)
+)
+
+// htmlText is the visible text of an HTML error page, on one line.
+func htmlText(s string) string {
+	s = htmlTag.ReplaceAllString(htmlDrop.ReplaceAllString(s, " "), " ")
+	return strings.Join(strings.Fields(html.UnescapeString(s)), " ")
 }
 
 // ErrStalled means the stream sent nothing for too long.

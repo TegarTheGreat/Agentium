@@ -694,3 +694,15 @@ func TestErrorBodyWith200(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPErrorIsShortAndActionable(t *testing.T) {
+	e := &HTTPError{Status: 401, Body: `{"error":{"message":"Authentication Fails, Your api key: ****abcd is invalid","type":"authentication_error"}}`}
+	if got := e.Error(); got != "api error 401: Authentication Fails, Your api key: ****abcd is invalid (check the API key: /login, or agentium login <provider>)" {
+		t.Fatalf("401: %s", got)
+	}
+	page := "<!DOCTYPE html><html><head><title>x</title><style>body{}</style></head><body><h1>502 Bad Gateway</h1>" + strings.Repeat("<p>filler text</p>", 300) + "</body></html>"
+	got := (&HTTPError{Status: 502, Body: page}).Error()
+	if !strings.HasPrefix(got, "api error 502: 502 Bad Gateway filler text") || strings.Contains(got, "<") || len(got) > 400 {
+		t.Fatalf("html: %d %q", len(got), got)
+	}
+}

@@ -18,6 +18,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - `agentium logout <provider>` says when nothing is stored for that provider instead of succeeding silently.
 - `--mode` help lists plan.
 - `/model <id>` with an id not in that provider's model list is used for the session only, not saved as the default (a typo used to break every later session with API errors).
+- API errors show the provider's message instead of its raw JSON, reduce an HTML error page to a short line (a 3 KB page was printed on every retry), and say what to do: check the key for 401/403, list the models for 404.
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 
 ## [0.24.0] - 2026-09-25
