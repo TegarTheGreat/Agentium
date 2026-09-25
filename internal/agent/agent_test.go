@@ -992,8 +992,9 @@ func TestNoChecksWanted(t *testing.T) {
 func TestToolAliases(t *testing.T) {
 	a := newAgent(t, &script{steps: []func(provider.Request) (provider.Response, error){
 		calls(tc("1", "write", `{"file_path":"w.txt","content":"hello\n"}`),
-			tc("2", "Bash", `{"cmd":"echo ran"}`),
-			tc("3", "grep", `{"pattern":"hel+o","include":"*.txt"}`)),
+			tc("2", "Bash", `{"cmd":"echo ran"}`)),
+		// After the file exists (calls in one step run in parallel).
+		calls(tc("3", "grep", `{"pattern":"hel+o","include":"*.txt"}`)),
 		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "ok"}, nil },
 	}})
 	if _, err := a.Run(context.Background(), "x"); err != nil {
