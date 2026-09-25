@@ -29,7 +29,7 @@ const prPrompt = `Open a pull request for the current branch. Check git status (
 type userCmd struct {
 	name, desc, path string
 	hint             string // argument-hint: what to type after it
-	personal         bool // in your home folder, not a repository's
+	personal         bool   // in your home folder, not a repository's
 }
 
 // userCommands finds the custom commands; a project's win over yours.
