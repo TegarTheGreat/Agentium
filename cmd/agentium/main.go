@@ -799,15 +799,8 @@ func run(args []string) error {
 		}
 	}
 	if cfg.OracleModel != "" {
-		if or, err := provider.Resolve(cfg.OracleModel, cfg, auth); err == nil {
-			info, known := or.Info, or.Known
-			a.Oracle = &agent.Oracle{Client: or.Client, Model: or.Model, Reasoning: or.Reasoning("high"), MaxOutput: info.Output,
-				Cost: func(us provider.Usage) float64 {
-					if !known {
-						return 0
-					}
-					return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
-				}}
+		if o, err := oracleModel(cfg, auth); err == nil {
+			a.Oracle = o
 			a.Tools = append(a.Tools, a.OracleTool())
 		} else if !*quiet {
 			fmt.Fprintln(os.Stderr, u.dim("· oracle_model ignored: "+firstLine(err.Error())))

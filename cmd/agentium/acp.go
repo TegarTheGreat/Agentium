@@ -333,6 +333,14 @@ func (s *acpServer) newSession(m rpcMsg) {
 		Verify:        s.cfg.Verify == nil || *s.cfg.Verify,
 	}
 	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
+	if s.cfg.OracleModel != "" {
+		if o, err := oracleModel(s.cfg, s.auth); err == nil {
+			a.Oracle = o
+			a.Tools = append(a.Tools, a.OracleTool())
+		} else {
+			s.log("oracle_model ignored: " + firstLine(err.Error()))
+		}
+	}
 	if s.cfg.SubagentModel != "" {
 		if sub, _, err := subModel(s.cfg, s.auth, s.cfg.Effort); err == nil {
 			a.Sub = sub

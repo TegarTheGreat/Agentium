@@ -545,3 +545,19 @@ func subModel(cfg config.Config, auth config.Auth, effort string) (*agent.SubMod
 			return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
 		}}, known, nil
 }
+
+// oracleModel resolves cfg.OracleModel for the oracle tool.
+func oracleModel(cfg config.Config, auth config.Auth) (*agent.Oracle, error) {
+	or, err := provider.Resolve(cfg.OracleModel, cfg, auth)
+	if err != nil {
+		return nil, err
+	}
+	info, known := or.Info, or.Known
+	return &agent.Oracle{Client: or.Client, Model: or.Model, Reasoning: or.Reasoning("high"), MaxOutput: info.Output,
+		Cost: func(us provider.Usage) float64 {
+			if !known {
+				return 0
+			}
+			return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
+		}}, nil
+}
