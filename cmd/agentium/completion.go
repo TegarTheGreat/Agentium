@@ -77,9 +77,11 @@ type completer struct {
 	cmds      []userCmd
 	cmdsAt    time.Time // when cmds were read; zero: never re-read
 
-	mu     sync.Mutex
-	files  []string
-	listed time.Time
+	mu      sync.Mutex
+	files   []string
+	lower   []string // files, lower-cased
+	listed  time.Time
+	listing bool // a background refresh is running
 }
 
 func (c *completer) complete(before []rune) ([]suggestion, int) {
@@ -143,29 +145,40 @@ func (c *completer) commands(prefix string) []suggestion {
 
 // fileSuggestions ranks the project's files against a fuzzy query.
 func (c *completer) fileSuggestions(q string) []suggestion {
-	files := c.projectFiles()
+	files, lower := c.projectFiles()
 	type hit struct {
 		path  string
 		score int
 	}
-	var hits []hit
-	lq := strings.ToLower(q)
-	for _, f := range files {
-		if sc, ok := fuzzyScore(strings.ToLower(f), lq); ok {
-			hits = append(hits, hit{f, sc})
+	better := func(a, b hit) bool {
+		if a.score != b.score {
+			return a.score > b.score
 		}
+		return len(a.path) < len(b.path)
 	}
-	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].score != hits[j].score {
-			return hits[i].score > hits[j].score
+	// The best 50, kept sorted: a full sort of every match is too slow
+	// on a repository with 100k+ files.
+	const keep = 50
+	var top []hit
+	qr := []rune(strings.ToLower(q))
+	for i, f := range files {
+		sc, ok := fuzzyRunes(lower[i], qr)
+		if !ok {
+			continue
 		}
-		return len(hits[i].path) < len(hits[j].path)
-	})
+		h := hit{f, sc}
+		if len(top) == keep && !better(h, top[keep-1]) {
+			continue
+		}
+		at := sort.Search(len(top), func(j int) bool { return better(h, top[j]) })
+		if len(top) < keep {
+			top = append(top, hit{})
+		}
+		copy(top[at+1:], top[at:])
+		top[at] = h
+	}
 	var out []suggestion
-	for i, h := range hits {
-		if i == 50 {
-			break
-		}
+	for _, h := range top {
 		dir := filepath.Dir(h.path)
 		if dir == "." {
 			dir = ""
@@ -177,13 +190,14 @@ func (c *completer) fileSuggestions(q string) []suggestion {
 
 // fuzzyScore matches q as a subsequence of s; contiguous runs, matches in
 // the file name and at word starts score higher.
-func fuzzyScore(s, q string) (int, bool) {
-	if q == "" {
+func fuzzyScore(s, q string) (int, bool) { return fuzzyRunes(s, []rune(q)) }
+
+func fuzzyRunes(s string, qr []rune) (int, bool) {
+	if len(qr) == 0 {
 		return 0, true
 	}
 	base := strings.LastIndex(s, "/") + 1
 	score, qi, run := 0, 0, 0
-	qr := []rune(q)
 	prev := rune('/')
 	for i, r := range s {
 		if qi < len(qr) && r == qr[qi] {
@@ -204,49 +218,80 @@ func fuzzyScore(s, q string) (int, bool) {
 	if qi < len(qr) {
 		return 0, false
 	}
-	if strings.Contains(s[base:], q) {
+	if strings.Contains(s[base:], string(qr)) {
 		score += 20
 	}
 	return score, true
 }
 
-// projectFiles lists the project's files (git's view when available,
-// with a time limit so a huge repository cannot freeze typing), refreshed
-// at most every 30 seconds.
-func (c *completer) projectFiles() []string {
+// maxListed caps the files offered for @-completion.
+const maxListed = 200000
+
+// projectFiles lists the project's files (git's view when available).
+// The first call lists them; later ones return the last list and refresh
+// it in the background at most every 30 seconds, so a huge repository
+// never stalls typing.
+func (c *completer) projectFiles() (files, lower []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Since(c.listed) < 30*time.Second && c.files != nil {
-		return c.files
+	if c.files == nil {
+		c.files = listProject(c.root)
+		c.lower, c.listed = lowered(c.files), time.Now()
+	} else if time.Since(c.listed) > 30*time.Second && !c.listing {
+		c.listing = true
+		go func() {
+			files := listProject(c.root)
+			lower := lowered(files)
+			c.mu.Lock()
+			c.files, c.lower, c.listed, c.listing = files, lower, time.Now(), false
+			c.mu.Unlock()
+		}()
 	}
-	c.listed = time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if len(c.lower) != len(c.files) { // set directly (tests)
+		c.lower = lowered(c.files)
+	}
+	return c.files, c.lower
+}
+
+func lowered(files []string) []string {
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = strings.ToLower(f)
+	}
+	return out
+}
+
+func listProject(root string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	cmd.Dir = c.root
+	cmd.Dir = root
 	if out, err := cmd.Output(); err == nil {
-		c.files = strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
-		if len(c.files) > 20000 {
-			c.files = c.files[:20000]
+		files := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
+		if len(files) > maxListed {
+			files = files[:maxListed]
 		}
-		return c.files
+		return files
 	}
-	var files []string
-	filepath.WalkDir(c.root, func(p string, d os.DirEntry, err error) error {
-		if err != nil || len(files) >= 5000 {
-			return filepath.SkipDir
+	files := []string{}
+	deadline := time.Now().Add(2 * time.Second)
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if len(files) >= maxListed || time.Now().After(deadline) {
+			return filepath.SkipAll
+		}
+		if err != nil {
+			return nil
 		}
 		name := d.Name()
-		if d.IsDir() && p != c.root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "target") {
+		if d.IsDir() && p != root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "target") {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() {
-			if rel, err := filepath.Rel(c.root, p); err == nil {
+			if rel, err := filepath.Rel(root, p); err == nil {
 				files = append(files, filepath.ToSlash(rel))
 			}
 		}
 		return nil
 	})
-	c.files = files
 	return files
 }

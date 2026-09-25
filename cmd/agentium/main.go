@@ -1690,7 +1690,7 @@ func run(args []string) error {
 					u.success("Stopped watching for AI comments")
 				} else {
 					comp := &completer{root: cwd}
-					watch = newWatcher(cwd, comp.projectFiles)
+					watch = newWatcher(cwd, func() []string { f, _ := comp.projectFiles(); return f[:min(len(f), 20000)] }) // it stats every file each 2 s
 					ed.inject = watch.take
 					u.success("Watching the project: end a comment with AI! to ask for a change, AI? to ask a question" +
 						u.paint(cDim, " · /watch again stops"))
