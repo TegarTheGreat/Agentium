@@ -643,3 +643,17 @@ func TestDroppedImageWindowsPath(t *testing.T) {
 		t.Fatalf("%q", m)
 	}
 }
+
+func TestDroppedLeadingOnly(t *testing.T) {
+	dir := t.TempDir()
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
+	a, b, c := filepath.Join(dir, "a.png"), filepath.Join(dir, "b.png"), filepath.Join(dir, "c.png")
+	for _, f := range []string{a, b, c} {
+		os.WriteFile(f, png, 0o644)
+	}
+	outside := func(string) bool { return false }
+	imgs, _ := mentionedImages(a+" "+b+" compare these, and also "+c, dir, true, outside)
+	if len(imgs) != 2 {
+		t.Fatalf("got %d, want the 2 leading ones", len(imgs))
+	}
+}

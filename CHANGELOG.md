@@ -7,6 +7,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 ### Fixed
 
 - Asked which model it runs on, the agent can say (the session's starting model is in its instructions).
+- A dragged image path outside the project is attached only when the message starts with it (with any others dropped alongside), and symlinks are judged by the file they point to. Agentium's own `/security-review` found both.
 - A rule written as `_ _ _` is drawn as a rule while a reply streams.
 
 ## [0.23.0] - 2026-09-25

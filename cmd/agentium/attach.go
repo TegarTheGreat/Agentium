@@ -22,17 +22,20 @@ var shellEscape = regexp.MustCompile(`\\(.)`)
 
 // droppedPaths finds dropped image paths; one right after another counts
 // too (the separating space is not used up).
-func droppedPaths(input string) (paths []string, first int) {
-	first = -1
+// leading counts the paths the message starts with (only spaces between
+// them), where a drag puts them.
+func droppedPaths(input string) (paths []string, leading int) {
+	run := true
+	prev := 0
 	for off := 0; off < len(input) && len(paths) < 8; {
 		m := droppedImage.FindStringSubmatchIndex(input[off:])
 		if m == nil {
 			break
 		}
 		raw := input[off+m[2] : off+m[3]]
-		if first < 0 {
-			first = off + m[2]
-		}
+		gap := input[prev : off+m[2]]
+		run = run && strings.Trim(gap, " \t\n([<)]>.,;:!?") == ""
+		prev = off + m[3]
 		off += m[3]
 		p := raw
 		switch {
@@ -48,8 +51,11 @@ func droppedPaths(input string) (paths []string, first int) {
 			p = shellEscape.ReplaceAllString(raw, "$1") // "Screen\ Shot\ \(1\).png"
 		}
 		paths = append(paths, p)
+		if run {
+			leading++
+		}
 	}
-	return paths, first
+	return paths, leading
 }
 
 var imageMention = regexp.MustCompile(`(?i)(?:^|\s)@("[^"]+\.(?:png|jpe?g|gif|webp)"|\S+\.(?:png|jpe?g|gif|webp))`)
@@ -66,17 +72,19 @@ func mentionedImages(input, cwd string, vision bool, inside func(string) bool) (
 	// there is attached too, when it is in the workspace or the message
 	// starts with it (as a drag leaves it). A path merely mentioned in
 	// pasted text elsewhere on the disk is not sent.
-	dropped, first := droppedPaths(input)
-	lead := first >= 0 && strings.TrimLeft(input[:first], " \t\n([<") == ""
+	dropped, leading := droppedPaths(input)
 	var extra []string
-	for _, p := range dropped {
+	for i, p := range dropped {
 		abs := p
 		if strings.HasPrefix(abs, "~/") {
 			if h, err := os.UserHomeDir(); err == nil {
 				abs = filepath.Join(h, abs[2:])
 			}
 		}
-		if lead || inside == nil || inside(abs) {
+		if r, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = r // the gate judges the file that is really read
+		}
+		if i < leading || inside == nil || inside(abs) {
 			extra = append(extra, p)
 		}
 	}
