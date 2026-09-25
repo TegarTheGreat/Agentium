@@ -1226,12 +1226,19 @@ func run(args []string) error {
 			}
 		}
 		ed.vim = cfg.Vim
+		shortcuts, badKeys := userKeys(cfg.Keys)
+		for _, b := range badKeys {
+			fmt.Fprintln(os.Stderr, u.dim("· "+b))
+		}
 		ed.complete = (&completer{root: cwd, skills: skills, cmds: userCommands(cwd)}).complete
 		var lastEsc time.Time
 		ed.hook = func(e *editor, k string) bool {
 			submit := func(cmd string) bool {
 				e.buf, e.pos, e.autoSubmit = []rune(cmd), len([]rune(cmd)), true
 				return true
+			}
+			if act, ok := shortcuts[k]; ok && len(e.buf) == 0 {
+				return submit(act) // the user's own shortcut
 			}
 			switch {
 			case k == "\x1b[Z": // Shift-Tab: the next approval mode

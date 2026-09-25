@@ -37,6 +37,9 @@ type Config struct {
 	Suggest *bool `json:"suggest,omitempty"`
 	// Vim turns on vim keys in the message box (also /vim).
 	Vim bool `json:"vim,omitempty"`
+	// Keys are your shortcuts: key name → command or message, e.g.
+	// {"ctrl+x": "/diff", "f5": "run the tests"}.
+	Keys map[string]string `json:"keys,omitempty"`
 	// Dirs are more working directories (like --add-dir).
 	Dirs      []string `json:"dirs,omitempty"`
 	Mode      string   `json:"mode,omitempty"`  // ask | auto | yolo

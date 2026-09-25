@@ -208,6 +208,7 @@ Subscription logins are offered only where the provider's terms allow third-part
   "subagent_model": "anthropic/claude-haiku-4-5",
   "status_line": "~/bin/agentium-status",
   "suggest": true,
+  "keys": { "ctrl+x": "/diff", "f5": "run the tests" },
   "hooks": {
     "post_edit": ["gofmt -w {path}"],
     "stop": ["notify-send agentium done"],

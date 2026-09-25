@@ -388,3 +388,10 @@ func TestUserTurns(t *testing.T) {
 		t.Fatalf("turns %+v", got)
 	}
 }
+
+func TestUserKeys(t *testing.T) {
+	keys, bad := userKeys(map[string]string{"ctrl+x": "/diff", "F5": "run the tests", "ctrl+c": "/exit", "hyper+q": "x", "alt+z": " "})
+	if keys["\x18"] != "/diff" || keys["\x1b[15~"] != "run the tests" || len(keys) != 2 || len(bad) != 2 {
+		t.Fatalf("keys %q bad %q", keys, bad)
+	}
+}
