@@ -120,6 +120,10 @@ func (m *mdStream) decidable() bool {
 		return true
 	}
 	if len(t) >= 2 && strings.ContainsRune("-*+", rune(t[0])) && t[1] == ' ' && !strings.HasSuffix(t, "\n") {
+		// Maybe a rule ("* * *", "- - -"): wait for the line to end.
+		if strings.Trim(t, string(t[0])+" \t") == "" {
+			return false
+		}
 		// Maybe a task: wait to see "[ ] " or "[x] " after the marker.
 		if rest := t[2:]; len(rest) < 4 && (strings.HasPrefix("[ ] ", rest) || strings.HasPrefix("[x] ", strings.ToLower(rest))) {
 			return false

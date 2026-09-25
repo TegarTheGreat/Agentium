@@ -10,6 +10,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- A rule written as `* * *` or `- - -` is drawn as a rule while a reply streams, not as a bullet.
 - `agentium -p /command` uses the command's `model:` too (your own commands; a repository's cannot ask there).
 - Empty lessons that older versions filed into MEMORY.md are hidden from the model.
 
