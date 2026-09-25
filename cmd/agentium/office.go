@@ -6,9 +6,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
-// The office: a small pixel-art strip at the top of the full-screen UI.
+// The office: a pixel-art scene at the top of the full-screen sidebar.
 // Agentium sits at a desk and visibly does what it is doing — reading a
 // document, typing, watching a terminal, browsing, thinking — and each
 // sub-agent appears as a staff member at their own desk. Drawn with
@@ -16,8 +17,6 @@ import (
 // only redrawn when a frame changes, so it stays light.
 
 const (
-	officeRows  = 7 // 6 rows of pixels (12 px) and a label row
-	deskW       = 17
 	officeFrame = 250 * time.Millisecond
 )
 
@@ -163,50 +162,102 @@ func (o *office) render(width int, truecolor bool) []string {
 	if reduceMotion {
 		frame = 0
 	}
-	actors := []*actor{&o.lead}
-	for i := 0; i < len(o.staff) && i < 2; i++ {
-		actors = append(actors, o.staff[i])
-	}
-	textW := width - deskW - 1
 	var rows []string
-	for i, a := range actors {
-		c := newCanvas(deskW, 12)
-		drawDesk(c, 0, a, frame, now)
-		px := c.halfBlocks(truecolor)
-		// Beside the desk: who, what (and for how long), on what.
-		name := "\x1b[1m" + a.name + "\x1b[0m"
-		if i > 0 {
-			name = fgColor(a.shirt, truecolor) + "\x1b[1m" + truncate(a.name, textW) + "\x1b[0m"
+	// Agentium's corner, full width, and a line on what it is doing.
+	lead := &o.lead
+	for _, p := range leadScene(lead, frame, now).halfBlocks(truecolor) {
+		rows = append(rows, cropCols(p, width))
+	}
+	status := "\x1b[1mAgentium\x1b[0m \x1b[" + cAccent + "m" + actWord(lead.act) + "\x1b[0m"
+	if lead.act != actIdle {
+		status += "\x1b[2m · " + elapsed(now.Sub(lead.since)) + "\x1b[0m"
+	}
+	rows = append(rows, status)
+	if lead.act != actIdle && lead.detail != "" {
+		rows = append(rows, "\x1b[2m"+truncate(lead.detail, width)+"\x1b[0m")
+	}
+	// Staff, two desks side by side.
+	var staff []*actor
+	for i := 0; i < len(o.staff) && i < 2; i++ {
+		staff = append(staff, o.staff[i])
+	}
+	if len(staff) > 0 {
+		rows = append(rows, "")
+		var pics [][]string
+		for _, s := range staff {
+			pics = append(pics, staffScene(s, frame, now).halfBlocks(truecolor))
 		}
-		doing := "\x1b[" + cAccent + "m" + actWord(a.act) + "\x1b[0m"
-		if a.act != actIdle {
-			doing += "\x1b[2m · " + elapsed(now.Sub(a.since)) + "\x1b[0m"
-		}
-		side := []string{"", name, doing}
-		about := a.detail
-		if i > 0 && (about == "" || a.act == actThink) {
-			about = a.title
-		}
-		if a.act != actIdle {
-			for j, l := range wordWrap(about, textW) {
-				if j == 2 {
-					break
+		colW := staffW + 1
+		for j := range pics[0] {
+			line := ""
+			for k, p := range pics {
+				if k > 0 {
+					line += " "
 				}
-				side = append(side, "\x1b[2m"+truncate(l, textW)+"\x1b[0m")
+				line += p[j]
 			}
+			if len(pics) == 1 { // one desk: who and what beside it
+				s := staff[0]
+				side := []string{
+					fgColor(s.shirt, truecolor) + "\x1b[1m" + truncate(s.name, width-colW) + "\x1b[0m",
+					"\x1b[" + cAccent + "m" + actWord(s.act) + "\x1b[0m\x1b[2m · " + elapsed(now.Sub(s.since)) + "\x1b[0m",
+				}
+				about := s.detail
+				if about == "" || s.act == actThink {
+					about = s.title
+				}
+				for _, l := range wordWrap(about, width-colW) {
+					side = append(side, "\x1b[2m"+truncate(l, width-colW)+"\x1b[0m")
+				}
+				if j > 0 && j-1 < len(side) && j-1 < 4 {
+					line += " " + side[j-1]
+				}
+			}
+			rows = append(rows, line)
 		}
-		for j, p := range px {
-			t := ""
-			if j < len(side) {
-				t = side[j]
+		if len(pics) == 2 { // names and doings under the desks
+			label := func(f func(*actor) string) string {
+				a := padTo(f(staff[0]), staffW)
+				return a + " " + f(staff[1])
 			}
-			rows = append(rows, p+" "+t)
+			rows = append(rows, label(func(s *actor) string {
+				return fgColor(s.shirt, truecolor) + "\x1b[1m" + truncate(s.name, staffW) + "\x1b[0m"
+			}))
+			rows = append(rows, label(func(s *actor) string {
+				return "\x1b[" + cAccent + "m" + truncate(actWord(s.act)+" · "+elapsed(now.Sub(s.since)), staffW) + "\x1b[0m"
+			}))
 		}
 	}
 	if extra := len(o.staff) - 2; extra > 0 {
 		rows = append(rows, fmt.Sprintf("\x1b[2m+%d more staff at work\x1b[0m", extra))
 	}
 	return rows
+}
+
+// cropCols keeps the first w cells of a half-block row (for a sidebar
+// narrower than the scene).
+func cropCols(row string, w int) string {
+	if w >= sceneW {
+		return row
+	}
+	var sb strings.Builder
+	n := 0
+	for i := 0; i < len(row) && n < w; {
+		if row[i] == 0x1b {
+			j := strings.IndexByte(row[i:], 'm')
+			if j < 0 {
+				break
+			}
+			sb.WriteString(row[i : i+j+1])
+			i += j + 1
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(row[i:])
+		sb.WriteString(row[i : i+size])
+		i += size
+		n++
+	}
+	return sb.String() + "\x1b[0m"
 }
 
 // staffOf is the color and name of the staff member working on task.
@@ -407,150 +458,3 @@ var (
 	colBubble  = rgb{250, 250, 250}
 	colMagnify = rgb{180, 220, 250}
 )
-
-// drawDesk draws one actor at their desk; x0 is the left edge.
-func drawDesk(c *canvas, x0 int, a *actor, frame int, now time.Time) {
-	// Desk and monitor.
-	c.rect(x0, 9, deskW-1, 1, colDesk)
-	c.rect(x0+1, 10, 1, 2, colLeg)
-	c.rect(x0+deskW-3, 10, 1, 2, colLeg)
-	c.rect(x0+10, 3, 7, 5, colFrame)
-	c.rect(x0+13, 8, 1, 1, colFrame)
-	c.rect(x0+12, 8, 3, 1, colFrame)
-	drawScreen(c, x0+11, 4, a.act, frame)
-
-	// A new staff member walks in from the right.
-	dx := 0
-	if age := now.Sub(a.born); age < 1200*time.Millisecond {
-		dx = int((1200*time.Millisecond - age) / (150 * time.Millisecond))
-	}
-	x := x0 + dx
-
-	// Head and hair.
-	c.pattern(x+3, 0, a.hair, "###")
-	c.pattern(x+2, 1, a.hair, "#####")
-	c.rect(x+2, 2, 5, 3, colSkin)
-	c.dot(x+2, 2, a.hair)
-	c.dot(x+6, 2, a.hair)
-	// Eyes look at the screen while working, blink now and then.
-	look := 0
-	if a.act != actIdle && a.act != actWait && a.act != actDone && a.act != actFail {
-		look = 1
-	}
-	if frame%17 != 0 {
-		c.dot(x+3+look, 3, colEye)
-		c.dot(x+5+look, 3, colEye)
-	}
-	// Body.
-	c.rect(x+3, 5, 3, 1, a.shirt)
-	c.rect(x+1, 6, 7, 3, a.shirt)
-
-	hands := func(lx, ly, rx, ry int) {
-		c.dot(x+lx, ly, colSkin)
-		c.dot(x+rx, ry, colSkin)
-	}
-	switch a.act {
-	case actWrite, actRun:
-		c.rect(x0+7, 8, 4, 1, colKeys)
-		// Typing: the hands take turns.
-		if frame%2 == 0 {
-			hands(7, 7, 9, 8)
-		} else {
-			hands(7, 8, 9, 7)
-		}
-	case actRead:
-		// Holding a document; the page turns every few seconds.
-		c.rect(x+6, 4, 4, 4, colPaper)
-		for j := 0; j < 3; j++ {
-			w := 2 + (j+frame/12)%2
-			c.rect(x+7, 5+j, w, 1, colInk)
-		}
-		hands(6, 7, 9, 7)
-	case actSearch:
-		// A magnifying glass that sweeps a little.
-		off := []int{0, 1, 0, -1}[frame%4]
-		c.pattern(x+6+off, 3, colFrame, ".#.", "#.#", ".#.")
-		c.dot(x+7+off, 4, colMagnify)
-		c.dot(x+6+off, 6, colFrame)
-		hands(5, 7, 6+off, 7)
-	case actWeb:
-		hands(7, 8, 8, 8)
-	case actPlan:
-		// A clipboard, ticked off line by line.
-		c.rect(x+6, 3, 4, 5, colBoard)
-		c.rect(x+7, 4, 2, 3, colPaper)
-		for j := 0; j <= (frame/4)%3; j++ {
-			c.dot(x+7, 4+j, colGreen)
-		}
-		hands(6, 7, 9, 7)
-	case actDelegate:
-		// Holding out a folder for a colleague.
-		reach := (frame / 2) % 2
-		c.rect(x+7+reach, 5, 3, 2, colFolder)
-		hands(6+reach, 6, 9+reach, 7)
-	case actThink:
-		hands(1, 8, 6, 5) // hand to chin
-		for i := 0; i <= frame%4 && i < 3; i++ {
-			c.dot(x+8+2*i, 1-i/2, colBubble)
-		}
-	case actWait:
-		c.pattern(x+8, 0, colYellow, "###", "..#", ".##", "...", ".#.")
-		hands(1, 8, 7, 8)
-	case actDone:
-		c.dot(x+0, 4, colSkin) // arms up
-		c.dot(x+8, 4, colSkin)
-		c.dot(x+0, 5, a.shirt)
-		c.dot(x+8, 5, a.shirt)
-	case actFail:
-		c.pattern(x+8, 0, colRed, "#", "#", "#", ".", "#")
-		hands(1, 8, 7, 8)
-	default:
-		hands(1, 8, 7, 8)
-	}
-}
-
-// drawScreen fills the 5×3 monitor screen.
-func drawScreen(c *canvas, x, y int, act string, frame int) {
-	switch act {
-	case actWrite:
-		c.rect(x, y, 5, 3, colScreen)
-		n := frame % 8
-		cols := []rgb{colCodeA, colCodeB, colCodeC}
-		for j := 0; j < 3; j++ {
-			w := min(max(n-2*j, 0), 4)
-			c.rect(x+j%2, y+j, w, 1, cols[j])
-		}
-	case actRun:
-		c.rect(x, y, 5, 3, colTerm)
-		for j := 0; j < 3; j++ {
-			w := 1 + (frame+j*3)%4
-			c.rect(x, y+j, w, 1, colGreen)
-		}
-		if frame%2 == 0 {
-			c.dot(x+4, y+2, colBubble)
-		}
-	case actRead, actSearch:
-		c.rect(x, y, 5, 3, colPaper)
-		for j := 0; j < 3; j++ {
-			c.rect(x+1, y+j, 1+(j+frame/3)%3, 1, colInk)
-		}
-	case actWeb:
-		c.rect(x, y, 5, 3, colBlue)
-		for j := 0; j < 3; j++ {
-			c.dot(x+(frame+j*2)%5, y+j, colGreen)
-			c.dot(x+(frame+j*2+1)%5, y+j, colGreen)
-		}
-	case actDone:
-		c.rect(x, y, 5, 3, colScreen)
-		c.pattern(x, y, colGreen, "....#", "#.#..", ".#...")
-	case actFail:
-		c.rect(x, y, 5, 3, colScreen)
-		c.pattern(x+1, y, colRed, "#.#", ".#.", "#.#")
-	case actThink:
-		c.rect(x, y, 5, 3, colScreen)
-		c.dot(x+1+frame%3, y+1, colCodeA)
-	default:
-		c.rect(x, y, 5, 3, colScreen)
-		c.dot(x+2, y+1, colCodeC)
-	}
-}

@@ -6,6 +6,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Changed
 
+- **The office is redrawn.** Agentium now sits in a small room across the whole side panel: a window whose sky follows your clock (day, dusk, night with stars), a desk with a keyboard and a steaming mug, a plant, and a monitor that shows the work: code being written, a terminal, a page, a browser, a check mark or a cross. Characters have outlines and shading, and hold a page, clipboard, magnifier or folder as they work. Staff (sub-agents) get their own desks, two side by side with their names under them.
+
 - **No step limit in a session.** A long task used to stop with "error: stopped: reached max turns" after 100 steps, even when the work was going fine. Interactive sessions (and IDE sessions) now work until the task is done, as in Claude Code: `Esc` stops it, and the stuck detector and `--max-cost` still end a loop. One-shot runs (`-p`) keep a limit of 100. `"max_turns"` or `--max-turns` sets a limit if you want one. When a limit you set is reached, the agent reports what is done and what is left, and `continue` is ready in the message box.
 
 ### Fixed
