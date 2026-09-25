@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tegarthegreat/agentium/internal/config"
@@ -43,7 +44,17 @@ func userCommands(cwd string) []userCmd {
 		dirs = append(dirs, filepath.Join(d, ".claude", "commands"), filepath.Join(d, ".agentium", "commands"))
 	}
 	byName := map[string]userCmd{}
+	own := map[string]bool{}
 	for di, dir := range dirs {
+		real := dir
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			real = r
+		}
+		if di < personal {
+			own[real] = true
+		} else if own[real] {
+			continue // your home folder is the project: still yours
+		}
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
 			ext := filepath.Ext(e.Name())
@@ -115,6 +126,9 @@ func expandCommand(cwd, line string) (msg string, ok bool) {
 // !`command` spans with their output, through shell; a nil shell (or one
 // that returns nil) leaves them as written.
 func expandCommandShell(cwd, line string, shell func(c userCmd, cmds []string) []string) (msg string, ok bool) {
+	if !strings.HasPrefix(line, "/") {
+		return "", false
+	}
 	name, args, _ := strings.Cut(strings.TrimPrefix(line, "/"), " ")
 	args = strings.TrimSpace(args)
 	withArgs := func(p string) string {
@@ -144,25 +158,37 @@ func expandCommandShell(cwd, line string, shell func(c userCmd, cmds []string) [
 			return "", false
 		}
 		_, body := splitFront(string(b))
-		// The file's own commands run before the arguments go in, so
-		// nothing typed after the command is run.
-		if cmds := bangCommands(body); len(cmds) > 0 && shell != nil {
-			if outs := shell(c, cmds); len(outs) == len(cmds) {
-				i := 0
-				body = bangCmd.ReplaceAllStringFunc(body, func(string) string { i++; return outs[i-1] })
-			}
-		}
+		// The file's !`commands` are held out while the arguments go in
+		// (so nothing typed is run, and $1 in their output stays), then
+		// filled with their output.
+		spans := bangCmd.FindAllString(body, -1)
+		n := 0
+		body = bangCmd.ReplaceAllStringFunc(body, func(string) string { n++; return "\x00" + strconv.Itoa(n-1) + "\x00" })
+		args = strings.ReplaceAll(args, "\x00", "")
 		msg := withArgs(strings.TrimSpace(body))
-		if strings.Contains(body, "$ARGUMENTS") || positional.MatchString(body) {
+		if strings.Contains(body, "$ARGUMENTS") || args != "" && positional.MatchString(body) {
 			msg = strings.TrimSpace(expandArgs(body, args))
 		}
+		fill := spans
+		if len(spans) > 0 && shell != nil {
+			if outs := shell(c, bangCommands(strings.Join(spans, "\n"))); len(outs) == len(spans) {
+				fill = outs
+			}
+		}
+		msg = held.ReplaceAllStringFunc(msg, func(m string) string {
+			i, _ := strconv.Atoi(m[1 : len(m)-1])
+			return fill[i]
+		})
 		return msg, true // "" for an empty file: the caller says so
 	}
 	return "", false
 }
 
-// positional matches $1 … $9 in a command file.
-var positional = regexp.MustCompile(`\$[1-9]`)
+// positional matches $1 … $9 in a command file (not $10).
+var positional = regexp.MustCompile(`\$[1-9]\b`)
+
+// held marks a !`command` span while the arguments go in.
+var held = regexp.MustCompile("\x00[0-9]+\x00")
 
 // expandArgs fills $ARGUMENTS with all the arguments and $1 … $9 with
 // each one; "quoted words" count as one.

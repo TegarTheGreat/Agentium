@@ -160,6 +160,9 @@ func (o *office) render(width int, truecolor bool) []string {
 		o.lead.act, o.lead.detail, o.lead.since = actIdle, "", now
 	}
 	frame := int(now.Sub(o.start) / officeFrame)
+	if reduceMotion {
+		frame = 0
+	}
 	actors := []*actor{&o.lead}
 	for i := 0; i < len(o.staff) && i < 2; i++ {
 		actors = append(actors, o.staff[i])

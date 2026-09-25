@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // A custom command can carry live context, as in Claude Code: !`git diff`
@@ -34,7 +35,8 @@ func runBang(command, dir string) string {
 	cmd.Dir = dir
 	cmd.WaitDelay = 2 * time.Second
 	b, err := cmd.CombinedOutput()
-	out := strings.TrimRight(strings.ToValidUTF8(string(b), "�"), "\n")
+	_ = killGroup(cmd) // children it left behind
+	out := strings.TrimRight(strings.ToValidUTF8(string(b), "�"), "\r\n")
 	if len(out) > bangMaxOut {
 		out = strings.ToValidUTF8(out[:bangMaxOut], "") + "\n… (cut)"
 	}
@@ -54,14 +56,21 @@ func runBang(command, dir string) string {
 // Yours run; a repository's run only when you say so, and never without
 // asking (one-shot runs leave them as written).
 func commandShell(u *ui, c userCmd, cmds []string, dir string, interactive bool) []string {
+	name := sanitize(c.name)
 	if !c.personal {
 		if !interactive {
-			u.note("/" + c.name + " is the repository's: its !`commands` were not run")
+			u.note("/" + name + " is the repository's: its !`commands` were not run")
 			return nil
 		}
-		u.note("/" + c.name + " (from this repository) wants to run:")
 		for _, cmd := range cmds {
-			u.note("  $ " + sanitize(oneLine(cmd, 200)))
+			if hasFormatChars(cmd) {
+				u.note("/" + name + " has hidden characters in a command; not run")
+				return nil
+			}
+		}
+		u.note("/" + name + " (from this repository) wants to run:")
+		for _, cmd := range cmds {
+			u.note("  $ " + sanitize(cmd)) // in full: nothing hides past a cut
 		}
 		pick, err := u.choose("Run them and include their output?", []menuItem{
 			{value: "run", label: "Run them"},
@@ -72,9 +81,25 @@ func commandShell(u *ui, c userCmd, cmds []string, dir string, interactive bool)
 		}
 	}
 	outs := make([]string, len(cmds))
+	start := time.Now()
 	for i, cmd := range cmds {
+		if time.Since(start) > 2*time.Minute {
+			outs[i] = "(" + cmd + ": not run, the command's time ran out)"
+			continue
+		}
 		u.note("$ " + sanitize(oneLine(cmd, 200)))
 		outs[i] = runBang(cmd, dir)
 	}
 	return outs
+}
+
+// hasFormatChars reports invisible format characters (bidi overrides and
+// the like) that could make a command read differently from what runs.
+func hasFormatChars(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Cf, r) {
+			return true
+		}
+	}
+	return false
 }

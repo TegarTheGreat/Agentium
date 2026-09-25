@@ -497,6 +497,21 @@ func TestCommandShell(t *testing.T) {
 	if msg != "!`echo repo`" || len(seen) != 2 || seen[1].personal {
 		t.Fatalf("repo: %q %+v", msg, seen)
 	}
+	// Only a slash command expands; the output keeps its own $1.
+	os.WriteFile(filepath.Join(home, "commands", "deploy.md"), []byte("!`printf 'a $1 b'` then $1"), 0o644)
+	n := len(seen)
+	if _, ok := expandCommandShell(cwd, "deploy the thing", run); ok || len(seen) != n {
+		t.Fatal("a message without a slash ran a command's commands")
+	}
+	if msg, _ := expandCommandShell(cwd, "/deploy X", run); msg != "a $1 b then X" {
+		t.Fatalf("deploy: %q", msg)
+	}
+	if got := expandArgs("tenth $10", "a"); got != "tenth $10" {
+		t.Fatalf("$10: %q", got)
+	}
+	if !hasFormatChars("echo \u202e hi") || hasFormatChars("echo hi") {
+		t.Fatal("hasFormatChars")
+	}
 	if out := runBang("echo out; exit 3", cwd); !strings.Contains(out, "out") || !strings.Contains(out, "exit status 3") {
 		t.Fatalf("runBang: %q", out)
 	}
@@ -507,5 +522,39 @@ func TestCommandsExactFirst(t *testing.T) {
 	got := c.commands("/st")
 	if len(got) < 2 || got[0].label != "/st" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestReduceMotionStillsOffice(t *testing.T) {
+	defer func(v bool) { reduceMotion = v }(reduceMotion)
+	o := newOffice()
+	o.setLead(actWrite, "editing")
+	pics := func() (a, b string) {
+		o.start = time.Now()
+		a = strings.Join(o.render(40, true), "\n")
+		o.start = time.Now().Add(-3 * officeFrame)
+		b = strings.Join(o.render(40, true), "\n")
+		return
+	}
+	reduceMotion = false
+	if a, b := pics(); a == b {
+		t.Fatal("the office should move by default")
+	}
+	reduceMotion = true
+	if a, b := pics(); a != b {
+		t.Fatal("the office moved with reduce_motion on")
+	}
+}
+
+func TestCommandsAtHomeStayPersonal(t *testing.T) {
+	t.Setenv("AGENTIUM_HOME", t.TempDir())
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	os.MkdirAll(filepath.Join(h, ".claude", "commands"), 0o755)
+	os.WriteFile(filepath.Join(h, ".claude", "commands", "mine.md"), []byte("x"), 0o644)
+	for _, c := range userCommands(h) {
+		if c.name == "mine" && !c.personal {
+			t.Fatal("your own command counted as the repository's when working in your home folder")
+		}
 	}
 }

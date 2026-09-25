@@ -46,6 +46,11 @@ func (u *ui) paint(code, s string) string {
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// reduceMotion stills the animations ("reduce_motion" in the config, or
+// AGENTIUM_REDUCE_MOTION): a steady mark for the spinner, the office
+// drawn in its first pose.
+var reduceMotion bool
+
 // liveTool is a tool call in progress.
 type liveTool struct {
 	waited  time.Duration // approval waiting already counted at start
@@ -140,6 +145,9 @@ func (u *ui) drawLive() {
 		width = 20
 	}
 	spin := spinFrames[u.frame%len(spinFrames)]
+	if reduceMotion {
+		spin = "•"
+	}
 	var lines []string
 	f := activeFS()
 	if f != nil && !(u.thinking || len(u.tools) > 0 || u.keys != nil) {

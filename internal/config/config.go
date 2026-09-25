@@ -40,6 +40,8 @@ type Config struct {
 	Suggest *bool `json:"suggest,omitempty"`
 	// Vim turns on vim keys in the message box (also /vim).
 	Vim bool `json:"vim,omitempty"`
+	// ReduceMotion stills the animations: the office, the spinner.
+	ReduceMotion bool `json:"reduce_motion,omitempty"`
 	// Style is how the agent talks: default, explanatory, learning, terse.
 	Style string `json:"style,omitempty"`
 	// Keys are your shortcuts: key name → command or message, e.g.

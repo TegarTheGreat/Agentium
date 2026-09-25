@@ -590,6 +590,7 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	reduceMotion = cfg.ReduceMotion || os.Getenv("AGENTIUM_REDUCE_MOTION") != ""
 	auth, err := config.LoadAuth()
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
@@ -1021,7 +1022,7 @@ func run(args []string) error {
 		}
 		if msg, ok := expandCommandShell(cwd, input, func(c userCmd, cmds []string) []string {
 			return commandShell(u, c, cmds, cwd, false)
-		}); ok && strings.HasPrefix(input, "/") {
+		}); ok && !interactive && !skillCall(skills, input) {
 			if msg == "" {
 				return fmt.Errorf("%s is an empty command file", strings.Fields(input)[0])
 			}
@@ -1423,9 +1424,11 @@ func run(args []string) error {
 				line += "\n\n" + extra
 			}
 		}
-		if msg, ok := expandCommandShell(cwd, line, func(c userCmd, cmds []string) []string {
+		if skillCall(skills, line) {
+			// a skill: sent as it is, below
+		} else if msg, ok := expandCommandShell(cwd, line, func(c userCmd, cmds []string) []string {
 			return commandShell(u, c, cmds, cwd, true)
-		}); ok && strings.HasPrefix(line, "/") && !skillCall(skills, line) {
+		}); ok {
 			if msg == "" {
 				u.note(strings.Fields(line)[0] + " is an empty command file; nothing sent")
 				continue

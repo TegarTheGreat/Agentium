@@ -15,6 +15,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 - `/review` and `/security-review` look at the branch's commits when nothing is uncommitted.
 
+- `"reduce_motion": true` (or `AGENTIUM_REDUCE_MOTION=1`) stops the animations. The office shows still pictures and the spinner becomes a steady dot.
 - Task lists in replies show as checkboxes: `- [ ]` as ☐ and `- [x]` as a green ☑. Exported pages show them the same way.
 
 ### Fixed

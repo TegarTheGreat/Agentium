@@ -153,6 +153,8 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 
 **Work from your editor.** `/watch` watches the project. A comment you end with `AI!` (a change) or `AI?` (a question) is picked up when you save the file.
 
+**Calmer screen.** `"reduce_motion": true` (or `AGENTIUM_REDUCE_MOTION=1`) stops the animations. The office shows still pictures and the spinner becomes a steady dot.
+
 **Vim keys.** `/vim` (or `"vim": true`) gives the message box normal and insert modes.
 
 **Parallel sessions.** `agentium --worktree NAME` works in a separate git worktree on branch `agentium/NAME`, so two sessions never edit the same files. When you leave, the worktree is removed if nothing changed; otherwise Agentium prints how to merge or remove it.

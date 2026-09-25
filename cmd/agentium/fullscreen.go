@@ -183,6 +183,9 @@ func enterFullscreen(mouse bool) (*fullscreen, error) {
 			case <-t.C:
 				f.mu.Lock()
 				frame := int(time.Since(f.office.start) / officeFrame)
+				if reduceMotion {
+					frame /= 8 // still pictures: look for changes every 2s
+				}
 				if f.dirty || (f.sidebar() && frame != f.lastFrame) {
 					f.lastFrame = frame
 					f.dirty = false
