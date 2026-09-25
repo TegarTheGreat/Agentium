@@ -2,11 +2,11 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.23.0] - 2026-09-25
 
 ### Added
 
-- Drag an image file into the terminal to attach it, as in Claude Code: a full path to an image in your message (quoted, or with `\ ` before spaces) is attached like `@path`.
+- Drag an image file into the terminal to attach it, as in Claude Code. The path the terminal pastes (quoted, backslash-escaped or as a `file://` URL) is attached like `@path`, several at once too. A path outside the project counts only at the start of the message, where a drag puts it, so a path merely mentioned in pasted text is not sent.
 - `/usage` shows the session's cost as well, and `/cost` is another name for it.
 
 ### Fixed
@@ -14,6 +14,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - A rule written as `* * *` or `- - -` is drawn as a rule while a reply streams, not as a bullet.
 - `agentium -p /command` uses the command's `model:` too (your own commands; a repository's cannot ask there).
 - Empty lessons that older versions filed into MEMORY.md are hidden from the model.
+- An image that is a FIFO or device no longer hangs the message. Images are read no further than the size limit.
 
 ## [0.22.0] - 2026-09-25
 
