@@ -219,6 +219,7 @@ Subscription logins are offered only where the provider's terms allow third-part
   "oracle_model": "anthropic/claude-opus-5-5",
   "status_line": "~/bin/agentium-status",
   "suggest": true,
+  "reduce_motion": false,
   "keys": { "ctrl+x": "/diff", "f5": "run the tests" },
   "hooks": {
     "post_edit": ["gofmt -w {path}"],

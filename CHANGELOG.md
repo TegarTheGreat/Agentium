@@ -2,32 +2,30 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.21.0] - 2026-09-25
 
 ### Added
 
-- `/bug` opens a GitHub issue form already filled in with the version, system, terminal and model. Nothing is sent until you submit it.
+- **`Ctrl-B` sends a running command to the background**, as in Claude Code. It keeps running as a job the agent can read or stop, and the turn goes on without waiting for it.
+- **`/security-review`** looks for vulnerabilities an attacker could exploit in the current changes: injection, path traversal, broken access checks, secrets, SSRF, XSS and unsafe deserialization. Each finding has a severity, the place, how it would be exploited and a fix.
+- **Live context in custom commands.** `` !`git diff --stat` `` in a command file is replaced by that command's output. Commands in your home folder run theirs. A repository's commands show what they would run and ask first.
+- Custom commands take `$1` … `$9` for single arguments, as in Claude Code, and `"quoted words"` count as one. An `argument-hint` in the front matter shows beside the name in the `/` menu.
 - Skills and custom commands you add or change while agentium runs work right away, with no restart. A note says which skills came or went.
 - A resumed conversation (`/resume`, `-c`) opens with a short recap: your last message and the start of the reply to it.
-- `Ctrl-B` while a command runs sends it to the background, as in Claude Code. It keeps running as a job the agent can read or stop, and the turn goes on without waiting for it.
-- `Ctrl-Z` suspends agentium to the shell, like any terminal program, and `fg` brings it back with your draft intact. This works on macOS and Linux.
-- The first start after an update says which version you came from and points to `/release-notes`.
-- `/release-notes` shows what changed in your version, formatted in the terminal. `/release-notes 0.19.0` shows another version and `/release-notes latest` the newest.
-- `/security-review` looks for vulnerabilities an attacker could exploit in the current changes: injection, path traversal, broken access checks, secrets, SSRF, XSS and unsafe deserialization. Each finding has a severity, the place, how it would be exploited and a fix.
-- A custom command's `argument-hint` (front matter, as in Claude Code) shows beside its name in the `/` menu.
-- Custom commands take `$1` … `$9` for single arguments, as in Claude Code. `"quoted words"` count as one.
-- Custom commands can pull in live context: `` !`git diff --stat` `` in the file is replaced by the command's output. Commands in your home folder run theirs. A repository's commands show what they would run and ask first.
+- `Ctrl-Z` at the prompt suspends agentium to the shell, like any terminal program, and `fg` brings it back with your draft intact. This works on macOS and Linux.
+- `/release-notes` shows what changed in your version, formatted in the terminal. `/release-notes 0.19.0` shows another version and `/release-notes latest` the newest. The first start after an update says which version you came from.
+- `/bug` opens a GitHub issue form already filled in with the version, system, terminal and model. Nothing is sent until you submit it.
+- Task lists in replies show as checkboxes: `- [ ]` as ☐ and `- [x]` as a green ☑. Exported pages show them the same way.
+- `"reduce_motion": true` (or `AGENTIUM_REDUCE_MOTION=1`) stops the animations. The office shows still pictures and the spinner becomes a steady dot.
 
 ### Changed
 
 - `/review` and `/security-review` look at the branch's commits when nothing is uncommitted.
 
-- `"reduce_motion": true` (or `AGENTIUM_REDUCE_MOTION=1`) stops the animations. The office shows still pictures and the spinner becomes a steady dot.
-- Task lists in replies show as checkboxes: `- [ ]` as ☐ and `- [x]` as a green ☑. Exported pages show them the same way.
-
 ### Fixed
 
 - Typing a whole command name and pressing Enter runs that command. Before, Enter on `/st` could run `/style` when both were listed.
+- Custom command descriptions are cleaned of terminal control characters.
 
 ## [0.20.0] - 2026-09-25
 
