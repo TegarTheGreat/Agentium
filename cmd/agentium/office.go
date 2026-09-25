@@ -101,13 +101,17 @@ func (o *office) setLead(act, detail string) {
 	}
 }
 
-func (o *office) hire(key, title string) {
+// hire seats a sub-agent; a named specialist keeps its name.
+func (o *office) hire(key, title, name string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	look := staffLooks[o.hired%len(staffLooks)]
 	o.hired++
 	now := time.Now()
-	o.staff = append(o.staff, &actor{key: key, name: fmt.Sprintf("Staff %d", o.hired), title: title, act: actThink,
+	if name == "" {
+		name = fmt.Sprintf("Staff %d", o.hired)
+	}
+	o.staff = append(o.staff, &actor{key: key, name: truncate(name, 14), title: title, act: actThink,
 		since: now, born: now, shirt: look.shirt, hair: look.hair})
 }
 

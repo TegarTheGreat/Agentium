@@ -301,7 +301,7 @@ func (u *ui) inOffice(fn func(o *office)) {
 // taskArgs returns a task call's prompt (which names the sub-agent) and
 // its short title.
 func taskArgs(c provider.ToolCall) (prompt, title string) {
-	var m struct{ Prompt, Title string }
+	var m struct{ Prompt, Title, Agent string }
 	_ = jsonUnmarshal(c.Args, &m)
 	title = m.Title
 	if title == "" {
@@ -315,7 +315,9 @@ func (u *ui) officeTool(c provider.ToolCall) {
 	u.inOffice(func(o *office) {
 		if c.Name == "task" {
 			prompt, title := taskArgs(c)
-			o.hire(prompt, title)
+			var m struct{ Agent string }
+			_ = jsonUnmarshal(c.Args, &m)
+			o.hire(prompt, title, m.Agent)
 			o.setLead(actDelegate, title)
 			return
 		}
