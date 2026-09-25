@@ -22,6 +22,10 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - A reply stopped mid-stream (Esc, Ctrl-C, a dropped connection) is charged with an estimate instead of 0 tokens and $0, so `/cost` and `--max-cost` count it.
 - The question before a repository command runs its `!` commands takes `y` or `n` (typing either used to leave a "no match" filter), and Esc cancels the whole command instead of sending it as written.
 - `--json`: `files_changed` lists only edits that succeeded (failed and denied ones were included), the result carries `save_error` when the conversation could not be saved, and a `retry` event says (`discard_text`) when text already streamed will be sent again.
+- One stray Ctrl-C at an empty prompt no longer ends the session: it says to press it again (within 2 s) or type /exit.
+- `@remember` and other memory lines are no longer shown inside the reply (agentium already reports what it remembered).
+- An unknown provider in `-m`/`/model` suggests the closest ones instead of printing every provider id. `/compact` on a short conversation says so plainly.
+- README status no longer names an old version.
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 
 ## [0.24.0] - 2026-09-25

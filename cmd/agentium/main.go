@@ -1063,8 +1063,11 @@ func run(args []string) error {
 	if *maxCost > 0 && !res.Known && !*quiet {
 		fmt.Fprintln(os.Stderr, u.dim("· --max-cost: no price known for this model; the limit cannot be enforced"))
 	}
+	// Memory directives in a reply are for agentium (it reports what it
+	// remembered), not shown as part of the answer.
+	directives := newDirectiveFilter(u.text)
 	a.Events = agent.Events{
-		Text:         u.text,
+		Text:         directives.write,
 		ToolStart:    func(c provider.ToolCall) { u.line("› " + summarizeCall(c)) },
 		SubToolStart: func(c provider.ToolCall) { u.line("  ↳ " + summarizeCall(c)) },
 		ToolDone: func(c provider.ToolCall, out string, err error, d time.Duration) {
@@ -1077,6 +1080,7 @@ func run(args []string) error {
 		},
 		Notice: func(msg string) { u.line("· " + msg) },
 		TurnFinish: func(r provider.Response) {
+			directives.flush()
 			if u.md != nil {
 				u.mu.Lock()
 				u.md.End() // a reply is over: its unclosed fence must not leak
@@ -1620,6 +1624,7 @@ func run(args []string) error {
 	if m := gate.GetMode(); m != policy.Plan {
 		afterPlan = m
 	}
+	var lastInterrupt time.Time
 	for {
 		var line string
 		var err error
@@ -1654,7 +1659,17 @@ func run(args []string) error {
 			}
 			fmt.Fprint(os.Stderr, "\n")
 			line, err = ed.readLine()
-			if errors.Is(err, errInterrupt) || errors.Is(err, errEOF) {
+			if errors.Is(err, errInterrupt) {
+				// One stray Ctrl-C (meant for a command that just ended)
+				// must not end the session: a second one within 2 s does.
+				if time.Since(lastInterrupt) < 2*time.Second {
+					return nil
+				}
+				lastInterrupt = time.Now()
+				u.note("press Ctrl-C again to exit (or /exit)")
+				continue
+			}
+			if errors.Is(err, errEOF) {
 				return nil
 			}
 			if err != nil { // no raw mode available: fall back to plain input

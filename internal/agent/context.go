@@ -289,7 +289,7 @@ func (a *Agent) compact(ctx context.Context) error {
 		}
 	}
 	if split <= 0 {
-		return fmt.Errorf("no safe split point")
+		return fmt.Errorf("the conversation is too short to summarize")
 	}
 	tr := transcript(a.Messages[:split])
 	client, model := a.Client, a.Model

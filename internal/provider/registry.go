@@ -247,7 +247,11 @@ func Resolve(ref string, cfg config.Config, auth config.Auth) (Resolved, error) 
 	if pid == "" {
 		pid, model = guess(ref), ref
 		if pid == "" {
-			return Resolved{}, fmt.Errorf("unknown provider for %q; use provider/model (providers: %s)", ref, strings.Join(IDs(specs), ", "))
+			hint := ""
+			if near := nearIDs(ref, IDs(specs)); len(near) > 0 {
+				hint = "; did you mean " + strings.Join(near, ", ") + "?"
+			}
+			return Resolved{}, fmt.Errorf("unknown provider for %q: use provider/model%s (agentium providers lists them)", ref, hint)
 		}
 	}
 	s := specs[pid]
@@ -340,4 +344,40 @@ func vertexFromEnv() (Client, error) {
 		region = "global"
 	}
 	return &Vertex{Project: project, Region: region}, nil
+}
+
+// nearIDs returns up to 3 ids close to what ref names as its provider (a
+// typo, or a prefix).
+func nearIDs(ref string, ids []string) []string {
+	want, _, _ := strings.Cut(strings.ToLower(ref), "/")
+	var out []string
+	for _, id := range ids {
+		if len(out) == 3 {
+			break
+		}
+		if want != "" && (strings.HasPrefix(id, want) || editDistance(id, want) <= 2) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur := make([]int, len(b)+1)
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
 }
