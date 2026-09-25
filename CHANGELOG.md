@@ -4,6 +4,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-25
+
 ### Added
 
 - **`web_search` tool**, separate from `fetch`: results limited to or excluding sites (`domains`, `exclude`), up to 20 results, and a chain of engines tried in turn: Brave, Tavily, Exa, Serper (Google) or SearXNG when configured, then DuckDuckGo and Bing without a key. Results from key-free pages are kept only when they are about the query (Bing sends unrelated pages to requests it takes for bots). `agentium login brave|tavily|exa|serper` stores a search key like a provider key.
