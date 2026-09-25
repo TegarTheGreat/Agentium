@@ -102,3 +102,53 @@ func TestRestoreOnlyTheTurn(t *testing.T) {
 		t.Error("undo deleted a file the user created after the turn")
 	}
 }
+
+func TestUndoCoversTrackedExcludedAndEditedIgnored(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	w := func(p, c string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o755)
+		os.WriteFile(filepath.Join(root, p), []byte(c), 0o644)
+	}
+	r := func(p string) string {
+		b, err := os.ReadFile(filepath.Join(root, p))
+		if err != nil {
+			return "<missing>"
+		}
+		return string(b)
+	}
+	git := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", root, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	w(".gitignore", "local.db\n")
+	w("build/gen.c", "generated v1") // tracked by the project, though build/ is skipped by snapshots
+	w("local.db", "rows v1")         // ignored by the project
+	git("add", ".gitignore", "build/gen.c")
+	git("commit", "-qm", "init")
+
+	s, err := Open(t.TempDir(), root)
+	if err != nil {
+		t.Skip(err)
+	}
+	id, err := s.Snapshot(context.Background(), "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The turn: the edit tool rewrites the ignored file (and keeps its
+	// original first); a command deletes the tracked generated file.
+	s.KeepOriginal(id, filepath.Join(root, "local.db"))
+	w("local.db", "rows v2")
+	s.KeepOriginal(id, filepath.Join(root, "new.log"))
+	w("new.log", "created")
+	os.Remove(filepath.Join(root, "build/gen.c"))
+
+	if _, err := s.Restore(context.Background(), id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if r("build/gen.c") != "generated v1" || r("local.db") != "rows v1" || r("new.log") != "<missing>" {
+		t.Fatalf("gen.c=%q local.db=%q new.log=%q", r("build/gen.c"), r("local.db"), r("new.log"))
+	}
+}

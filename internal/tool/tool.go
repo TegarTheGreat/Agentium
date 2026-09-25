@@ -40,6 +40,9 @@ type Env struct {
 	// BeforeMutate, if set, runs once per turn before the first edit or
 	// bash call. It is used to checkpoint the workspace for undo.
 	BeforeMutate func()
+	// BeforeWrite, if set, runs before the edit tool writes a file (after
+	// BeforeMutate): undo keeps files the checkpoint would not hold.
+	BeforeWrite func(path string)
 	// CodeCache is where the code index is cached ("" = memory only).
 	CodeCache string
 	// Recall searches long-term memory (search {memory}); nil when off.
@@ -124,7 +127,7 @@ func (e *Env) roots() []string {
 func (e *Env) Child(gate *policy.Gate) *Env {
 	return &Env{Root: e.Root, Gate: gate, Vision: e.Vision, AllowPrivateNet: e.AllowPrivateNet, Sandbox: e.Sandbox,
 		Net: e.Net, PassEnv: e.PassEnv, PostEdit: e.PostEdit, CodeCache: e.CodeCache, Recall: e.Recall, LSP: e.LSP,
-		BeforeMutate: e.mutate, parent: e}
+		BeforeMutate: e.mutate, BeforeWrite: e.BeforeWrite, parent: e}
 }
 
 // ForgetReads tells the tools that earlier read results are no longer

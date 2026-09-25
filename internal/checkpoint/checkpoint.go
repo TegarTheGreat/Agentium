@@ -45,6 +45,7 @@ func Open(base, root string) (*Store, error) {
 		// forgot to ignore them.
 		excl := "node_modules/\n.venv/\nvenv/\n__pycache__/\ntarget/\ndist/\nbuild/\n.next/\n.cache/\n*.log\n"
 		_ = os.MkdirAll(filepath.Join(s.GitDir, "info"), 0o700)
+		_ = os.MkdirAll(filepath.Join(s.GitDir, "agentium-extra"), 0o700)
 		_ = os.WriteFile(filepath.Join(s.GitDir, "info", "exclude"), []byte(excl), 0o600)
 		_ = os.WriteFile(filepath.Join(s.GitDir, "agentium-root"), []byte(root+"\n"), 0o600)
 		for _, kv := range [][2]string{{"core.autocrlf", "false"}, {"core.bare", "false"}, {"gc.auto", "0"}} {
@@ -57,6 +58,93 @@ func Open(base, root string) (*Store, error) {
 func (s *Store) git(ctx context.Context, args ...string) (string, error) {
 	out, err := s.gitRaw(ctx, args...)
 	return strings.TrimSpace(out), err
+}
+
+// projectTracked lists (NUL-separated) the files the project's own git
+// repository tracks under the root, or "" outside one.
+func (s *Store) projectTracked(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", s.Root, "ls-files", "-z", "--cached")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// gitIn is git with stdin.
+func (s *Store) gitIn(ctx context.Context, stdin string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	full := append([]string{"--git-dir=" + s.GitDir, "--work-tree=" + s.Root}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Dir = s.Root
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// KeepOriginal records path's content as it was before the turn of
+// checkpoint id changed it, when the snapshot did not hold it (a file
+// .gitignore excludes): undo of that turn puts it back too.
+func (s *Store) KeepOriginal(id, path string) {
+	rel, err := filepath.Rel(s.Root, path)
+	if err != nil || strings.HasPrefix(rel, "..") || id == "" {
+		return
+	}
+	rel = filepath.ToSlash(rel)
+	ctx := context.Background()
+	defer s.lock()()
+	if _, err := s.git(ctx, "cat-file", "-e", id+":"+rel); err == nil {
+		return // in the snapshot already
+	}
+	if _, err := s.git(ctx, "check-ignore", "-q", "--", rel); err != nil {
+		return // not ignored: the end-of-turn snapshot holds it
+	}
+	extras := s.extras(id)
+	if _, seen := extras[rel]; seen {
+		return // the first version this turn is the one to keep
+	}
+	blob := "-" // did not exist
+	if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() {
+		if st.Size() > 20<<20 {
+			return
+		}
+		b, err := s.git(ctx, "hash-object", "-w", "--", path)
+		if err != nil {
+			return
+		}
+		blob = b
+	}
+	_ = os.MkdirAll(filepath.Dir(s.extrasPath(id)), 0o700)
+	f, err := os.OpenFile(s.extrasPath(id), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, "%s\t%s\n", blob, rel)
+	f.Close()
+}
+
+func (s *Store) extrasPath(id string) string {
+	return filepath.Join(s.GitDir, "agentium-extra", id)
+}
+
+// extras are the files kept for checkpoint id: path → blob ("-": absent).
+func (s *Store) extras(id string) map[string]string {
+	out := map[string]string{}
+	b, err := os.ReadFile(s.extrasPath(id))
+	if err != nil {
+		return out
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if blob, rel, ok := strings.Cut(l, "\t"); ok {
+			out[rel] = blob
+		}
+	}
+	return out
 }
 
 func (s *Store) gitRaw(ctx context.Context, args ...string) (string, error) {
@@ -102,6 +190,11 @@ const maxHistory = 400
 func (s *Store) snapshot(ctx context.Context, msg string) (string, error) {
 	if _, err := s.git(ctx, "add", "-A", "--ignore-errors", "."); err != nil {
 		return "", err
+	}
+	// Files the project's own git tracks are covered even where the
+	// snapshot's exclusions (build/, dist/ …) would skip them.
+	if tracked := s.projectTracked(ctx); len(tracked) > 0 {
+		_, _ = s.gitIn(ctx, tracked, "add", "-f", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul")
 	}
 	if _, err := s.git(ctx, "commit", "-q", "--allow-empty", "--no-verify", "-m", msg); err != nil {
 		return "", err
@@ -207,6 +300,25 @@ func (s *Store) Restore(ctx context.Context, id, after string) ([]string, error)
 			return touched, err
 		}
 		checkout = checkout[n:]
+	}
+	// Files the snapshot did not hold, kept as the turn first changed them.
+	for rel, blob := range s.extras(id) {
+		p := filepath.Join(s.Root, filepath.FromSlash(rel))
+		touched = append(touched, rel)
+		if blob == "-" {
+			_ = os.Remove(p)
+			continue
+		}
+		content, err := s.gitRaw(ctx, "cat-file", "blob", blob)
+		if err != nil {
+			continue
+		}
+		mode := os.FileMode(0o644)
+		if st, err := os.Stat(p); err == nil {
+			mode = st.Mode().Perm()
+		}
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = fsx.WriteFile(p, []byte(content), mode)
 	}
 	return touched, nil
 }

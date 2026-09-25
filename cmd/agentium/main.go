@@ -938,6 +938,11 @@ func run(args []string) error {
 			}
 			sess.AddCheckpoint(id, curPrompt)
 		}
+		a.Env.BeforeWrite = func(path string) {
+			if n := len(sess.Checkpoints); n > 0 {
+				store.KeepOriginal(sess.Checkpoints[n-1].ID, path)
+			}
+		}
 	}
 	a.Cost = func(us provider.Usage) float64 {
 		info, known := res.Info, res.Known

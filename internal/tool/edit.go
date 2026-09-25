@@ -113,6 +113,9 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	} else if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return "", err
 	}
+	if env.BeforeWrite != nil {
+		env.BeforeWrite(p)
+	}
 	if err := writeAtomic(p, []byte(after), perm); err != nil {
 		return "", err
 	}
