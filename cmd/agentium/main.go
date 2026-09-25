@@ -1523,6 +1523,10 @@ func run(args []string) error {
 				u.success("Style: " + cfg.Style + u.paint(cDim, " (saved)"))
 				continue
 			}
+			if line == "/release-notes" || strings.HasPrefix(line, "/release-notes ") {
+				showReleaseNotes(u, strings.TrimPrefix(line, "/release-notes"))
+				continue
+			}
 			if line == "/bug" || strings.HasPrefix(line, "/bug ") {
 				model, _ := curModel.Load().(string)
 				what := strings.TrimSpace(strings.TrimPrefix(line, "/bug"))

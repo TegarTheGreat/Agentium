@@ -50,6 +50,7 @@ var slashCommands = []slashCmd{
 	{"/skills", "list skills", false},
 	{"/agents", "your specialist sub-agents", false},
 	{"/bug", "open a prefilled bug report", true},
+	{"/release-notes", "what changed in this version (or another)", false},
 	{"/config", "show current settings", false},
 	{"/update", "install the latest release", false},
 	{"/doctor", "check the model, key, tools, terminal and MCP servers", false},
