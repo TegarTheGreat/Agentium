@@ -43,6 +43,9 @@ func enterWorktree(cwd, name string) (dir string, done func() string, err error)
 	if r, err := filepath.EvalSymlinks(top); err == nil {
 		top = r
 	}
+	if r, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = r // macOS: /var is /private/var, as git reports it
+	}
 	rel, _ := filepath.Rel(top, cwd)
 	h := sha256.Sum256([]byte(top))
 	path := filepath.Join(config.Home(), "worktrees", filepath.Base(top)+"-"+hex.EncodeToString(h[:4]), name)
