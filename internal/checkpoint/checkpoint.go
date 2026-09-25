@@ -74,6 +74,41 @@ func (s *Store) projectTracked(ctx context.Context) string {
 	return string(out)
 }
 
+// maxFile is the largest file a snapshot holds.
+const maxFile = 20 << 20
+
+// largeChanged lists the new or modified files (relative, slash-separated)
+// larger than maxFile.
+func (s *Store) largeChanged(ctx context.Context) []string {
+	out, err := s.gitRaw(ctx, "ls-files", "-z", "--others", "--modified", "--exclude-standard")
+	if err != nil {
+		return nil
+	}
+	var big []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" && tooBig(filepath.Join(s.Root, filepath.FromSlash(p))) {
+			big = append(big, p)
+		}
+	}
+	return big
+}
+
+// smallOnly drops the files larger than maxFile from a NUL-separated list.
+func (s *Store) smallOnly(list string) string {
+	var b strings.Builder
+	for _, p := range strings.Split(list, "\x00") {
+		if p != "" && !tooBig(filepath.Join(s.Root, filepath.FromSlash(p))) {
+			b.WriteString(p + "\x00")
+		}
+	}
+	return b.String()
+}
+
+func tooBig(path string) bool {
+	st, err := os.Lstat(path)
+	return err == nil && st.Mode().IsRegular() && st.Size() > maxFile
+}
+
 // gitIn is git with stdin.
 func (s *Store) gitIn(ctx context.Context, stdin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -110,7 +145,7 @@ func (s *Store) KeepOriginal(id, path string) {
 	}
 	blob := "-" // did not exist
 	if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() {
-		if st.Size() > 20<<20 {
+		if st.Size() > maxFile {
 			return
 		}
 		b, err := s.git(ctx, "hash-object", "-w", "--", path)
@@ -188,12 +223,18 @@ func (s *Store) Snapshot(ctx context.Context, msg string) (string, error) {
 const maxHistory = 400
 
 func (s *Store) snapshot(ctx context.Context, msg string) (string, error) {
-	if _, err := s.git(ctx, "add", "-A", "--ignore-errors", "."); err != nil {
+	// Files over maxFile (datasets, model weights, disk images) are left
+	// out: copying them on every change would stall turns and fill the disk.
+	spec := "."
+	for _, p := range s.largeChanged(ctx) {
+		spec += "\x00:(exclude,literal)" + p
+	}
+	if _, err := s.gitIn(ctx, spec, "add", "-A", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul"); err != nil {
 		return "", err
 	}
 	// Files the project's own git tracks are covered even where the
 	// snapshot's exclusions (build/, dist/ …) would skip them.
-	if tracked := s.projectTracked(ctx); len(tracked) > 0 {
+	if tracked := s.smallOnly(s.projectTracked(ctx)); len(tracked) > 0 {
 		_, _ = s.gitIn(ctx, tracked, "add", "-f", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul")
 	}
 	if _, err := s.git(ctx, "commit", "-q", "--allow-empty", "--no-verify", "-m", msg); err != nil {

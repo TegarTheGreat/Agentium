@@ -152,3 +152,38 @@ func TestUndoCoversTrackedExcludedAndEditedIgnored(t *testing.T) {
 		t.Fatalf("gen.c=%q local.db=%q new.log=%q", r("build/gen.c"), r("local.db"), r("new.log"))
 	}
 }
+
+func TestLargeFilesSkipped(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	os.WriteFile(filepath.Join(root, "small.txt"), []byte("v1"), 0o644)
+	big := filepath.Join(root, "data.bin")
+	if err := os.WriteFile(big, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(t.TempDir(), root)
+	if err != nil {
+		t.Skip(err)
+	}
+	ctx := context.Background()
+	if _, err := s.Snapshot(ctx, "1"); err != nil {
+		t.Fatal(err)
+	}
+	// data.bin grows past the limit (sparse, so the test stays cheap).
+	os.Truncate(big, maxFile+1)
+	os.WriteFile(filepath.Join(root, "new.bin"), nil, 0o644)
+	os.Truncate(filepath.Join(root, "new.bin"), maxFile+1)
+	os.WriteFile(filepath.Join(root, "small.txt"), []byte("v2"), 0o644)
+	id, err := s.Snapshot(ctx, "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.git(ctx, "cat-file", "-e", id+":new.bin"); err == nil {
+		t.Error("a new file over the limit was snapshotted")
+	}
+	if sz, _ := s.git(ctx, "cat-file", "-s", id+":data.bin"); sz != "1" {
+		t.Errorf("data.bin in snapshot has size %s, want the old 1-byte version", sz)
+	}
+	if b, _ := s.git(ctx, "show", id+":small.txt"); b != "v2" {
+		t.Errorf("small.txt = %q", b)
+	}
+}

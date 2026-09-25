@@ -279,7 +279,7 @@ The model has seven tools, plus any tools from configured MCP servers.
 | **Approval gate** | Risky actions need approval, for example `rm -rf`, force pushes, `sudo`, piping downloads to a shell, credential files and handing work to processes outside the sandbox. Modes: `ask` (every action), `auto` (risky only, default), `yolo` (never), `plan` (read-only). Answering *always* covers the same simple program, or exactly that command, file or host, for the session. |
 | **Credential isolation** | Commands, hooks and MCP servers run without credential-like environment variables (`sandbox.pass_env` allows specific ones). `fetch` refuses URLs that carry secrets, and private or metadata addresses. `.env` files need approval to read. |
 | **Repository guard** | Git settings or hooks that would run programs outside the sandbox are undone and reported. Edits inside `.git` need approval. |
-| **Checkpoints** | Each turn is snapshotted in a shadow repository; your own `.git` is never touched. `/undo` reverts only the files that turn changed, keeping later edits. |
+| **Checkpoints** | Each turn is snapshotted in a shadow repository; your own `.git` is never touched. `/undo` reverts only the files that turn changed, keeping later edits. Files over 20 MB (datasets, model weights) are not snapshotted. |
 | **Write protection** | Existing files are never overwritten blindly, and a file changed on disk since it was read is not overwritten. |
 
 ## Reliability
