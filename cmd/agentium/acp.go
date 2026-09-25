@@ -211,8 +211,10 @@ func (s *acpServer) handle(m rpcMsg) {
 	case "session/set_mode":
 		var p struct{ SessionID, ModeID string }
 		json.Unmarshal(m.Params, &p)
-		if ss := s.session(p.SessionID); ss != nil {
-			ss.gate.SetMode(policy.ParseMode(p.ModeID))
+		if mode, err := policy.CheckMode(p.ModeID); err != nil {
+			s.fail(m.ID, -32602, err.Error())
+		} else if ss := s.session(p.SessionID); ss != nil {
+			ss.gate.SetMode(mode)
 			s.reply(m.ID, map[string]any{})
 			s.notify("session/update", map[string]any{"sessionId": ss.id, "update": map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": string(ss.gate.GetMode())}})
 		} else {

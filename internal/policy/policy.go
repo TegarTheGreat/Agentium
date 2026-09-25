@@ -3,6 +3,7 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,22 @@ const (
 	Yolo Mode = "yolo" // never ask
 	Plan Mode = "plan" // read-only: investigate and propose, never change files
 )
+
+// CheckMode parses a mode name ("" is the default, Auto). A typo is an
+// error, not a silent switch to another mode.
+func CheckMode(s string) (Mode, error) {
+	switch Mode(strings.ToLower(strings.TrimSpace(s))) {
+	case "", Auto:
+		return Auto, nil
+	case Ask:
+		return Ask, nil
+	case Yolo:
+		return Yolo, nil
+	case Plan:
+		return Plan, nil
+	}
+	return "", fmt.Errorf("unknown mode %q (ask, auto, plan or yolo)", s)
+}
 
 // ParseMode maps a string to a Mode, defaulting to Auto.
 func ParseMode(s string) Mode {

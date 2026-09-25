@@ -118,6 +118,19 @@ func cmdLogout(args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: agentium logout <provider>")
 	}
+	if auth, err := config.LoadAuth(); err == nil {
+		if _, ok := auth[args[0]]; !ok {
+			var have []string
+			for id := range auth {
+				have = append(have, id)
+			}
+			sort.Strings(have)
+			if len(have) == 0 {
+				return fmt.Errorf("no credentials stored for %s (none are stored)", args[0])
+			}
+			return fmt.Errorf("no credentials stored for %s (stored: %s)", args[0], strings.Join(have, ", "))
+		}
+	}
 	return config.UpdateAuth(func(a config.Auth) {
 		if a[args[0]].Keychain {
 			_ = config.KeychainDelete(args[0])

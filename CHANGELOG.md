@@ -13,6 +13,10 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - An MCP server that crashes is started again on the next call (up to 3 times a session) instead of staying dead until restart; the error shows the end of its stderr log. A call that was running when it crashed is not repeated, since it may have had effects.
 - A saved conversation in a format this version cannot read (newer, or foreign) is reported and left alone. It used to load as blank messages, get sent to the model, and then replace the file. Sessions now record their format version.
 - Old session lock files are cleaned up with the sessions.
+- `agentium undo --help` undid the last turn: every subcommand now answers `-h`/`--help` with its usage (exit 0) and never runs, and `undo` refuses arguments. `update --help` no longer tries to download version "--help".
+- A mistyped mode (`--mode aks`, `/mode aks`, a bad `"mode"` in the config) is an error; it used to switch silently to auto. `--effort` and `/effort` reject unknown levels too.
+- `agentium logout <provider>` says when nothing is stored for that provider instead of succeeding silently.
+- `--mode` help lists plan.
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 
 ## [0.24.0] - 2026-09-25

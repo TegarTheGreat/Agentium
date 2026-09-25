@@ -64,7 +64,7 @@ Flags:
   -p prompt           one-shot prompt
   -c                  continue the latest session in this directory
   -r, --resume        choose a saved conversation to continue
-  --mode ask|auto|yolo|plan  approvals: every action | risky only (default) | never
+  --mode ask|auto|yolo|plan  approvals: every action | risky only (default) | never | read-only plan
   --yolo              same as --mode yolo
   --plan              plan mode: read-only investigation that ends in a plan (same as --mode plan)
   --no-sandbox        run shell commands unconfined
@@ -97,6 +97,12 @@ func main() {
 			panic(r)
 		}
 	}()
+	if len(os.Args) > 2 {
+		if help, ok := subcommandHelp[os.Args[1]]; ok && wantsHelp(os.Args[2:]) {
+			fmt.Println("usage: agentium " + help)
+			return
+		}
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -115,6 +121,10 @@ func main() {
 			exit(cmdProviders())
 			return
 		case "undo":
+			if len(os.Args) > 2 {
+				exit(errors.New("undo takes no arguments; it reverts the last turn in this directory"))
+				return
+			}
 			exit(cmdUndo())
 			return
 		case "tidy":
@@ -202,6 +212,44 @@ func (j *jsonWriter) emit(v any) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	_ = j.enc.Encode(v)
+}
+
+// subcommandHelp is the usage line of each subcommand, for -h/--help
+// (which must never run the command: undo --help used to undo).
+var subcommandHelp = map[string]string{
+	"login":     "login [--oauth] <provider>    store credentials for a provider",
+	"logout":    "logout <provider>             remove a provider's stored credentials",
+	"providers": "providers                     list providers and credential status",
+	"models":    "models [provider] [--refresh] list models with context size and price",
+	"undo":      "undo                          revert the last turn's changes in this directory",
+	"tidy":      "tidy [--yes]                  review and consolidate long-term memory",
+	"skills":    "skills [list|show|add|remove] manage skills",
+	"mcp":       "mcp [list|login|logout <name>] manage remote MCP servers and their login",
+	"acp":       "acp [-m model]                serve the Agent Client Protocol on stdio",
+	"bench":     "bench [-m model]              measure performance; with -m, run live tasks",
+	"update":    "update [version] [--rollback] update to the latest (or given) release, or go back",
+	"upgrade":   "upgrade [version] [--rollback] same as update",
+}
+
+// checkEffort validates a reasoning level ("" and "default" mean the
+// model's own).
+func checkEffort(s string) (string, error) {
+	switch v := strings.ToLower(strings.TrimSpace(s)); v {
+	case "", "default":
+		return "", nil
+	case "minimal", "low", "medium", "high", "xhigh", "max":
+		return v, nil
+	}
+	return "", fmt.Errorf("unknown effort %q (low, medium, high, xhigh, max or default)", s)
+}
+
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "-help" || a == "help" && len(args) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // jsonExitLine finds a bash result's exit status.
@@ -680,7 +728,16 @@ func run(args []string) error {
 		}()
 	}
 
-	m := policy.ParseMode(firstNonEmpty(*mode, cfg.Mode))
+	if _, err := checkEffort(firstNonEmpty(*effort, cfg.Effort)); err != nil {
+		return fmt.Errorf("--effort: %w", err)
+	}
+	m, err := policy.CheckMode(firstNonEmpty(*mode, cfg.Mode))
+	if err != nil {
+		if *mode == "" {
+			return fmt.Errorf("config: %w", err)
+		}
+		return fmt.Errorf("--mode: %w", err)
+	}
 	if *yolo {
 		m = policy.Yolo
 	}
@@ -1926,8 +1983,10 @@ func slash(line string, e *slashEnv) (exit bool) {
 				return false
 			}
 		}
-		if lvl == "default" {
-			lvl = ""
+		lvl, err := checkEffort(lvl)
+		if err != nil {
+			u.failure(err.Error())
+			return false
 		}
 		a.Reasoning.Effort = lvl
 		u.success("Effort: " + firstNonEmpty(lvl, "model default"))
@@ -1984,7 +2043,12 @@ func slash(line string, e *slashEnv) (exit bool) {
 		return false
 	case "/mode":
 		if len(f) > 1 {
-			gate.SetMode(policy.ParseMode(f[1]))
+			m, err := policy.CheckMode(f[1])
+			if err != nil {
+				u.failure(err.Error() + "; mode stays " + string(gate.GetMode()))
+				return false
+			}
+			gate.SetMode(m)
 		} else if m, err := u.choose("Approval mode", []menuItem{
 			{value: "ask", hint: "confirm every change and command"},
 			{value: "auto", hint: "confirm only risky actions (default)"},

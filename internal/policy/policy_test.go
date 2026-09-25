@@ -309,3 +309,14 @@ func TestPermissionRules(t *testing.T) {
 		t.Fatal("mcp allow")
 	}
 }
+
+func TestCheckModeRejectsTypos(t *testing.T) {
+	for in, want := range map[string]Mode{"": Auto, "ASK": Ask, "plan": Plan, " yolo ": Yolo, "auto": Auto} {
+		if m, err := CheckMode(in); err != nil || m != want {
+			t.Errorf("%q: %v %v", in, m, err)
+		}
+	}
+	if _, err := CheckMode("aks"); err == nil {
+		t.Error("a typo became a mode")
+	}
+}
