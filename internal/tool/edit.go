@@ -56,6 +56,13 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	seen, stale := env.freshness(p)
 	st, statErr := os.Stat(p)
 	exists := statErr == nil
+	if !exists {
+		if lst, err := os.Lstat(p); err == nil && lst.Mode()&os.ModeSymlink != 0 {
+			// A link to nothing: writing would replace the link itself.
+			target, _ := os.Readlink(p)
+			return "", fmt.Errorf("%s is a symlink to %s, which does not exist; edit or create the target instead", filepath.Base(p), target)
+		}
+	}
 	if exists && st.IsDir() {
 		return "", errors.New("path is a directory")
 	}

@@ -1044,3 +1044,15 @@ func TestFuzzyEditBOM(t *testing.T) {
 		t.Fatalf("%v %q", ok, out)
 	}
 }
+
+func TestEditDanglingSymlink(t *testing.T) {
+	e := env(t)
+	os.Symlink(filepath.Join(e.Root, "missing.txt"), filepath.Join(e.Root, "link.txt"))
+	_, err := call(t, editTool, e, `{"path":"link.txt","new":"x"}`)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("%v", err)
+	}
+	if st, _ := os.Lstat(filepath.Join(e.Root, "link.txt")); st.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the link was replaced")
+	}
+}

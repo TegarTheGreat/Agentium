@@ -87,6 +87,9 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			restoreTerm()
+			if p := writeCrashLog(r); p != "" {
+				fmt.Fprintf(os.Stderr, "agentium crashed; details are in %s\n(/bug opens a report: please attach that file)\n", p)
+			}
 			panic(r)
 		}
 	}()
