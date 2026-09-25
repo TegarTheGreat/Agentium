@@ -23,7 +23,7 @@ func recap(u *ui, msgs []provider.Message) {
 	}
 	width := termWidth(os.Stderr) - 6
 	var sb strings.Builder
-	sb.WriteString(u.paint(cDim, "  Where you left off:") + "\n")
+	sb.WriteString("\n" + u.paint(cDim, "  Where you left off:") + "\n")
 	for _, l := range recapLines(last.words, 3, width) {
 		sb.WriteString("  " + u.paint(cInk, "▌") + " " + l + "\n")
 	}
