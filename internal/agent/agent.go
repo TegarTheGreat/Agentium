@@ -214,12 +214,9 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		st.Turns++
 		a.Turns++
 		st.Usage.Add(resp.Usage)
-		a.Usage.Add(resp.Usage)
+		a.Charge(resp.Usage, true) // under the lock sub-agents charge with
 		if in := resp.Usage.Input + resp.Usage.CacheRead + resp.Usage.CacheWrite; in > 0 {
 			a.ctxUsed.Store(int64(in))
-		}
-		if a.Cost != nil {
-			a.Spent += a.Cost(resp.Usage)
 		}
 		if err != nil && contextOverflow(err) && !rs.overflowRetried && ctx.Err() == nil {
 			// The estimate was off (thinking blocks, tool schemas): shrink
