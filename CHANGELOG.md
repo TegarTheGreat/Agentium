@@ -4,6 +4,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-09-25
+
 ### Fixed
 
 - Two agentium processes editing one file at the same moment no longer lose one change silently: the edit re-checks the file under a lock shared by all processes just before writing, and refuses if someone else wrote it.
