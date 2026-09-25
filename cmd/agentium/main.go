@@ -612,7 +612,7 @@ func run(args []string) error {
 	}
 	ref := firstNonEmpty(*modelRef, os.Getenv("AGENTIUM_MODEL"), cfg.Model)
 	res, err := provider.Resolve(ref, cfg, auth)
-	if err != nil && stdinTTY && isTTY(os.Stderr) && !*asJSON && lineEditing {
+	if err != nil && stdinTTY && isTTY(os.Stderr) && !*asJSON && lineEditing && !dumbTerm() {
 		// First run (or a missing key): set up a provider right here.
 		su := &ui{color: os.Getenv("NO_COLOR") == ""}
 		fmt.Fprintln(os.Stderr, "\n"+su.paint(cCyan, "◆")+" "+su.paint(cBold, "Welcome to Agentium"))
@@ -703,8 +703,8 @@ func run(args []string) error {
 			os.Exit(130)
 		}
 	}()
-	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
-	u.live = isTTY(os.Stderr) && !*quiet && os.Getenv("TERM") != "dumb"
+	u := &ui{quiet: *quiet, color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == "" && !dumbTerm()}
+	u.live = isTTY(os.Stderr) && !*quiet && !dumbTerm()
 	if !*asJSON && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" && os.Getenv("AGENTIUM_RAW") == "" {
 		u.wrap = newWrap(os.Stdout, func() int { return termWidth(os.Stdout) - 1 })
 		u.md = newMD(u.wrap)
@@ -1422,7 +1422,7 @@ func run(args []string) error {
 			watch.close()
 		}
 	}()
-	if lineEditing && isTTY(os.Stderr) {
+	if lineEditing && isTTY(os.Stderr) && !dumbTerm() { // a dumb terminal gets plain line input
 		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
 		if u.live {
 			ed.echo = u.userMessage

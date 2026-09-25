@@ -171,7 +171,7 @@ func cmdUpdate(args []string) error {
 
 // runUpdate installs the release and reports whether it replaced the binary.
 func runUpdate(args []string) (bool, error) {
-	u := &ui{color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""}
+	u := &ui{color: isTTY(os.Stderr) && os.Getenv("NO_COLOR") == "" && !dumbTerm()}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	want := ""

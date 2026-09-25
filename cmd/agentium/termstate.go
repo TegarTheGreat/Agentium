@@ -34,7 +34,7 @@ func restoreTerm() {
 	if fs := activeFS(); fs != nil {
 		fs.leave()
 	}
-	if isTTY(os.Stderr) {
+	if isTTY(os.Stderr) && !dumbTerm() {
 		os.Stderr.WriteString("\x1b[?2004l\x1b[?25h")
 	}
 }
@@ -52,3 +52,6 @@ func makeRaw(f *os.File) (func(), error) {
 		setTermRestore(nil)
 	}, nil
 }
+
+// dumbTerm reports TERM=dumb: no colors, cursor movement or other escapes.
+func dumbTerm() bool { return os.Getenv("TERM") == "dumb" }

@@ -95,7 +95,7 @@ func detectLight(bg [3]uint8, ok bool) bool {
 // sets one and reads it back (DECRQSS), which xterm, kitty, WezTerm,
 // foot, Ghostty and others answer, over SSH too.
 func probeTerminal(timeout time.Duration) (bg [3]uint8, ok bool) {
-	if !isTTY(os.Stdin) || !isTTY(os.Stderr) || !lineEditing {
+	if !isTTY(os.Stdin) || !isTTY(os.Stderr) || !lineEditing || dumbTerm() {
 		return bg, false
 	}
 	restore, err := makeRaw(os.Stdin)

@@ -227,7 +227,7 @@ var errCanceled = errors.New("canceled")
 // Typing filters the list; with allowCustom, Enter on a filter that
 // matches nothing returns the typed text.
 func (u *ui) choose(title string, items []menuItem, current string, allowCustom bool) (string, error) {
-	if !isTTY(os.Stdin) || !isTTY(os.Stderr) {
+	if !isTTY(os.Stdin) || !isTTY(os.Stderr) || dumbTerm() {
 		return "", errors.New("not a terminal")
 	}
 	restore, err := makeRaw(os.Stdin)

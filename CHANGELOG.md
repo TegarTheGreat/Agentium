@@ -41,6 +41,7 @@ Found by fault-injection tests (a scripted fake provider), a gap analysis and lo
 
 ### Fixed
 
+- `TERM=dumb` gets plain output: no colors, terminal probes, bracketed paste, cursor escapes or arrow-key menus.
 - Asked which model it runs on, the agent can say (the session's starting model is in its instructions).
 - A dragged image path outside the project is attached only when the message starts with it (with any others dropped alongside), and symlinks are judged by the file they point to. Agentium's own `/security-review` found both.
 - A rule written as `_ _ _` is drawn as a rule while a reply streams.
