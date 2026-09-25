@@ -272,7 +272,11 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	}
 	switch {
 	case timedOut:
-		return s, fmt.Errorf("timed out after %s", timeout)
+		// A command that hangs is usually stuck (a deadlock, a prompt
+		// waiting for input, a server): a longer timeout rarely helps.
+		return s, fmt.Errorf("timed out after %s; it may be stuck (deadlock, waiting for input, a server): "+
+			"rather than a longer timeout, rerun with the tool's own time limit to see where it hangs "+
+			"(go test -timeout 20s, pytest --timeout 20, timeout 30 <cmd>), or run servers with background=true", timeout)
 	case ctx.Err() != nil:
 		return s, ctx.Err()
 	}
