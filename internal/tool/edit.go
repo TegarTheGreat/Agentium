@@ -250,6 +250,7 @@ func fuzzyReplace(s, old, new, mode string) (string, bool) {
 		return "", false
 	}
 	norm := func(l string) string {
+		l = strings.TrimPrefix(l, "\ufeff") // a byte-order mark is not text
 		if mode == "indentation" {
 			return strings.TrimSpace(l)
 		}
@@ -308,8 +309,31 @@ func fuzzyReplace(s, old, new, mode string) (string, bool) {
 			newLines[i] = fileInd + rel + strings.TrimLeft(l, " \t")
 		}
 	}
-	out := append(append(append([]string{}, fileLines[:match]...), newLines...), fileLines[match+len(oldLines):]...)
-	return strings.Join(out, nl), true
+	// Only the matched lines change: the rest keeps its bytes, line endings
+	// included (a file mixing LF and CRLF stays as it was).
+	raw := strings.SplitAfter(s, "\n")
+	before := strings.Join(raw[:match], "")
+	region := raw[match : match+len(oldLines)]
+	after := strings.Join(raw[match+len(oldLines):], "")
+	if strings.HasSuffix(region[0], "\r\n") {
+		nl = "\r\n"
+	} else if strings.HasSuffix(region[0], "\n") {
+		nl = "\n"
+	}
+	end := ""
+	if last := region[len(region)-1]; strings.HasSuffix(last, "\r\n") {
+		end = "\r\n"
+	} else if strings.HasSuffix(last, "\n") {
+		end = "\n"
+	}
+	mid := strings.Join(newLines, nl)
+	if len(newLines) > 0 {
+		mid += end
+	}
+	if match == 0 && strings.HasPrefix(region[0], "\ufeff") && !strings.HasPrefix(mid, "\ufeff") {
+		mid = "\ufeff" + mid // the file keeps its byte-order mark
+	}
+	return before + mid + after, true
 }
 
 // indentUnit guesses the indentation step (in columns) used by lines.

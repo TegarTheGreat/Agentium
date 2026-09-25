@@ -1025,3 +1025,22 @@ func TestEditErrorsPointToTheText(t *testing.T) {
 		t.Fatalf("closest: %v", err)
 	}
 }
+
+func TestFuzzyEditKeepsLineEndings(t *testing.T) {
+	src := "a\nb\r\n    c := 1\nd\n"
+	out, ok := fuzzyReplace(src, "c := 1", "c := 2", "indentation")
+	if !ok || out != "a\nb\r\n    c := 2\nd\n" {
+		t.Fatalf("%v %q", ok, out)
+	}
+	out, ok = fuzzyReplace("x\r\n  y\r\nz", "y", "y1\ny2", "indentation")
+	if !ok || out != "x\r\n  y1\r\n  y2\r\nz" {
+		t.Fatalf("%v %q", ok, out)
+	}
+}
+
+func TestFuzzyEditBOM(t *testing.T) {
+	out, ok := fuzzyReplace("\ufeffpackage a\nx\n", "package a", "package b", "indentation")
+	if !ok || out != "\ufeffpackage b\nx\n" {
+		t.Fatalf("%v %q", ok, out)
+	}
+}
