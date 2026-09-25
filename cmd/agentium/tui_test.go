@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/tegarthegreat/agentium/internal/provider"
+	"github.com/tegarthegreat/agentium/internal/session"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -393,5 +394,24 @@ func TestUserKeys(t *testing.T) {
 	keys, bad := userKeys(map[string]string{"ctrl+x": "/diff", "F5": "run the tests", "ctrl+c": "/exit", "hyper+q": "x", "alt+z": " "})
 	if keys["\x18"] != "/diff" || keys["\x1b[15~"] != "run the tests" || len(keys) != 2 || len(bad) != 2 {
 		t.Fatalf("keys %q bad %q", keys, bad)
+	}
+}
+
+func TestExportHTML(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Text: "<recall>x</recall>\n\nfix <b>it</b>", Typed: "fix <b>it</b>"},
+		{Role: provider.RoleAssistant, Text: "ok", ToolCalls: []provider.ToolCall{{ID: "1", Name: "edit", Args: []byte(`{"path":"a.go","old":"x := 1","new":"x := 2"}`)}}},
+		{Role: provider.RoleTool, ToolCallID: "1", Text: "edited a.go"},
+		{Role: provider.RoleAssistant, Text: "Use `go test` **now**", ToolCalls: []provider.ToolCall{{ID: "2", Name: "bash", Args: []byte(`{"cmd":"go test"}`)}}},
+		{Role: provider.RoleTool, ToolCallID: "2", Text: "ok  pkg 0.1s"},
+	}
+	page := exportHTML(msgs, &session.Session{ID: "s", Cwd: "/tmp/p", Model: "m"})
+	for _, want := range []string{"fix &lt;b&gt;it&lt;/b&gt;", `class="del">- x := 1`, `class="add">+ x := 2`, "ok  pkg 0.1s", "<code>go test</code>", "<b>now</b>"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("missing %q", want)
+		}
+	}
+	if strings.Contains(page, "<recall>") || strings.Contains(page, "<b>it") {
+		t.Fatal("unescaped or context text in the page")
 	}
 }

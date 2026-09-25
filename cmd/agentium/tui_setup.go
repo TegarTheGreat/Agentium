@@ -112,7 +112,7 @@ var helpRows = [][2]string{
 	{"/sessions  /resume", "list and continue saved conversations (number or name)"},
 	{"/rename  /fork", "name this conversation · continue in a copy"},
 	{"/handoff [goal]", "a new conversation that starts with a brief for the goal"},
-	{"/clear  /export", "start a new one · save this one as Markdown"},
+	{"/clear  /export", "start a new one · save this one (.md, or .html for a page to share)"},
 	{"/memory", "what I remember and where · /memory edit"},
 	{"Setup", ""},
 	{"/model  /effort  /mode", "model · reasoning effort · approvals (ask auto yolo plan)"},

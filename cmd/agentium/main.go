@@ -341,7 +341,7 @@ func summarizeCall(c provider.ToolCall) string {
 	}
 	s = strings.ReplaceAll(s, "\n", " ⏎ ")
 	if len(s) > 100 {
-		s = s[:100] + "…"
+		s = strings.ToValidUTF8(s[:100], "") + "…" // not in the middle of a character
 	}
 	return c.Name + " " + s
 }

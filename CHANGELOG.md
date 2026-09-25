@@ -2,6 +2,17 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Share a conversation as a page.** `/export name.html` writes one self-contained page: your messages, the replies with their Markdown, each step with its output folded under it, and edits as line diffs. It follows the reader's light or dark setting and loads nothing from elsewhere.
+
+### Fixed
+
+- `/export` (Markdown) shows what you typed, without recalled memory or other context.
+- A shortened command no longer ends in a broken character.
+
 ## [0.19.0] - 2026-09-25
 
 ### Added

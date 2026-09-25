@@ -230,6 +230,14 @@ func exportSession(u *ui, a *agent.Agent, sess *session.Session, arg string) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(sess.Cwd, path)
 	}
+	if strings.HasSuffix(strings.ToLower(path), ".html") {
+		if err := os.WriteFile(path, []byte(exportHTML(a.Messages, sess)), 0o644); err != nil {
+			u.failure("export: " + err.Error())
+			return
+		}
+		u.success("Saved the conversation as a page: " + shortPath(path) + u.paint(cDim, " · open it in a browser, or send it"))
+		return
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Agentium session %s\n\n_%s · %s_\n", sess.ID, sess.Model, shortPath(sess.Cwd))
 	for _, m := range a.Messages {
@@ -238,7 +246,7 @@ func exportSession(u *ui, a *agent.Agent, sess *session.Session, arg string) {
 			if strings.HasPrefix(m.Text, "[agentium]") {
 				continue
 			}
-			sb.WriteString("\n## You\n\n" + strings.TrimSpace(m.Text) + "\n")
+			sb.WriteString("\n## You\n\n" + strings.TrimSpace(firstNonEmpty(m.Typed, provider.UserWords(m.Text))) + "\n")
 		case provider.RoleAssistant:
 			if t := strings.TrimSpace(m.Text); t != "" {
 				sb.WriteString("\n## Agentium\n\n" + t + "\n")
