@@ -613,7 +613,7 @@ func TestDroppedImages(t *testing.T) {
 	b := filepath.Join(dir, "b.png")
 	os.WriteFile(a, png, 0o644)
 	os.WriteFile(b, png, 0o644)
-	in := "what is this '" + a + "' and " + strings.ReplaceAll(a, " ", `\ `) + " and " + b + " and /nope/x.png"
+	in := "what is this '" + a + "' and " + strings.ReplaceAll(a, " ", `\ `) + " and " + b + ". Also /nope/x.png"
 	imgs, notes := mentionedImages(in, dir, true)
 	if len(imgs) != 2 {
 		t.Fatalf("%d images: %v", len(imgs), notes)

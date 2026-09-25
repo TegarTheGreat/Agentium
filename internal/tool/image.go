@@ -70,6 +70,9 @@ func LoadImage(path string) (provider.Image, error) {
 	if err != nil {
 		return provider.Image{}, err
 	}
+	if !st.Mode().IsRegular() {
+		return provider.Image{}, fmt.Errorf("%s is not a regular file", filepath.Base(path))
+	}
 	if st.Size() > MaxImageBytes {
 		return provider.Image{}, fmt.Errorf("image is %d bytes; the limit is %d (downscale it first)", st.Size(), MaxImageBytes)
 	}
