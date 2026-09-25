@@ -31,7 +31,7 @@ var reservedKeys = map[string]bool{
 	"\x01": true, "\x02": true, "\x03": true, "\x04": true, "\x05": true, "\x06": true, "\x07": true,
 	"\x08": true, "\t": true, "\n": true, "\x0b": true, "\x0c": true, "\r": true, "\x0e": true,
 	"\x0f": true, "\x10": true, "\x12": true, "\x13": true, "\x14": true, "\x15": true, "\x17": true,
-	"\x16": true, "\x19": true, "\x1bp": true, "\x1bt": true, "\x1bb": true, "\x1bf": true, "\x1bd": true,
+	"\x16": true, "\x19": true, "\x1a": true, "\x1bp": true, "\x1bt": true, "\x1bb": true, "\x1bf": true, "\x1bd": true,
 }
 
 // userKeys maps the configured shortcuts to their key sequences, with a

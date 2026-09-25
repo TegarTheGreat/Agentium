@@ -7,6 +7,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 ### Added
 
 - `/bug` opens a GitHub issue form already filled in with the version, system, terminal and model. Nothing is sent until you submit it.
+- `Ctrl-Z` suspends agentium to the shell, like any terminal program, and `fg` brings it back with your draft intact. This works on macOS and Linux.
 - The first start after an update says which version you came from and points to `/release-notes`.
 - `/release-notes` shows what changed in your version, formatted in the terminal. `/release-notes 0.19.0` shows another version and `/release-notes latest` the newest.
 - `/security-review` looks for vulnerabilities an attacker could exploit in the current changes: injection, path traversal, broken access checks, secrets, SSRF, XSS and unsafe deserialization. Each finding has a severity, the place, how it would be exploited and a fix.

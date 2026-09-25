@@ -1324,6 +1324,21 @@ func run(args []string) error {
 					u.note(err.Error())
 				}
 				return true
+			case k == "\x1a": // Ctrl-Z: suspend to the shell; fg comes back
+				f := activeFS()
+				if f != nil {
+					f.suspend()
+				} else {
+					e.out.WriteString("\r\n")
+				}
+				ok := suspendSelf()
+				if f != nil {
+					f.resume()
+				}
+				if !ok {
+					u.note("Ctrl-Z suspends on macOS and Linux")
+				}
+				return true
 			case k == "\x0f": // Ctrl-O: the full output of recent steps
 				u.openViewer()
 				return true

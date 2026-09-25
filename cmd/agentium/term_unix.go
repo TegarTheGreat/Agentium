@@ -113,3 +113,12 @@ func withCookedTerm(f *os.File, fn func() error) error {
 	defer tcset(fd, &cur)
 	return fn()
 }
+
+// suspendSelf stops agentium like a shell job (Ctrl-Z) with the terminal
+// back to normal; it returns once the shell continues it (fg).
+func suspendSelf() bool {
+	_ = withCookedTerm(os.Stdin, func() error {
+		return syscall.Kill(0, syscall.SIGTSTP) // the whole job, as the shell would
+	})
+	return true
+}

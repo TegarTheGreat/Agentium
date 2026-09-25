@@ -102,3 +102,6 @@ func noEcho(*os.File) (func(), error) { return nil, errors.New("not supported") 
 func notifyResize(chan os.Signal) {}
 
 func withCookedTerm(_ *os.File, fn func() error) error { return fn() }
+
+// suspendSelf is not available on Windows.
+func suspendSelf() bool { return false }
