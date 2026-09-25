@@ -1230,7 +1230,8 @@ func run(args []string) error {
 			}
 		}
 		if msg, ok := expandCommandShell(cwd, input, func(c userCmd, cmds []string) []string {
-			return commandShell(u, c, cmds, cwd, false)
+			outs, _ := commandShell(u, c, cmds, cwd, false)
+			return outs
 		}); ok && !interactive && !skillCall(skills, input) {
 			if msg == "" {
 				return fmt.Errorf("%s is an empty command file", strings.Fields(input)[0])
@@ -1715,7 +1716,7 @@ func run(args []string) error {
 				sess.SystemHash = hashString(a.System)
 			}
 		}
-		cmdModel := ""
+		cmdModel, cancelled := "", false
 		if !skillCall(skills, line) {
 			if c, ok := commandModel(cwd, line); ok && allowCommandModel(u, c) {
 				cmdModel = c.model
@@ -1724,8 +1725,12 @@ func run(args []string) error {
 		if skillCall(skills, line) {
 			// a skill: sent as it is, below
 		} else if msg, ok := expandCommandShell(cwd, line, func(c userCmd, cmds []string) []string {
-			return commandShell(u, c, cmds, cwd, true)
-		}); ok {
+			outs, cancel := commandShell(u, c, cmds, cwd, true)
+			cancelled = cancelled || cancel
+			return outs
+		}); cancelled {
+			continue
+		} else if ok {
 			if msg == "" {
 				u.note(strings.Fields(line)[0] + " is an empty command file; nothing sent")
 				continue

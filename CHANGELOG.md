@@ -20,6 +20,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - `/model <id>` with an id not in that provider's model list is used for the session only, not saved as the default (a typo used to break every later session with API errors).
 - API errors show the provider's message instead of its raw JSON, reduce an HTML error page to a short line (a 3 KB page was printed on every retry), and say what to do: check the key for 401/403, list the models for 404.
 - A reply stopped mid-stream (Esc, Ctrl-C, a dropped connection) is charged with an estimate instead of 0 tokens and $0, so `/cost` and `--max-cost` count it.
+- The question before a repository command runs its `!` commands takes `y` or `n` (typing either used to leave a "no match" filter), and Esc cancels the whole command instead of sending it as written.
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 
 ## [0.24.0] - 2026-09-25

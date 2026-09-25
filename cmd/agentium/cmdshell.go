@@ -61,32 +61,40 @@ func runBang(command, dir string) string {
 // commandShell runs a command file's !`commands` for expandCommandShell.
 // Yours run; a repository's run only when you say so, and never without
 // asking (one-shot runs leave them as written).
-func commandShell(u *ui, c userCmd, cmds []string, dir string, interactive bool) []string {
+// cancelled is true when the user dismissed the question (Esc): the whole
+// command is dropped, not sent.
+func commandShell(u *ui, c userCmd, cmds []string, dir string, interactive bool) (outs []string, cancelled bool) {
 	name := sanitize(c.name)
 	if !c.personal {
 		if !interactive {
 			u.note("/" + name + " is the repository's: its !`commands` were not run")
-			return nil
+			return nil, false
 		}
 		for _, cmd := range cmds {
 			if hasFormatChars(cmd) {
 				u.note("/" + name + " has hidden characters in a command; not run")
-				return nil
+				return nil, false
 			}
 		}
 		u.note("/" + name + " (from this repository) wants to run:")
 		for _, cmd := range cmds {
 			u.note("  $ " + sanitize(cmd)) // in full: nothing hides past a cut
 		}
-		pick, err := u.choose("Run them and include their output?", []menuItem{
-			{value: "run", label: "Run them"},
-			{value: "no", label: "Don't run; send the command as written"},
+		// Labels start with yes / no so typing y or n picks them; Esc
+		// drops the whole command.
+		pick, err := u.choose("Run them and include their output? (Esc cancels the command)", []menuItem{
+			{value: "run", label: "yes, run them"},
+			{value: "no", label: "no, send the command without running them"},
 		}, "", false)
-		if err != nil || pick != "run" {
-			return nil
+		if err != nil {
+			u.note("/" + name + " cancelled")
+			return nil, true
+		}
+		if pick != "run" {
+			return nil, false
 		}
 	}
-	outs := make([]string, len(cmds))
+	outs = make([]string, len(cmds))
 	start := time.Now()
 	for i, cmd := range cmds {
 		if time.Since(start) > 2*time.Minute {
@@ -96,7 +104,7 @@ func commandShell(u *ui, c userCmd, cmds []string, dir string, interactive bool)
 		u.note("$ " + sanitize(oneLine(cmd, 200)))
 		outs[i] = runBang(cmd, dir)
 	}
-	return outs
+	return outs, false
 }
 
 // hasFormatChars reports invisible format characters (bidi overrides and
