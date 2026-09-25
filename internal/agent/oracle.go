@@ -65,11 +65,18 @@ func (a *Agent) OracleTool() tool.Tool {
 						continue
 					}
 				}
-				b, err := os.ReadFile(p)
+				var b []byte
+				st, err := os.Stat(p)
+				if err == nil && !st.Mode().IsRegular() {
+					err = errors.New("not a regular file")
+				}
+				if err == nil && st.Size() <= oracleFileMax {
+					b, err = os.ReadFile(p)
+				}
 				switch {
 				case err != nil:
 					skipped = append(skipped, f+" ("+err.Error()+")")
-				case len(b) > oracleFileMax || sb.Len()+len(b) > oracleFilesMax:
+				case st.Size() > oracleFileMax || len(b) > oracleFileMax || sb.Len()+len(b) > oracleFilesMax:
 					skipped = append(skipped, f+" (too big; quote the relevant part in the question)")
 				default:
 					fmt.Fprintf(&sb, "<file path=%q>\n%s\n</file>\n", f, strings.ReplaceAll(string(b), "</file>", "<\\/file>"))
