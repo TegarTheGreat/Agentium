@@ -279,6 +279,17 @@ func (a *Agent) compact(ctx context.Context) error {
 	summary = strings.TrimSpace(strings.Join(kept2, "\n"))
 	tail := append([]provider.Message(nil), a.Messages[split:]...)
 	text := "[Summary of the earlier conversation]\n" + summary
+	// The user's own words survive verbatim: a paraphrase loses details.
+	var asks []string
+	for _, m := range a.Messages[:split] {
+		if m.Role == provider.RoleUser && m.Text != "" && !strings.HasPrefix(m.Text, "[agentium]") && !strings.HasPrefix(m.Text, "[Summary of the earlier") {
+			asks = append(asks, clip(strings.TrimSpace(m.Text), 2000))
+		}
+	}
+	if n := len(asks); n > 0 {
+		asks = asks[max(n-2, 0):]
+		text += "\n\n[The user's latest requests before this point, verbatim]\n" + strings.Join(asks, "\n---\n")
+	}
 	if st := a.Ledger.Render(); st != "" {
 		text += "\n\n" + st
 	}

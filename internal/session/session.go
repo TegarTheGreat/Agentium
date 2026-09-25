@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/config"
@@ -17,6 +18,7 @@ import (
 // Session is one saved conversation.
 type Session struct {
 	ID       string             `json:"id"`
+	Title    string             `json:"title,omitempty"` // set with /rename
 	Cwd      string             `json:"cwd"`
 	Model    string             `json:"model"`
 	Updated  time.Time          `json:"updated"`
@@ -178,4 +180,21 @@ func Prune(keep int, maxAge time.Duration) {
 			_ = os.Remove(p)
 		}
 	}
+}
+
+// Label is the session's title, or its first request.
+func (s *Session) Label() string {
+	if s.Title != "" {
+		return s.Title
+	}
+	for _, m := range s.Messages {
+		if m.Role == provider.RoleUser && m.Text != "" {
+			t := m.Text
+			if j := strings.Index(t, "</recall>"); j >= 0 {
+				t = strings.TrimSpace(t[j+9:])
+			}
+			return strings.Join(strings.Fields(t), " ")
+		}
+	}
+	return "(empty)"
 }

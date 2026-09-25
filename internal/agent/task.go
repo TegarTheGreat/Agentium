@@ -79,6 +79,16 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 			}
 		}},
 	}
+	if m := a.Sub; m != nil {
+		// A separate (usually cheaper) model: its own system prompt cache.
+		sub.Client, sub.Model, sub.Cost = m.Client, m.Model, m.Cost
+		sub.Fast, sub.FastModel = nil, ""
+		sub.Reasoning = provider.Reasoning{}
+		if m.ContextTokens > 0 {
+			sub.ContextTokens = m.ContextTokens
+		}
+		sub.MaxOutput = m.MaxOutput
+	}
 	if a.MaxCost > 0 {
 		a.mu.Lock()
 		sub.MaxCost = a.MaxCost - a.Spent

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -162,5 +164,32 @@ func TestEditorAcceptClampsStaleStart(t *testing.T) {
 	e.accept() // a hook replaced the text under an open popup
 	if string(e.buf) != "hi@file.go " {
 		t.Fatalf("got %q", string(e.buf))
+	}
+}
+
+func TestCustomCommands(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("AGENTIUM_HOME", home)
+	t.Setenv("HOME", t.TempDir())
+	os.MkdirAll(filepath.Join(cwd, ".claude", "commands"), 0o755)
+	os.WriteFile(filepath.Join(cwd, ".claude", "commands", "fix-issue.md"),
+		[]byte("---\ndescription: fix a GitHub issue\n---\nFix issue #$ARGUMENTS and add a test.\n"), 0o644)
+	os.MkdirAll(filepath.Join(home, "commands"), 0o755)
+	os.WriteFile(filepath.Join(home, "commands", "standup.md"), []byte("Summarize yesterday's commits.\n"), 0o644)
+	cmds := userCommands(cwd)
+	if len(cmds) != 2 || cmds[0].name != "fix-issue" || cmds[0].desc != "fix a GitHub issue" {
+		t.Fatalf("commands: %+v", cmds)
+	}
+	if msg, ok := expandCommand(cwd, "/fix-issue 42"); !ok || msg != "Fix issue #42 and add a test.\n" {
+		t.Fatalf("expand: %q %v", msg, ok)
+	}
+	if msg, ok := expandCommand(cwd, "/standup quickly"); !ok || msg != "Summarize yesterday's commits.\n\nquickly" {
+		t.Fatalf("expand: %q %v", msg, ok)
+	}
+	if msg, ok := expandCommand(cwd, "/review"); !ok || !strings.Contains(msg, "git diff") {
+		t.Fatalf("review: %q", msg)
+	}
+	if _, ok := expandCommand(cwd, "/model"); ok {
+		t.Fatal("built-in commands are not prompt commands")
 	}
 }

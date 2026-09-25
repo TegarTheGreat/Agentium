@@ -79,6 +79,9 @@ type Agent struct {
 	// Note is prepended to the next user input once (e.g. "the user undid
 	// your last changes"), so the model's picture of the files stays true.
 	Note string
+	// Sub, if set, is the model sub-agents use (config "subagent_model"),
+	// with its pricing and context size.
+	Sub *SubModel
 	// Steer, if set, returns messages the user sent while the agent was
 	// working; they are given to the model after the current step.
 	Steer func() []string
@@ -90,6 +93,15 @@ type Agent struct {
 
 	depth int        // 0 for the main agent, 1 for sub-agents
 	mu    sync.Mutex // guards Usage/Spent updates from parallel sub-agents
+}
+
+// SubModel is a model for sub-agents.
+type SubModel struct {
+	Client        provider.Client
+	Model         string
+	Cost          func(provider.Usage) float64
+	ContextTokens int
+	MaxOutput     int
 }
 
 // Stats summarizes one Run.

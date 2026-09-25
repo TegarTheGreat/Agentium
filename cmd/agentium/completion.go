@@ -40,12 +40,15 @@ var slashCommands = []slashCmd{
 	{"/memory", "what I remember, and where (edit to change it)", false},
 	{"/export", "save the conversation as Markdown", false},
 	{"/sessions", "list saved conversations", false},
-	{"/resume", "continue a saved conversation", true},
+	{"/resume", "continue a saved conversation (picker, number or name)", false},
+	{"/rename", "name this conversation", true},
 	{"/clear", "start a new conversation", false},
 	{"/usage", "tokens used in this session", false},
 	{"/skills", "list skills", false},
 	{"/config", "show current settings", false},
 	{"/update", "install the latest release", false},
+	{"/init", "study the repo and write AGENTS.md", false},
+	{"/review", "review the current changes for bugs", false},
 	{"/help", "commands and keys (also ?)", false},
 	{"/exit", "quit (also ctrl+d)", false},
 }
@@ -53,6 +56,7 @@ var slashCommands = []slashCmd{
 type completer struct {
 	root   string
 	skills []skill.Skill
+	cmds   []userCmd
 
 	mu     sync.Mutex
 	files  []string
@@ -82,6 +86,12 @@ func (c *completer) commands(prefix string) []suggestion {
 				insert += " "
 			}
 			out = append(out, suggestion{insert: insert, label: cmd.name, hint: cmd.hint, run: !cmd.args})
+		}
+	}
+	for _, uc := range c.cmds {
+		name := "/" + uc.name
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, suggestion{insert: name + " ", label: name, hint: "command · " + firstLine(uc.desc)})
 		}
 	}
 	for _, sk := range c.skills {

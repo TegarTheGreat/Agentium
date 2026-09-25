@@ -698,6 +698,21 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("· memory: %d stale note(s) hidden (cited files gone or unconfirmed for months); `agentium tidy` reviews them", len(stale))))
 		}
 	}
+	if cfg.SubagentModel != "" {
+		if sr, err := provider.Resolve(cfg.SubagentModel, cfg, auth); err == nil {
+			info, known := sr.Info, sr.Known
+			a.Sub = &agent.SubModel{Client: sr.Client, Model: sr.Model, MaxOutput: info.Output,
+				ContextTokens: firstPositive(info.Context, provider.ContextWindow(sr.Model)),
+				Cost: func(us provider.Usage) float64 {
+					if !known {
+						return 0
+					}
+					return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
+				}}
+		} else if !*quiet {
+			fmt.Fprintln(os.Stderr, u.dim("· subagent_model ignored: "+firstLine(err.Error())))
+		}
+	}
 	if cfg.FastModel != "" {
 		if fr, err := provider.Resolve(cfg.FastModel, cfg, auth); err == nil {
 			a.Fast, a.FastModel = fr.Client, fr.Model
@@ -853,6 +868,9 @@ func run(args []string) error {
 			for _, n := range notes {
 				u.line("· " + n)
 			}
+		}
+		if msg, ok := expandCommand(cwd, input); ok && strings.HasPrefix(input, "/") {
+			send = msg // agentium -p /review, and the like
 		}
 		if msg, ok, err := skill.Invoke(skills, input); ok {
 			if err != nil {
@@ -1029,7 +1047,7 @@ func run(args []string) error {
 			ed.echo = u.userMessage
 			ed.placeholder = "Message Agentium…  / commands · @ files"
 		}
-		ed.complete = (&completer{root: cwd, skills: skills}).complete
+		ed.complete = (&completer{root: cwd, skills: skills, cmds: userCommands(cwd)}).complete
 		var lastEsc time.Time
 		ed.hook = func(e *editor, k string) bool {
 			submit := func(cmd string) bool {
@@ -1152,6 +1170,9 @@ func run(args []string) error {
 			if extra != "" {
 				line += "\n\n" + extra
 			}
+		}
+		if msg, ok := expandCommand(cwd, line); ok && strings.HasPrefix(line, "/") && !skillCall(skills, line) {
+			line = msg // /init, /review or a custom command: a message
 		}
 		if strings.HasPrefix(line, "/") && !skillCall(skills, line) {
 			if line == "/skills" {
@@ -1352,39 +1373,61 @@ func slash(line string, e *slashEnv) (exit bool) {
 		*sess = *session.New(sess.Cwd, sess.Model)
 		fmt.Fprintln(os.Stderr, "· new conversation")
 	case "/sessions":
-		list, _ := session.ForCwd(sess.Cwd, 10)
+		list, _ := session.ForCwd(sess.Cwd, 20)
 		if len(list) == 0 {
 			fmt.Fprintln(os.Stderr, "· no saved sessions here")
 		}
 		for i, ss := range list {
-			first := ""
-			for _, m := range ss.Messages {
-				if m.Role == provider.RoleUser && m.Text != "" {
-					first = m.Text
-					if j := strings.Index(first, "</recall>"); j >= 0 {
-						first = strings.TrimSpace(first[j+9:])
-					}
-					break
-				}
-			}
 			mark := " "
 			if ss.ID == sess.ID {
 				mark = "*"
 			}
-			fmt.Fprintf(os.Stderr, "%s%2d. %s · %d msgs · %s\n", mark, i+1, ss.Updated.Format("2006-01-02 15:04"), len(ss.Messages), oneLine(first, 60))
+			fmt.Fprintf(os.Stderr, "%s%2d. %s · %d msgs · %s\n", mark, i+1, ss.Updated.Format("2006-01-02 15:04"), len(ss.Messages), oneLine(ss.Label(), 60))
 		}
-		fmt.Fprintln(os.Stderr, "· /resume <n> to continue one")
+		fmt.Fprintln(os.Stderr, "· /resume opens a picker · /resume <n or name> · /rename <name> names this one")
+	case "/rename":
+		name := strings.TrimSpace(strings.TrimPrefix(line, "/rename"))
+		if name == "" {
+			u.note("usage: /rename <name>")
+			return false
+		}
+		sess.Title = name
+		_ = sess.Save()
+		u.success("This session is now “" + name + "”" + u.paint(cDim, " (/resume "+name+" continues it later)"))
 	case "/resume":
-		list, _ := session.ForCwd(sess.Cwd, 10)
-		n := 1
-		if len(f) > 1 {
-			fmt.Sscanf(f[1], "%d", &n)
+		list, _ := session.ForCwd(sess.Cwd, 20)
+		if len(list) == 0 {
+			fmt.Fprintln(os.Stderr, "· no saved sessions here")
+			return false
 		}
-		if n < 1 || n > len(list) {
+		arg := strings.TrimSpace(strings.TrimPrefix(line, "/resume"))
+		var chosen *session.Session
+		if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= len(list) {
+			chosen = list[n-1]
+		} else if arg != "" {
+			for _, ss := range list {
+				if strings.Contains(strings.ToLower(ss.Label()), strings.ToLower(arg)) {
+					chosen = ss
+					break
+				}
+			}
+		} else {
+			var items []menuItem
+			for i, ss := range list {
+				items = append(items, menuItem{value: strconv.Itoa(i), label: oneLine(ss.Label(), 50),
+					hint: fmt.Sprintf("%s · %d msgs", ss.Updated.Format("Jan 2 15:04"), len(ss.Messages))})
+			}
+			pick, err := u.choose("Resume a conversation", items, "", false)
+			if err != nil {
+				return false
+			}
+			i, _ := strconv.Atoi(pick)
+			chosen = list[i]
+		}
+		if chosen == nil {
 			fmt.Fprintln(os.Stderr, "· no such session (see /sessions)")
 			return false
 		}
-		chosen := list[n-1]
 		hash := sess.SystemHash
 		*sess = *chosen
 		a.Messages = chosen.Messages
@@ -1395,7 +1438,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 			}
 		}
 		sess.SystemHash = hash
-		fmt.Fprintf(os.Stderr, "· resumed session from %s (%d messages)\n", chosen.Updated.Format("2006-01-02 15:04"), len(chosen.Messages))
+		fmt.Fprintf(os.Stderr, "· resumed “%s” from %s (%d messages)\n", oneLine(chosen.Label(), 50), chosen.Updated.Format("2006-01-02 15:04"), len(chosen.Messages))
 	case "/undo":
 		note, err := undoLast(store, sess)
 		if err != nil {

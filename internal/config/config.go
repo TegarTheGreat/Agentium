@@ -27,12 +27,14 @@ type ProviderConf struct {
 type Config struct {
 	Model     string `json:"model,omitempty"`      // "provider/model"
 	FastModel string `json:"fast_model,omitempty"` // reserved for background work
-	Mode      string `json:"mode,omitempty"`       // ask | auto | yolo
-	UI        string `json:"ui,omitempty"`         // fullscreen (default) | classic
-	Theme     string `json:"theme,omitempty"`      // auto (default) | dark | light
-	Mouse     *bool  `json:"mouse,omitempty"`      // full screen: wheel scrolling (default); false keeps native selection
-	MaxTokens int    `json:"max_tokens,omitempty"`
-	MaxTurns  int    `json:"max_turns,omitempty"`
+	// SubagentModel runs sub-agents (the task tool) on another model.
+	SubagentModel string `json:"subagent_model,omitempty"`
+	Mode          string `json:"mode,omitempty"`  // ask | auto | yolo
+	UI            string `json:"ui,omitempty"`    // fullscreen (default) | classic
+	Theme         string `json:"theme,omitempty"` // auto (default) | dark | light
+	Mouse         *bool  `json:"mouse,omitempty"` // full screen: wheel scrolling (default); false keeps native selection
+	MaxTokens     int    `json:"max_tokens,omitempty"`
+	MaxTurns      int    `json:"max_turns,omitempty"`
 	// FetchPrivate lets the fetch tool reach localhost/private networks.
 	FetchPrivate bool `json:"fetch_private,omitempty"`
 	// Checkpoints snapshot the workspace before each changing turn so it

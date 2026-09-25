@@ -33,17 +33,17 @@ func selfPrompt(cwd string) string {
 	return fmt.Sprintf(`
 
 About you (Agentium %s; for questions about yourself — never guess, check these files or the docs at https://github.com/TegarTheGreat/Agentium):
-- Settings %s (model, mode, theme, ui, mcp servers, providers, hooks, fallback); API keys in the OS keychain or %s (never read or print it)
+- Settings %s (model, subagent_model, mode, theme, ui, mcp servers, providers, hooks, fallback); API keys in the OS keychain or %s (never read or print it)
 - Your instructions for every project: %s; for this project: AGENTS.md (or CLAUDE.md, GEMINI.md) in the repository, from its root down to the current folder
 - Memory: user preferences %s (every project); this project (%s): %s (MEMORY.md, decisions, journal). Projects do not share notes.
 - Skills (a folder with SKILL.md): %s
 - Sessions %s; checkpoints for /undo %s
 - The user drives you with /commands (/help lists them: /model /login /mode /undo /rewind /diff /context /compact /memory /btw /skills …), @file mentions, !shell commands, and shell subcommands (agentium help, login <provider>, models, skills, mcp, update, tidy).
 - MCP servers: in the settings, "mcp": {"<name>": {"command": "npx", "args": ["-y", "pkg"], "env": {"TOKEN": "$TOKEN"}}} or {"<name>": {"url": "https://host/mcp"}}; remote OAuth with "agentium mcp login <name>"; loaded when a session starts. There is no /mcp command.
-- Skills: "agentium skills add <dir | git URL | owner/repo>", or create <skills dir>/<name>/SKILL.md; /<name> runs one. Hooks: "hooks": {"post_edit": ["gofmt -w {path}"], "stop": ["…"]}. Providers: "agentium login <provider>" or /login; custom ones under "providers".`,
+- Skills: "agentium skills add <dir | git URL | owner/repo>", or create <skills dir>/<name>/SKILL.md; /<name> runs one. Custom commands: .agentium/commands/<name>.md (or .claude/commands, in the project or %s) whose text is sent as the message, $ARGUMENTS replaced; /init writes AGENTS.md, /review reviews the diff. Hooks: "hooks": {"post_edit": ["gofmt -w {path}"], "stop": ["…"]}. Providers: "agentium login <provider>" or /login; custom ones under "providers".`,
 		version, short(filepath.Join(home, "config.json")), short(filepath.Join(home, "auth.json")),
 		short(filepath.Join(home, "AGENTS.md")), short(filepath.Join(home, "USER.md")), short(root), short(proj),
-		strings.Join(skillDirs, ", "), short(filepath.Join(home, "sessions")), short(filepath.Join(home, "checkpoints")))
+		strings.Join(skillDirs, ", "), short(filepath.Join(home, "sessions")), short(filepath.Join(home, "checkpoints")), short(filepath.Join(home, "commands")))
 }
 
 // showMemory prints what Agentium remembers and where it is kept;
