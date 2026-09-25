@@ -968,6 +968,10 @@ func run(args []string) error {
 				u.line(fmt.Sprintf("· recalled %d item%s from memory", n, plural(n)))
 			}
 		}
+		if block, names := mentionedFiles(input, cwd, func(p string) bool { ok, _ := gate.Read(p); return ok }); block != "" {
+			send = block + "\n" + send
+			u.line("· included " + strings.Join(names, ", "))
+		}
 		if len(userPromptHooks) > 0 {
 			added, err := promptHooks(userPromptHooks, cwd, input, func(s string) { u.line("· " + firstLine(s)) })
 			if err != nil {

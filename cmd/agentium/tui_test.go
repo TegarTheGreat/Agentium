@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/tegarthegreat/agentium/internal/provider"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -298,5 +299,27 @@ func TestTruncateColonColors(t *testing.T) {
 	s := truncate("\x1b[38:2::255:0:0mredredredred\x1b[0m", 5)
 	if strings.Count(s, "\x1b[38:2::255:0:0m") != 1 || strings.Contains(stripANSI(s), "38") {
 		t.Fatalf("got %q", s)
+	}
+}
+
+func TestMentionedFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.go"), []byte("one\ntwo\nthree\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "bin.dat"), []byte("x\x00y"), 0o644)
+	os.WriteFile(filepath.Join(dir, "pic.png"), []byte("png"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
+	os.WriteFile(filepath.Join(dir, "pkg", "b.go"), nil, 0o644)
+	block, names := mentionedFiles("look at @a.go:2-3, @pkg/ and @bin.dat @pic.png @missing.go me@example.com", dir, nil)
+	if strings.Join(names, " ") != "a.go:2-3 pkg/" {
+		t.Fatalf("names %q", names)
+	}
+	if !strings.Contains(block, "2\ttwo\n3\tthree\n") || strings.Contains(block, "1\tone") || !strings.Contains(block, "b.go") {
+		t.Fatalf("block %q", block)
+	}
+	if b, _ := mentionedFiles("@a.go", dir, func(string) bool { return false }); b != "" {
+		t.Fatal("a refused read is not included")
+	}
+	if got := provider.UserWords(block + "\nfix it"); got != "fix it" {
+		t.Fatalf("user words %q", got)
 	}
 }
