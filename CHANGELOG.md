@@ -4,6 +4,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-25
+
 ### Added
 
 - **Permission rules**, as in Claude Code: `"permissions": {"allow": [...], "deny": [...]}` in the config, or `--allow` / `--deny` on the command line, with rules like `bash(go test*)`, `edit(src/**)`, `read(secrets/**)` and `mcp(github__*)`. A deny wins in every mode, yolo included. Every part of a command line must be allowed, and a command hiding another in `$(…)` is never auto-allowed.
