@@ -628,3 +628,35 @@ func oracleModel(cfg config.Config, auth config.Auth) (*agent.Oracle, error) {
 			return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
 		}}, nil
 }
+
+// filesChanged lists the files a run changed, relative to the project:
+// from the checkpoint taken before its first change (so files a command
+// wrote count too), else from its successful edits.
+func filesChanged(root string, edited []string, store *checkpoint.Store, sess *session.Session, cpBefore int) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(p string) {
+		if filepath.IsAbs(p) {
+			if rel, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(rel, "..") {
+				p = rel
+			}
+		}
+		p = filepath.ToSlash(filepath.Clean(p))
+		if p != "." && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if store != nil && len(sess.Checkpoints) > cpBefore {
+		if files, err := store.Changed(context.Background(), sess.Checkpoints[cpBefore].ID); err == nil {
+			for _, f := range files {
+				add(f)
+			}
+		}
+	}
+	for _, f := range edited {
+		add(f)
+	}
+	sort.Strings(out)
+	return out
+}

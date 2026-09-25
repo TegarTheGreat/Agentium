@@ -170,6 +170,7 @@ type runState struct {
 	editedCode  bool
 	checkFailed bool // the latest build/test/lint run failed
 	reminded    int  // verification reminders given this turn
+	remindedAt  int  // tool calls made when the last one was given
 	todoNudged  bool
 	task        string
 	fileEdits   map[string]int
@@ -345,17 +346,22 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		if len(resp.ToolCalls) > 0 {
 			continue
 		}
-		if a.Verify && (rs.editedCode || rs.checkFailed) && rs.reminded < 2 && !noChecksWanted.MatchString(rs.task) {
+		// A reminder again only when the model did something since the
+		// last one (else it has already said why it stops), and only once
+		// for a failing check alone (it may be honestly unfixable).
+		remindAgain := rs.reminded == 0 || rs.reminded < 2 && rs.editedCode && st.ToolCalls > rs.remindedAt
+		if a.Verify && (rs.editedCode || rs.checkFailed) && remindAgain && !noChecksWanted.MatchString(rs.task) {
 			// The verification gate: an unverified or failing change is not
 			// done. The task is quoted back, since it may be far above.
 			rs.reminded++
+			rs.remindedAt = st.ToolCalls
 			why := "You changed code but have not run a build, test or lint since."
 			if !rs.editedCode {
 				why = "Your latest build/test/lint run failed."
 			}
 			a.notice("asking the model to verify its change")
 			a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser,
-				Text: "[agentium] " + why + " Before finishing: re-read the task — «" + clipTask(rs.task) + "» — run the most relevant check, and make sure every requirement is met (do not weaken or delete tests to pass). If something cannot be verified or fixed, say so in one line."})
+				Text: "[agentium] " + why + " Before finishing: re-read the task — «" + clipTask(rs.task) + "» — run the most relevant check, and make sure every requirement is met (do not weaken or delete tests to pass). If something cannot be verified or fixed, say what and why. Your next reply is the final answer the user reads: keep it complete, not just a note about this check."})
 			continue
 		}
 		if open := openTodos(a.Ledger.Todos()); len(open) > 0 && !rs.todoNudged && a.depth == 0 {

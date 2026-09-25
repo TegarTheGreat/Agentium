@@ -42,3 +42,13 @@ error propagation. See <a href="/pkg/context">context</a> and <a href="https://g
 		}
 	}
 }
+
+// Cells and rows left unclosed (legal HTML) must not swallow the page.
+func TestHTMLTableUnclosed(t *testing.T) {
+	got := htmlToMarkdown(`<main><p>Intro text that is long enough to count as the main content of this page, more than two hundred characters in all, so the main region is chosen and used for the conversion here.</p><table><tr><th>a<th>b<tr><td>1<td>2</table><h2>util.parseArgs</h2><p>After the table.</p></main>`, "https://x/")
+	for _, want := range []string{"| a | b |", "| 1 | 2 |", "## util.parseArgs", "After the table."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

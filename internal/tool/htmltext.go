@@ -324,14 +324,14 @@ func (c *mdConv) token(t htmlTok) {
 			c.raw(strings.Repeat("  ", depth) + marker)
 		}
 	case "table":
+		// Rows and cells may be left unclosed (HTML allows it): the table's
+		// end closes them, or the rest of the page would vanish into a cell.
+		c.endRow()
 		c.block()
 		c.rows = 0
 	case "tr":
-		if t.close {
-			c.endRow()
-		} else {
-			c.row = nil
-		}
+		c.endRow() // also ends a previous row left open
+		c.row = nil
 	case "td", "th":
 		if t.close {
 			c.endCell()

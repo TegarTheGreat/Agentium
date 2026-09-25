@@ -1413,6 +1413,7 @@ func run(args []string) error {
 			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds(), "discard_text": partial.Swap(false)})
 		}
 		t0 := time.Now()
+		cpBefore := len(sess.Checkpoints) // the run's changes are those since its first checkpoint
 		var once sync.Once
 		emitResult := func(err error, final string) {
 			once.Do(func() {
@@ -1421,7 +1422,7 @@ func run(args []string) error {
 				}
 				us, spent := a.Totals()
 				result := map[string]any{"type": "result", "ok": err == nil, "text": final, "turns": a.Turns,
-					"usage": us, "cost_usd": spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": a.Ledger.TurnEdited()}
+					"usage": us, "cost_usd": spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": filesChanged(cwd, a.Ledger.TurnEdited(), store, sess, cpBefore)}
 				if err != nil {
 					result["error"] = err.Error()
 				}

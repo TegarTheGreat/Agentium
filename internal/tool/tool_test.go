@@ -1324,3 +1324,13 @@ func TestNotebookReadEdit(t *testing.T) {
 		t.Fatalf("insert/delete:\n%s", out)
 	}
 }
+
+func TestNotesStayAboveExitLine(t *testing.T) {
+	out := beforeExit("cp: Permission denied\n\n[exit 1]", "\n[sandbox: blocked]")
+	if !strings.HasSuffix(out, "[exit 1]") || !strings.Contains(out, "[sandbox: blocked]") {
+		t.Fatalf("got %q", out)
+	}
+	if got := beforeExit("ok", "\n[note]"); got != "ok\n[note]" {
+		t.Fatalf("got %q", got)
+	}
+}

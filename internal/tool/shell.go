@@ -138,7 +138,7 @@ var bashTool = Tool{
 			guard = snapGit(env.roots()...)
 		}
 		out, err := runShell(env.withDetach(ctx, a.Cmd), env.Root, a.Cmd, time.Duration(t)*time.Second, box, env.PassEnv)
-		out += late + guard.check()
+		out = beforeExit(out, late+guard.check())
 		if guarded {
 			env.mu.Lock()
 			env.gitg = snapGit(env.roots()...)
@@ -146,13 +146,28 @@ var bashTool = Tool{
 		}
 		if box != nil && err == nil && sandboxHint.MatchString(out) {
 			if box.Network || box.NetworkUnenforced {
-				out += "\n[sandbox: writes outside the workspace are blocked; temporary files go in $TMPDIR]"
+				out = beforeExit(out, "\n[sandbox: writes outside the workspace are blocked; temporary files go in $TMPDIR]")
 			} else {
-				out += "\n[sandbox: writes outside the workspace (temporary files: $TMPDIR) and network are blocked; retry with net=true if network is needed]"
+				out = beforeExit(out, "\n[sandbox: writes outside the workspace (temporary files: $TMPDIR) and network are blocked; retry with net=true if network is needed]")
 			}
 		}
 		return out, err
 	},
+}
+
+var exitTail = regexp.MustCompile(`\n*\[exit \d+\]\s*$`)
+
+// beforeExit adds a note to a command's output above its "[exit N]" line:
+// the exit status stays last, where the agent, the ledger and --json read
+// it (a note after it made a failed command look like a success).
+func beforeExit(out, note string) string {
+	if note == "" {
+		return out
+	}
+	if loc := exitTail.FindStringIndex(out); loc != nil {
+		return out[:loc[0]] + note + out[loc[0]:]
+	}
+	return out + note
 }
 
 var sandboxHint = regexp.MustCompile(`(?i)permission denied|operation not permitted|read-only file system|network is unreachable|could not resolve|connection refused|EACCES|EPERM`)

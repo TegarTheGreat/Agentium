@@ -334,7 +334,7 @@ func (p *fetchedPage) render(offset int, find string) string {
 	if next := offset + end; next < len(p.text) {
 		fmt.Fprintf(&sb, "\n[%s more: fetch again with offset=%d, or find=\"words\" for the parts you need", sizeLabel(len(p.text)-next), next)
 		if p.saved != "" {
-			fmt.Fprintf(&sb, "; whole page in %s", p.saved)
+			fmt.Fprintf(&sb, "; whole page in %s, where this point is line %d", p.saved, strings.Count(p.text[:next], "\n")+1)
 		}
 		sb.WriteString("]")
 	}
@@ -369,7 +369,7 @@ func findSections(text, query string, max int) string {
 		}
 	}
 	if len(hits) == 0 {
-		return fmt.Sprintf("(nothing on this page mentions %q; read it from the start without find)", query)
+		return fmt.Sprintf("(nothing on this page mentions %q: try other words (a name, a term from the docs) rather than the same query again, or read the page from the start without find)", query)
 	}
 	sort.SliceStable(hits, func(a, b int) bool { return hits[a].score > hits[b].score })
 	var keep []int
@@ -411,7 +411,7 @@ func findSections(text, query string, max int) string {
 			sb.WriteString("\n" + p.heading + "\n")
 		}
 		lastHeading = p.heading
-		fmt.Fprintf(&sb, "\n[at offset %d]\n%s\n", p.offset, strings.TrimSpace(p.text))
+		fmt.Fprintf(&sb, "\n[at offset %d, line %d]\n%s\n", p.offset, strings.Count(text[:p.offset], "\n")+1, strings.TrimSpace(p.text))
 	}
 	left := 0
 	for _, h := range hits {

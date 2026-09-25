@@ -1016,3 +1016,24 @@ func TestToolAliases(t *testing.T) {
 		t.Fatalf("results: %q", results)
 	}
 }
+
+// A failing check the model says it cannot fix gets one reminder, not a
+// second one when the model did nothing new in between.
+func TestVerifyGateDoesNotNagAfterHonestStop(t *testing.T) {
+	answer := func(provider.Request) (provider.Response, error) {
+		return provider.Response{Text: "The two tests contradict each other; both cannot pass."}, nil
+	}
+	s := &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "bash", `{"cmd":"echo running test; exit 1"}`)),
+		answer, answer, answer,
+	}}
+	a := newAgent(t, s)
+	a.Verify = true
+	st, err := a.Run(context.Background(), "make both tests pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Turns != 3 {
+		t.Fatalf("turns = %d, want 3 (one reminder only)", st.Turns)
+	}
+}

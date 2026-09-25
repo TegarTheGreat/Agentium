@@ -4,6 +4,14 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed command whose output drew a sandbox note (or a git-guard note) looked successful: the note came after the `[exit N]` line the agent, the ledger and `--json` read. Notes now go above it.
+- `fetch` lost most of a page whose tables leave rows or cells unclosed (legal HTML): Node's `util.html` came out as 45 KB and missed `util.parseArgs`; it is 136 KB with everything now. `find` results also give the line in the saved page, and a miss suggests other words instead of the same query.
+- The verification reminder repeated after the model honestly said a failing check cannot be fixed, and its wording shrank the final answer to one line. It now reminds once for a failing check, never again without new work in between, and asks for a complete final answer.
+- `--json` `files_changed` includes files commands created or changed (from the checkpoint), with paths relative to the project; it listed only edits, sometimes with absolute paths.
+- The system prompt says where scratch files go (`mktemp` / `$TMPDIR`) and that commands must not start with a `cd` to the workspace; models kept trying fixed `/tmp` paths the sandbox refused.
+
 ## [0.26.1] - 2026-09-25
 
 ### Changed
