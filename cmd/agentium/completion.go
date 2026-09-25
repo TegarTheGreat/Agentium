@@ -55,6 +55,7 @@ var slashCommands = []slashCmd{
 	{"/update", "install the latest release", false},
 	{"/doctor", "check the model, key, tools, terminal and MCP servers", false},
 	{"/mcp", "MCP servers: status, tools, logs", false},
+	{"/hooks", "the hooks in your settings", false},
 	{"/tools", "the tools I can use", false},
 	{"/permissions", "what runs without asking; revoke approvals", false},
 	{"/add-dir", "work in another directory too", true},

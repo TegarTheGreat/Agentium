@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -149,4 +151,46 @@ func sessionHooks(hooks []string, dir string, warn func(string)) string {
 		}
 	}
 	return strings.Join(added, "\n")
+}
+
+// showHooks lists the hooks in the settings (/hooks).
+func showHooks(u *ui, h config.Hooks) {
+	var sb strings.Builder
+	n := 0
+	group := func(name, when string, cmds []string) {
+		if len(cmds) == 0 {
+			return
+		}
+		sb.WriteString("  " + u.paint(cBold, name) + u.paint(cDim, " · "+when) + "\n")
+		for _, c := range cmds {
+			sb.WriteString("    $ " + c + "\n")
+			n++
+		}
+	}
+	var pre []string
+	for _, t := range h.PreTool {
+		m := t.Match
+		if m == "" {
+			m = "every tool"
+		}
+		pre = append(pre, sanitize(t.Command)+u.paint(cDim, "  ("+sanitize(m)+")"))
+	}
+	clean := func(cmds []string) []string {
+		out := make([]string, len(cmds))
+		for i, c := range cmds {
+			out[i] = sanitize(c)
+		}
+		return out
+	}
+	group("session_start", "once at startup; prints context", clean(h.SessionStart))
+	group("user_prompt", "before each message; exit 2 stops it", clean(h.UserPrompt))
+	group("pre_tool", "before matching tool calls; exit 2 blocks", pre)
+	group("post_edit", "after each edit; {path} is the file", clean(h.PostEdit))
+	group("stop", "after each turn", clean(h.Stop))
+	if n == 0 {
+		u.note("no hooks · add them under \"hooks\" in " + shortPath(filepath.Join(config.Home(), "config.json")))
+		return
+	}
+	fmt.Fprint(os.Stderr, "\n"+sb.String())
+	u.note("from " + shortPath(filepath.Join(config.Home(), "config.json")) + " (hooks never come from a repository)")
 }

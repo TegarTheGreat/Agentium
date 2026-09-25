@@ -1991,6 +1991,12 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		a.Note = strings.TrimSpace(a.Note + "\n" + "[agentium] The user added " + dirs[0] + " as a working directory: you may read and change files there too.")
 		u.success("Added " + dirs[0] + u.paint(cDim, " · this session; --add-dir or \"dirs\" in the config for every time"))
+	case "/hooks":
+		var h config.Hooks
+		if cfg.Hooks != nil {
+			h = *cfg.Hooks
+		}
+		showHooks(u, h)
 	case "/mcp":
 		showMCP(u, cfg, e.mcp)
 	case "/tools":

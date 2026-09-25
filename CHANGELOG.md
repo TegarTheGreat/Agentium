@@ -7,6 +7,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 ### Added
 
 - A custom command's `model:` (front matter, as in Claude Code) runs that command's turn on that model. The session's model comes back afterwards.
+- `/hooks` lists the hooks in your settings and when each one runs.
 
 ## [0.21.0] - 2026-09-25
 
