@@ -773,7 +773,8 @@ func run(args []string) error {
 	}
 	var skillBox atomic.Value // for the composer, which may run during a turn
 	skillBox.Store(skills)
-	sysHead, sysTail := agent.SystemPrompt(cwd, mem != nil, snapshot)+selfPrompt(cwd), dirsPrompt(extraDirs)
+	sysHead, sysTail := agent.SystemPrompt(cwd, mem != nil, snapshot)+selfPrompt(cwd)+
+		"\n- This session started on the model "+res.Provider+"/"+res.Model+" (the user may switch with /model; the status bar shows the current one).", dirsPrompt(extraDirs)
 	baseSystem := sysHead + skill.Prompt(skills) + sysTail
 	system := baseSystem + stylePrompt(cfg.Style)
 	a := &agent.Agent{

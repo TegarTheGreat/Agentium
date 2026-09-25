@@ -6,6 +6,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- Asked which model it runs on, the agent can say (the session's starting model is in its instructions).
 - A rule written as `_ _ _` is drawn as a rule while a reply streams.
 
 ## [0.23.0] - 2026-09-25
