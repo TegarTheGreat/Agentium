@@ -322,7 +322,10 @@ func TestStreamStallAndIncomplete(t *testing.T) {
 		t.Fatalf("incomplete: %v", err)
 	}
 
-	// A user cancel is reported as such, never as retryable.
+	// A user cancel is reported as such, never as retryable. (The idle
+	// limit is far off here, so a slow machine cannot turn the cancel
+	// into a stall.)
+	StreamIdleTimeout = 10 * time.Second
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
 	_, err = (&OpenAI{BaseURL: stall.URL}).Stream(ctx, Request{Model: "m"}, nil)
