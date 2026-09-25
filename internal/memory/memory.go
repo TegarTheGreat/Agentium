@@ -174,6 +174,9 @@ func (s *Store) visible(path string, now time.Time) string {
 			}
 			continue
 		}
+		if strings.HasPrefix(e.Text, "lesson: ``") {
+			continue // an empty lesson older versions filed from job reads
+		}
 		if valid, _ := e.valid(s.Root, now); valid {
 			out = append(out, "- "+e.Text+e.age(now))
 		}

@@ -247,3 +247,15 @@ func TestTwoStoresDoNotLoseDecisions(t *testing.T) {
 		t.Fatalf("got %d decisions, %d unique ids; want 60", len(ds), len(seen))
 	}
 }
+
+func TestEmptyLessonsHidden(t *testing.T) {
+	s := open(t)
+	os.WriteFile(s.MemoryPath, []byte("- lesson: `` failed (); passed after retrying (2026-09-25)\n- real note (2026-09-25)\n"), 0o644)
+	snap := s.Snapshot()
+	if strings.Contains(snap, "``") || !strings.Contains(snap, "real note") {
+		t.Fatalf("%s", snap)
+	}
+	if got := s.Lessons([]string{"`` failed (); passed after retrying"}, true); len(got) != 0 {
+		t.Fatalf("%v", got)
+	}
+}
