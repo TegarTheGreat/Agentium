@@ -61,6 +61,7 @@ Flags:
   -m provider/model   model to use (env AGENTIUM_MODEL, config "model")
   -p prompt           one-shot prompt
   -c                  continue the latest session in this directory
+  -r, --resume        choose a saved conversation to continue
   --mode ask|auto|yolo|plan  approvals: every action | risky only (default) | never
   --yolo              same as --mode yolo
   --plan              plan mode: read-only investigation that ends in a plan (same as --mode plan)
@@ -545,6 +546,8 @@ func run(args []string) error {
 	modelRef := fs.String("m", "", "")
 	prompt := fs.String("p", "", "")
 	cont := fs.Bool("c", false, "")
+	resumePick := fs.Bool("resume", false, "")
+	fs.BoolVar(resumePick, "r", false, "")
 	mode := fs.String("mode", "", "")
 	yolo := fs.Bool("yolo", false, "")
 	plan := fs.Bool("plan", false, "")
@@ -1228,6 +1231,11 @@ func run(args []string) error {
 		fmt.Fprintln(os.Stderr, u.dim(fmt.Sprintf("agentium %s · %s/%s · %s mode · %s · /exit to quit", version, res.Provider, res.Model, gate.GetMode(), box)))
 	}
 	interactive = true
+	if *resumePick {
+		u.mu.Lock()
+		u.queued = append([]string{"/resume"}, u.queued...) // open the picker first
+		u.mu.Unlock()
+	}
 	defer func() {
 		// Background servers end with the session; say which.
 		if jobs := a.Env.RunningJobs(); len(jobs) > 0 && !*quiet {
@@ -1776,7 +1784,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 			var items []menuItem
 			for i, ss := range list {
 				items = append(items, menuItem{value: strconv.Itoa(i), label: oneLine(ss.Label(), 50),
-					hint: fmt.Sprintf("%s · %d msgs", ss.Updated.Format("Jan 2 15:04"), len(ss.Messages))})
+					hint: fmt.Sprintf("%s · %d msgs", ago(ss.Updated), len(ss.Messages))})
 			}
 			pick, err := u.choose("Resume a conversation", items, "", false)
 			if err != nil {
@@ -1923,6 +1931,24 @@ func findSession(list []*session.Session, arg string) *session.Session {
 		}
 	}
 	return nil
+}
+
+// ago is a time as people say it: "just now", "5 min ago", "yesterday".
+func ago(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+	case d < 24*time.Hour && t.Day() == time.Now().Day():
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 48*time.Hour && t.Day() == time.Now().AddDate(0, 0, -1).Day():
+		return "yesterday " + t.Format("15:04")
+	case d < 7*24*time.Hour:
+		return t.Format("Mon 15:04")
+	}
+	return t.Format("Jan 2")
 }
 
 func hashString(s string) string {
