@@ -2,7 +2,7 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.19.0] - 2026-09-25
 
 ### Added
 
@@ -14,9 +14,16 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - **Clickable file names.** File names on Read and Edit lines are hyperlinks (OSC 8), so a ctrl- or cmd-click opens the file in iTerm2, WezTerm, kitty, Ghostty, VS Code and Windows Terminal. `AGENTIUM_NO_LINKS=1` turns them off.
 - **See what the model thought.** `Ctrl-O` now includes each step's thinking (Claude's thinking blocks, or the reasoning of DeepSeek and other models that send it), with a word count.
 
+### Changed
+
+- **Welcome tips fit the folder**: an empty folder, a repository without `AGENTS.md`, uncommitted work, or a clean tree.
+- **A command that times out gets advice** instead of a retry with a longer timeout: it may be stuck, and tests should get their own time limit (`go test -timeout`, `pytest --timeout`). The deadlocked-test eval went from minutes to about 20 seconds.
+
 ### Fixed
 
 - Summaries and hand-off briefs no longer end with tool-call markup that some models write as text.
+- `/rewind` finds a turn's file changes by time instead of guessing from the prompt text, and puts back exactly what you typed.
+- A link cut short by a narrow pane no longer runs on over the rest of the screen.
 
 ## [0.18.0] - 2026-09-25
 
