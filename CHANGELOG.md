@@ -22,6 +22,7 @@ Found by fault-injection tests (a scripted fake provider), a gap analysis and lo
 - After an edit, the language server's report lists only errors that are new for that file (the first check lists them all), with a count of the ones still standing: a file with a dozen old type errors repeated them after every edit.
 - A leading `cd <workspace> &&` on a shell command is dropped (commands already run there): models add it to nearly every call, where it made `--allow` rules miss and cut the command history kept across summaries down to the path.
 - `--json`: a bash `tool_result` carries its `exit` status and is `ok: false` when it is not 0, and a run stopped by SIGTERM or SIGHUP (a CI timeout) still ends with a `result` event holding the cost spent.
+- The bash tool says long output is saved whole to a file to grep: long runs re-ran the same test suite 3–4 times, each through a different `tail`/`grep`.
 - Checkpoints skip files over 20 MB: a 1 GB dataset in the project made the first edit wait 33 s and was copied again on every change (now 2 s for a 30k-file project).
 - `@` file completion finds every file in large repositories (it stopped at 20,000), refreshes the list in the background instead of pausing typing, and ranks 200k files in about 25 ms per key (was 110 ms).
 - Claude prompt caching keeps working through rounds of many parallel tool calls: a second cache breakpoint sits where the previous request ended (a hit is only looked for 20 blocks back).
