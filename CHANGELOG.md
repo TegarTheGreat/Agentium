@@ -2,7 +2,7 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.22.0] - 2026-09-25
 
 ### Added
 
@@ -13,6 +13,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 ### Fixed
 
 - Reading a background job's output no longer files empty "lessons" (`` `` failed (); passed after retrying ``) into memory.
+- `Ctrl-B` also reaches commands run by sub-agents. Their jobs belong to the sub-task and end with it.
 
 ## [0.21.0] - 2026-09-25
 
