@@ -135,8 +135,8 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 
 | | |
 |---|---|
-| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/diff` `/context` `/compact` `/btw` `/theme` `/memory` `/export` `/sessions` `/resume` `/rename` `/fork` `/handoff` `/clear` `/usage` `/skills` `/<skill> [task]` `/init` `/review` `/commit` `/pr` `/permissions` `/doctor` `/mcp` `/tools` `/update` `/exit` |
-| **Typing** | `/` shows commands with what they do · `@` fuzzy-finds project files · big pastes become `[Pasted text #1 +40 lines]` chips · `Ctrl-J`, `Shift-Enter` or a trailing `\` for a new line · `Ctrl-R` searches earlier messages · `Ctrl-G` writes the message in `$EDITOR` · `↑`/`↓` move between lines, then through history · `Ctrl-K`/`Ctrl-U`/`Ctrl-W` cut and `Ctrl-Y` pastes back · `Ctrl-_` undoes · `Ctrl-S` puts a draft aside · `Alt-P`/`Alt-T` switch model and effort |
+| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/diff` `/context` `/compact` `/btw` `/theme` `/style` `/vim` `/memory` `/export` `/agents` `/watch` `/sessions` `/resume` `/rename` `/fork` `/handoff` `/clear` `/usage` `/skills` `/<skill> [task]` `/init` `/review` `/commit` `/pr` `/permissions` `/doctor` `/mcp` `/tools` `/update` `/exit` |
+| **Typing** | `/` shows commands with what they do · `@` fuzzy-finds project files · big pastes become `[Pasted text #1 +40 lines]` chips · `Ctrl-J`, `Shift-Enter` or a trailing `\` for a new line · `Ctrl-R` searches earlier messages · `Ctrl-G` writes the message in `$EDITOR` · `↑`/`↓` move between lines, then through history · `Ctrl-K`/`Ctrl-U`/`Ctrl-W` cut and `Ctrl-Y` pastes back · `Ctrl-_` undoes · `Ctrl-S` puts a draft aside · `Alt-P`/`Alt-T` switch model and effort · `Ctrl-V` pastes an image from the clipboard |
 | **While it works** | `Enter` steers: your message reaches the agent at its next step · `Tab` queues it for after the turn · `↑` takes a pending message back · `Esc` stops the turn · `Ctrl-O` shows the full output of recent steps; there `t` shows the whole conversation, `/` searches, `[` `]` jump between your messages, `e` opens it in `$EDITOR` |
 | **More commands** | `!command` runs a shell command yourself (the agent sees the output with your next message) · `/diff` shows what changed · `/context` shows what fills the context window · `/compact` summarizes older conversation · `/btw <question>` asks on the side without adding to the conversation · `/theme` switches the palette |
 | **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds to before one of your messages (conversation, files or both) · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
@@ -144,6 +144,10 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 **More folders.** `agentium --add-dir ../lib` (repeatable, or `"dirs"` in the config, or `/add-dir` in a session) lets the agent work in another directory as freely as in the current one (git internals there still ask). `/undo` and `/rewind` cover the main folder only. Your home folder and `/` cannot be added.
 
 **Readable and clickable.** `Ctrl-O` also shows what the model thought before each step. File names on Read and Edit lines are hyperlinks: ctrl- or cmd-click opens them in terminals that support OSC 8.
+
+**Share.** `/export name.html` writes the conversation as one self-contained page (keys and tokens in outputs are masked); `/export` alone writes Markdown.
+
+**Styles.** `/style explanatory` explains choices as it works, `learning` leaves a small part for you to write, `terse` keeps answers to the minimum.
 
 **Fresh starts.** `/handoff <goal>` opens a new conversation with a brief the model writes for that goal, as an alternative to compacting a long one.
 
@@ -359,7 +363,7 @@ make cross   # binaries for Linux, macOS and Windows in dist/
 
 Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
 
-> **Status:** v0.19.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
+> **Status:** v0.20.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
 
 ## License
 
