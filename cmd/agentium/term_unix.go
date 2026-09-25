@@ -87,6 +87,9 @@ func noEcho(f *os.File) (func(), error) {
 	}
 	t := old
 	t.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON
+	// No Ctrl-Z stop here: agentium suspends itself at the prompt, where
+	// it can put the screen back first.
+	t.Cc[syscall.VSUSP] = vdisable
 	t.Cc[syscall.VMIN] = 1
 	t.Cc[syscall.VTIME] = 0
 	if err := tcset(fd, &t); err != nil {

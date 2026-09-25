@@ -1335,7 +1335,7 @@ func run(args []string) error {
 				if f != nil {
 					f.suspend()
 				} else {
-					e.out.WriteString("\r\n")
+					e.out.WriteString("\r\n\x1b[J") // below the line, a popup may show
 				}
 				ok := suspendSelf()
 				if f != nil {

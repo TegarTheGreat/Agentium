@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -24,12 +25,12 @@ type releaseInfo struct {
 
 // fetchRelease gets the release for ver ("0.20.0"), or the latest.
 func fetchRelease(ctx context.Context, ver string) (releaseInfo, error) {
-	url := releaseAPI + "/latest"
-	if ver != "" && ver != "latest" {
-		url = releaseAPI + "/tags/v" + strings.TrimPrefix(ver, "v")
+	u := releaseAPI + "/latest"
+	if ver != "" && ver != "latest" && ver != "dev" {
+		u = releaseAPI + "/tags/v" + url.PathEscape(strings.TrimPrefix(ver, "v"))
 	}
 	var r releaseInfo
-	b, err := fetchBytes(ctx, url)
+	b, err := fetchBytes(ctx, u)
 	if err != nil {
 		if strings.Contains(err.Error(), "404") {
 			return r, errors.New("no release " + ver + " on GitHub")

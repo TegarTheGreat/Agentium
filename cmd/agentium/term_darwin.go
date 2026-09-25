@@ -30,3 +30,6 @@ func inputReady(f *os.File, d time.Duration) bool {
 		return err == nil && set.Bits[fd/32]&(1<<(uint(fd)%32)) != 0
 	}
 }
+
+// vdisable turns a terminal control character off (_POSIX_VDISABLE).
+const vdisable = 0xff

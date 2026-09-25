@@ -390,6 +390,10 @@ func (f *fullscreen) suspend() {
 
 func (f *fullscreen) resume() {
 	f.mu.Lock()
+	// The window may have changed size meanwhile (no SIGWINCH reaches a
+	// stopped job).
+	f.rows, f.cols = termRows(f.tty), termWidth(f.tty)
+	f.vt.width = f.transcriptWidth()
 	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?2004h" + f.mouseOn() + "\x1b[H\x1b[2J")
 	f.suspended, f.prev, f.dirty = false, nil, true
 	f.mu.Unlock()

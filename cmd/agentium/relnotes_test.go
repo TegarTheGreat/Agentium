@@ -37,6 +37,8 @@ func TestJustUpdated(t *testing.T) {
 	if p := justUpdated(); p != "" {
 		t.Fatalf("first run: %q", p)
 	}
+	// agentium update rewrites update.json; that must not lose the note.
+	saveUpdateState(updateState{Latest: "0.21.0"})
 	version = "0.21.0"
 	if p := justUpdated(); p != "0.20.0" {
 		t.Fatalf("after update: %q", p)

@@ -72,7 +72,6 @@ func newer(a, b string) bool {
 type updateState struct {
 	Checked time.Time `json:"checked"`
 	Latest  string    `json:"latest"`
-	Seen    string    `json:"seen,omitempty"` // the version that last ran
 }
 
 func loadUpdateState() updateState {
@@ -85,9 +84,32 @@ func loadUpdateState() updateState {
 
 func saveUpdateState(st updateState) {
 	b, _ := json.Marshal(st)
-	_ = os.MkdirAll(config.Home(), 0o700)
-	_ = os.WriteFile(updatePath(), b, 0o600)
+	writeSmall(updatePath(), b)
 }
+
+// writeSmall replaces a small state file whole (another session may be
+// reading it).
+func writeSmall(path string, b []byte) {
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return
+	}
+	_, err = tmp.Write(b)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+	}
+}
+
+// seenPath holds the version that last ran (its own file: older
+// versions rewrite update.json without it).
+func seenPath() string { return filepath.Join(config.Home(), "seen-version") }
 
 // justUpdated returns the version that ran before this one, once, when
 // this one is newer: the welcome then points at /release-notes.
@@ -95,13 +117,12 @@ func justUpdated() string {
 	if version == "dev" {
 		return ""
 	}
-	st := loadUpdateState()
-	if st.Seen == version {
+	b, _ := os.ReadFile(seenPath())
+	prev := strings.TrimSpace(string(b))
+	if prev == version {
 		return ""
 	}
-	prev := st.Seen
-	st.Seen = version
-	saveUpdateState(st)
+	writeSmall(seenPath(), []byte(version+"\n"))
 	if prev != "" && newer(version, prev) {
 		return prev
 	}
@@ -198,8 +219,9 @@ func runUpdate(args []string) (bool, error) {
 	if err := replaceExecutable(self, bin); err != nil {
 		return false, fmt.Errorf("installing to %s: %w", self, err)
 	}
-	b, _ := json.Marshal(updateState{Checked: time.Now(), Latest: want})
-	_ = os.WriteFile(updatePath(), b, 0o600)
+	st := loadUpdateState()
+	st.Checked, st.Latest = time.Now(), want
+	saveUpdateState(st)
 	u.success("Updated to agentium " + want + u.paint(cDim, " ("+self+")"))
 	return true, nil
 }

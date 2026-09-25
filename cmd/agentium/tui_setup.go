@@ -139,7 +139,7 @@ var keyRows = [][2]string{
 	{"ctrl+k/u/w  ctrl+y", "cut to line end / start, a word · paste it back"},
 	{"ctrl+_  ctrl+s", "undo · put the draft aside (again: bring it back)"},
 	{"ctrl+g  ctrl+v", "write the message in $EDITOR · paste an image from the clipboard"},
-	{"ctrl+z", "suspend to the shell · fg brings agentium back"},
+	{"ctrl+z", "at the prompt: suspend to the shell · fg brings agentium back"},
 	{"While it works", ""},
 	{"enter  tab  ↑", "steer at the next step · queue for after · take back"},
 	{"esc", "stop the turn · esc esc: rewind"},
