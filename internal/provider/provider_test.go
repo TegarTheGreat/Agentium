@@ -150,6 +150,10 @@ func TestAnthropicStream(t *testing.T) {
 	if last[1].(map[string]any)["cache_control"] == nil {
 		t.Fatal("missing cache_control on last block")
 	}
+	first := msgs[0].(map[string]any)["content"].([]any)
+	if first[len(first)-1].(map[string]any)["cache_control"] == nil {
+		t.Fatal("missing cache_control on the previous user message (the last request's breakpoint)")
+	}
 	if body["system"].([]any)[0].(map[string]any)["cache_control"] == nil {
 		t.Fatal("missing cache_control on system")
 	}

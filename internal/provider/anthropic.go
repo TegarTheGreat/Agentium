@@ -144,8 +144,12 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 			push("user", mustJSON(anBlock{Type: "tool_result", ToolUseID: toolID(m.ToolCallID), Content: content, IsError: m.IsError}))
 		}
 	}
-	// Cache breakpoint on the newest block (it must not be a thinking block).
-	for i := len(msgs) - 1; i >= 0; i-- {
+	// Cache breakpoints (they must not be on thinking blocks): the newest
+	// block, and the end of the previous user message, where the last
+	// request put its own. A cache hit is only looked for 20 blocks back,
+	// so a round of many parallel tool calls would otherwise miss the
+	// whole conversation.
+	mark := func(i int) {
 		last := msgs[i].Content[len(msgs[i].Content)-1]
 		var obj map[string]json.RawMessage
 		if json.Unmarshal(last, &obj) == nil {
@@ -156,7 +160,15 @@ func (c *Anthropic) body(req Request) (map[string]any, []string) {
 				msgs[i].Content[len(msgs[i].Content)-1] = mustJSON(obj)
 			}
 		}
-		break
+	}
+	if n := len(msgs); n > 0 {
+		mark(n - 1)
+		for i := n - 2; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				mark(i)
+				break
+			}
+		}
 	}
 	maxTok := req.MaxTokens
 	if maxTok <= 0 {
