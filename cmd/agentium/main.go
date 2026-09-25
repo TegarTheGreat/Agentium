@@ -30,6 +30,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/lsp"
 	"github.com/tegarthegreat/agentium/internal/memory"
+	"github.com/tegarthegreat/agentium/internal/models"
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/sandbox"
@@ -1921,6 +1922,16 @@ func (e *slashEnv) switchModel(ref string) error {
 	*e.res = res
 	e.sess.Model = res.Provider + "/" + res.Model
 	curModel.Store(e.sess.Model)
+	registryID := res.Provider
+	if alias, ok := models.Aliases[registryID]; ok {
+		registryID = alias
+	}
+	if !res.Known && len(models.List(config.Home(), registryID)) > 0 {
+		// The provider's models are listed and this is not one of them:
+		// likely a typo, and a saved default would break every session.
+		e.u.success("Model: " + e.sess.Model + e.u.paint(cDim, " (for this session only: it is not in "+res.Provider+"'s model list, see agentium models "+res.Provider+")"))
+		return nil
+	}
 	_ = config.Set("model", e.sess.Model)
 	e.u.success("Model: " + e.sess.Model + e.u.paint(cDim, " (saved as default)"))
 	return nil

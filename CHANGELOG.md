@@ -17,6 +17,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - A mistyped mode (`--mode aks`, `/mode aks`, a bad `"mode"` in the config) is an error; it used to switch silently to auto. `--effort` and `/effort` reject unknown levels too.
 - `agentium logout <provider>` says when nothing is stored for that provider instead of succeeding silently.
 - `--mode` help lists plan.
+- `/model <id>` with an id not in that provider's model list is used for the session only, not saved as the default (a typo used to break every later session with API errors).
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 
 ## [0.24.0] - 2026-09-25
