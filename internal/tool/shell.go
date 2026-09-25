@@ -28,7 +28,7 @@ const (
 
 var bashTool = Tool{
 	Def: providerDef("bash",
-		"Run a shell command in the workspace; output clipped head+tail. Writes outside the workspace and all outbound connections (including to localhost) are blocked unless net=true (installs, downloads, git push, curl to a local server); servers may listen without it. background=true for servers/watchers/REPLs returns a job id: {job} reads new output (waits up to timeout s), {job,stdin} sends input (control chars ok, e.g. \\u0003), {job,kill} stops; {} lists jobs. tty=true gives the job a terminal (REPLs, prompts, ssh).",
+		"Run a shell command in the workspace; output clipped head+tail. Writes outside the workspace and all outbound connections (including to localhost) are blocked unless net=true (installs, downloads, git push, curl to a local server); servers may listen without it. background=true for servers/watchers/REPLs returns a job id: {job} reads new output (waits up to timeout s), {job,stdin} sends input (control chars ok, e.g. \\u0003), {job,kill} stops; {} lists jobs. tty=true gives the job a terminal (REPLs, prompts, ssh). Give tests their own time limit (go test -timeout 60s, pytest --timeout 60) so a hang fails fast with a trace.",
 		`{"type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer","description":"seconds, default 120"},"net":{"type":"boolean"},"background":{"type":"boolean"},"tty":{"type":"boolean"},"job":{"type":"integer"},"stdin":{"type":"string"},"kill":{"type":"boolean"}}}`),
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
