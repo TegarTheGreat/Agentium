@@ -351,7 +351,7 @@ make cross   # binaries for Linux, macOS and Windows in dist/
 
 Design notes live in [`docs/`](docs): [DESIGN.md](docs/DESIGN.md) covers the architecture principles and [GAPS.md](docs/GAPS.md) tracks the roadmap.
 
-> **Status:** v0.17.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
+> **Status:** v0.18.0. Tested end to end against a live model API (DeepSeek); a full Terminal-Bench run is still pending. Bug reports are welcome.
 
 ## License
 

@@ -2,13 +2,7 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Changed
-
-- `/help` is grouped (work, conversation, setup; typing, while it works, anytime), with descriptions wrapped under their column.
-- Sub-agent steps that repeat (a staff member reading one file in parts) are counted on one line (`×5`). A finished sub-agent line names the staff member in their color.
-- Approval choices fit on one short line.
+## [0.18.0] - 2026-09-25
 
 ### Added
 
@@ -17,6 +11,17 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - **`/watch`: work from your editor.** End a comment with `AI!` in any project file ("# handle the empty case AI!") and save: Agentium does it, using other comments marked `AI` as context, then removes them. `AI?` asks a question. This is aider's watch mode.
 - **Approve with a note.** `c` at an approval says yes, and what you type reaches the agent at its next step ("yes, and run the tests after").
 - **More working directories.** `--add-dir PATH` (repeatable), `"dirs"` in the config, or `/add-dir` in a session. The agent may change files there without asking, as in the main folder, and the sandbox lets commands write there.
+
+### Changed
+
+- `/help` is grouped (work, conversation, setup; typing, while it works, anytime), with descriptions wrapped under their column.
+- Sub-agent steps that repeat (a staff member reading one file in parts) are counted on one line (`×5`). A finished sub-agent line names the staff member in their color.
+- Approval choices fit on one short line.
+
+### Fixed
+
+- `@file` checks credential files through symlinks and only includes files in the workspace.
+- Comments that arrive with a pull or checkout, or in dependency folders, are never taken as `/watch` instructions.
 
 ## [0.17.0] - 2026-09-25
 
