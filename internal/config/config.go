@@ -40,6 +40,8 @@ type Config struct {
 	Suggest *bool `json:"suggest,omitempty"`
 	// Vim turns on vim keys in the message box (also /vim).
 	Vim bool `json:"vim,omitempty"`
+	// Style is how the agent talks: default, explanatory, learning, terse.
+	Style string `json:"style,omitempty"`
 	// Keys are your shortcuts: key name → command or message, e.g.
 	// {"ctrl+x": "/diff", "f5": "run the tests"}.
 	Keys map[string]string `json:"keys,omitempty"`

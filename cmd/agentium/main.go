@@ -765,7 +765,8 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, u.dim("· "+sh))
 		}
 	}
-	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + selfPrompt(cwd) + skill.Prompt(skills) + dirsPrompt(extraDirs)
+	baseSystem := agent.SystemPrompt(cwd, mem != nil, snapshot) + selfPrompt(cwd) + skill.Prompt(skills) + dirsPrompt(extraDirs)
+	system := baseSystem + stylePrompt(cfg.Style)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
@@ -1469,6 +1470,38 @@ func run(args []string) error {
 					u.success("Watching the project: end a comment with AI! to ask for a change, AI? to ask a question" +
 						u.paint(cDim, " · /watch again stops"))
 				}
+				continue
+			}
+			if line == "/style" || strings.HasPrefix(line, "/style ") {
+				name := strings.TrimSpace(strings.TrimPrefix(line, "/style"))
+				if name == "" {
+					var items []menuItem
+					for _, st := range outputStyles {
+						items = append(items, menuItem{value: st.name, hint: st.hint})
+					}
+					cur := firstNonEmpty(cfg.Style, "default")
+					pick, err := u.choose("Output style", items, cur, false)
+					if err != nil {
+						continue
+					}
+					name = pick
+				}
+				known := false
+				for _, st := range outputStyles {
+					known = known || strings.EqualFold(st.name, name)
+				}
+				if !known {
+					u.failure("no style " + name + " (default, explanatory, learning, terse)")
+					continue
+				}
+				cfg.Style = strings.ToLower(name)
+				a.System = baseSystem + stylePrompt(cfg.Style)
+				for i := range a.Messages {
+					a.Messages[i].Raw = nil // signed thinking belongs to the old system prompt
+				}
+				sess.SystemHash = hashString(a.System)
+				_ = config.Set("style", cfg.Style)
+				u.success("Style: " + cfg.Style + u.paint(cDim, " (saved)"))
 				continue
 			}
 			if line == "/agents" {

@@ -119,6 +119,7 @@ var helpRows = [][2]string{
 	{"/login  /logout", "add, change or remove a provider's API key"},
 	{"/permissions  /add-dir", "what runs without asking · another working folder"},
 	{"/theme  /vim", "auto · dark · light · vim keys in the message box"},
+	{"/style", "how I talk: default, explanatory, learning, terse"},
 	{"/skills  /<name> [args]", "skills, and your commands in .agentium/commands"},
 	{"/agents", "your specialist sub-agents (.agentium/agents, .claude/agents)"},
 	{"/doctor  /mcp  /tools", "health check · MCP servers · available tools"},
