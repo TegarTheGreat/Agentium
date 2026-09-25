@@ -59,7 +59,7 @@ type liveTool struct {
 
 const liveTail = 3
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|\x1b[=>]`)
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]`)
 
 // feed adds command output, keeping the last few lines. A carriage
 // return (progress bars) replaces the current line.
@@ -468,6 +468,12 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 	}
 	fail = truncate(fail, max(width/2, 20))
 	detail := truncate(u.detail(c), width-strWidth(name)-len(dur)-strWidth(fail)-8)
+	if c.Name == "read" || c.Name == "edit" {
+		var a struct{ Path string }
+		if jsonUnmarshal(c.Args, &a) == nil {
+			detail = fileLink(u.cwd, a.Path, detail) // cmd/ctrl-click opens it
+		}
+	}
 	if f := activeFS(); f != nil && c.Name == "task" {
 		// Which staff member did it, in their color.
 		prompt, _ := taskArgs(c)

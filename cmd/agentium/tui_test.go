@@ -358,3 +358,18 @@ func TestResolveDirsRefusesBroadOnes(t *testing.T) {
 		t.Fatal("a missing directory is an error")
 	}
 }
+
+func TestVtermKeepsLinks(t *testing.T) {
+	v := newVterm(80)
+	v.Write([]byte("see " + "\x1b]8;;file://h/a.go\x1b\\" + "\x1b[34ma.go\x1b[0m" + "\x1b]8;;\x1b\\" + " done\n"))
+	got := v.render(0, 80)
+	if !strings.Contains(got, "\x1b]8;;file://h/a.go\x1b\\") || !strings.Contains(got, "a.go") || strings.Count(got, "\x1b]8;;\x1b\\") != 1 {
+		t.Fatalf("render %q", got)
+	}
+	if w := strWidth(got); w != len("see a.go done") {
+		t.Fatalf("width %d", w)
+	}
+	if p := stripANSI(got); p != "see a.go done" {
+		t.Fatalf("stripped %q", p)
+	}
+}

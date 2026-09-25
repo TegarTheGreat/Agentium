@@ -20,6 +20,8 @@ type vterm struct {
 	pending  []byte // an incomplete UTF-8 sequence or escape
 	maxLines int
 	dropped  int // lines trimmed from the top so far
+	links    []string       // hyperlink targets (OSC 8), by vstyle.link-1
+	linkIDs  map[string]int // target → index+1
 }
 
 type vcell struct {
@@ -33,6 +35,7 @@ type vcell struct {
 type vstyle struct {
 	fg, bg uint32
 	attr   uint8
+	link   uint16 // hyperlink: 1 + index into vterm.links; 0 for none
 }
 
 const (
@@ -91,6 +94,7 @@ func (v *vterm) Write(p []byte) (int, error) {
 }
 
 func (v *vterm) newline() {
+	v.st.link = 0 // links never run across lines
 	v.row++
 	v.col = 0
 	for len(v.lines) <= v.row {
@@ -153,11 +157,15 @@ func (v *vterm) escape(p []byte) (used int, ok bool) {
 		return i + 1, true
 	case ']': // OSC: up to BEL or ST
 		for i := 2; i < len(p); i++ {
+			end := 0
 			if p[i] == 0x07 {
-				return i + 1, true
+				end = i + 1
+			} else if p[i] == 0x1b && i+1 < len(p) && p[i+1] == '\\' {
+				end = i + 2
 			}
-			if p[i] == 0x1b && i+1 < len(p) && p[i+1] == '\\' {
-				return i + 2, true
+			if end > 0 {
+				v.osc(string(p[2:i]))
+				return end, true
 			}
 		}
 		if len(p) > 512 {
@@ -166,6 +174,32 @@ func (v *vterm) escape(p []byte) (used int, ok bool) {
 		return 0, false
 	}
 	return 2, true
+}
+
+// osc handles OSC 8 hyperlinks ("8;params;URI"); other OSCs are ignored.
+func (v *vterm) osc(body string) {
+	rest, ok := strings.CutPrefix(body, "8;")
+	if !ok {
+		return
+	}
+	_, uri, _ := strings.Cut(rest, ";")
+	if uri == "" {
+		v.st.link = 0
+		return
+	}
+	if v.linkIDs == nil {
+		v.linkIDs = map[string]int{}
+	}
+	id, seen := v.linkIDs[uri]
+	if !seen {
+		if len(v.links) >= 4096 || len(uri) > 2048 {
+			return // enough: further links show as plain text
+		}
+		v.links = append(v.links, uri)
+		id = len(v.links)
+		v.linkIDs[uri] = id
+	}
+	v.st.link = uint16(id)
 }
 
 func (v *vterm) csi(params string, final byte) {
@@ -235,7 +269,7 @@ func (v *vterm) sgr(ps []int) {
 	for i := 0; i < len(ps); i++ {
 		switch p := ps[i]; {
 		case p == 0:
-			v.st = vstyle{}
+			v.st = vstyle{link: v.st.link} // colors reset; a link goes on
 		case p == 1:
 			v.st.attr |= aBold
 		case p == 2:
@@ -308,6 +342,7 @@ func (v *vterm) renderW(i, width int) (string, int) {
 	}
 	var sb strings.Builder
 	cur := vstyle{}
+	link := uint16(0)
 	cols := 0
 	for _, c := range v.lines[i] {
 		if c.w == 0 {
@@ -316,12 +351,26 @@ func (v *vterm) renderW(i, width int) (string, int) {
 		if cols+int(c.w) > width {
 			break
 		}
-		if c.st != cur {
-			sb.WriteString(sgrFor(c.st))
-			cur = c.st
+		if c.st.link != link {
+			if link != 0 {
+				sb.WriteString("\x1b]8;;\x1b\\")
+			}
+			if c.st.link != 0 && int(c.st.link) <= len(v.links) {
+				sb.WriteString("\x1b]8;;" + v.links[c.st.link-1] + "\x1b\\")
+			}
+			link = c.st.link
+		}
+		st := c.st
+		st.link = 0
+		if st != cur {
+			sb.WriteString(sgrFor(st))
+			cur = st
 		}
 		sb.WriteRune(c.r)
 		cols += int(c.w)
+	}
+	if link != 0 {
+		sb.WriteString("\x1b]8;;\x1b\\")
 	}
 	if cur != (vstyle{}) {
 		sb.WriteString("\x1b[0m")

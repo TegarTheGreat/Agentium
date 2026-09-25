@@ -398,9 +398,16 @@ func popupRows(items []suggestion, sel, width int) []string {
 
 // strWidth is the display width of s; ANSI escape sequences count zero.
 func strWidth(s string) int {
-	n, esc := 0, false
+	n, esc, osc := 0, false, false
+	prev := rune(0)
 	for _, r := range s {
 		switch {
+		case osc: // a hyperlink or title: up to BEL or ESC \
+			if r == 0x07 || r == '\\' && prev == 0x1b {
+				osc = false
+			}
+		case esc && r == ']' && prev == 0x1b:
+			esc, osc = false, true
 		case esc:
 			if r >= 0x40 && r <= 0x7e && r != '[' {
 				esc = false
@@ -410,6 +417,7 @@ func strWidth(s string) int {
 		default:
 			n += runeWidth(r)
 		}
+		prev = r
 	}
 	return n
 }
