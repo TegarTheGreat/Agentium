@@ -37,6 +37,22 @@ func (u *ui) keepOutput(c provider.ToolCall, out string) {
 	}
 }
 
+// keepThought keeps what the model thought before a step, for the viewer
+// (Claude Code's "ctrl+o to see thinking").
+func (u *ui) keepThought(t string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var lines []string
+	for _, l := range strings.Split(sanitizeKeepTabs(t), "\n") {
+		lines = append(lines, wordWrap(l, max(termWidth(os.Stderr)-10, 30))...)
+	}
+	words := len(strings.Fields(t))
+	u.outputs = append(u.outputs, stepOutput{title: fmt.Sprintf("Thinking · %d words", words), lines: lines})
+	if len(u.outputs) > keptOutputs {
+		u.outputs = u.outputs[len(u.outputs)-keptOutputs:]
+	}
+}
+
 func sanitizeKeepTabs(s string) string {
 	s = ansiRE.ReplaceAllString(s, "")
 	return strings.Map(func(r rune) rune {

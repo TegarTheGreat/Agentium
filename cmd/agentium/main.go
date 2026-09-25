@@ -899,6 +899,9 @@ func run(args []string) error {
 			if r.Text != "" {
 				replies = append(replies, r.Text)
 			}
+			if t := strings.TrimSpace(firstNonEmpty(r.Thought, r.Reasoning)); t != "" {
+				u.keepThought(t) // ctrl+o shows it
+			}
 			for _, c := range r.ToolCalls {
 				if c.Name == "edit" {
 					var m map[string]any

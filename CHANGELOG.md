@@ -8,6 +8,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 - **`/handoff [goal]`** starts a new conversation with a brief the model writes for that goal: the relevant files, the decisions, the current state and the first steps. It is an alternative to compacting a long session, as in Amp. The brief waits in the message box for you to edit and send, and the old conversation stays resumable.
 
+- **See what the model thought.** `Ctrl-O` now includes each step's thinking (Claude's thinking blocks, or the reasoning of DeepSeek and other models that send it), with a word count.
+
 ### Fixed
 
 - Summaries and hand-off briefs no longer end with tool-call markup that some models write as text.

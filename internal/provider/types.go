@@ -137,6 +137,9 @@ type Response struct {
 	StopReason     string
 	Raw            json.RawMessage // provider-native assistant content, see Message.Raw
 	Reasoning      string
+	// Thought is the model's thinking in readable form, for display only
+	// (Claude's thinking blocks travel in Raw).
+	Thought string
 	// Model is the model that actually served the reply when it differs
 	// from the request (fallback); "" means the requested model.
 	Model string

@@ -370,6 +370,7 @@ func assembleAnthropic(blocks map[int]*anPartial, order []int) Response {
 			raw = append(raw, mustJSON(map[string]any{"type": "tool_use", "id": b.id, "name": b.name, "input": validArgs(json.RawMessage(args))}))
 		case "thinking":
 			raw = append(raw, mustJSON(map[string]any{"type": "thinking", "thinking": b.think.String(), "signature": b.sig}))
+			out.Thought += b.think.String()
 		default:
 			// redacted_thinking and unknown block types replay verbatim.
 			raw = append(raw, b.start)

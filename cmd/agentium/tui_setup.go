@@ -137,7 +137,7 @@ var keyRows = [][2]string{
 	{"While it works", ""},
 	{"enter  tab  ↑", "steer at the next step · queue for after · take back"},
 	{"esc", "stop the turn · esc esc: rewind"},
-	{"ctrl+o", "step outputs · t the conversation · / search · [ ] your messages"},
+	{"ctrl+o", "step outputs and thinking · t the conversation · / search · [ ] your messages"},
 	{"Anytime", ""},
 	{"shift+tab", "next approval mode"},
 	{"alt+p  alt+t", "switch model · reasoning effort"},
