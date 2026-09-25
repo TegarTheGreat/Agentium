@@ -4,6 +4,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.26.2] - 2026-09-25
+
 ### Fixed
 
 - A failed command whose output drew a sandbox note (or a git-guard note) looked successful: the note came after the `[exit N]` line the agent, the ledger and `--json` read. Notes now go above it.
