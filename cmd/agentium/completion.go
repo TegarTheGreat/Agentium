@@ -50,6 +50,7 @@ var slashCommands = []slashCmd{
 	{"/doctor", "check the model, key, tools, terminal and MCP servers", false},
 	{"/mcp", "MCP servers: status, tools, logs", false},
 	{"/tools", "the tools I can use", false},
+	{"/permissions", "what runs without asking; revoke approvals", false},
 	{"/init", "study the repo and write AGENTS.md", false},
 	{"/review", "review the current changes for bugs", false},
 	{"/help", "commands and keys (also ?)", false},

@@ -48,13 +48,14 @@ func hexRGB(h string) (r, g, b uint8) {
 // applyTheme picks the palette: "light", "dark" or "auto" (asks the
 // terminal for its background color).
 func applyTheme(pref string) {
+	bg, bgOK := probeTerminal(time.Second)
 	switch strings.ToLower(pref) {
 	case "light":
 		lightTheme = true
 	case "dark":
 		lightTheme = false
 	default:
-		lightTheme = detectLight()
+		lightTheme = detectLight(bg, bgOK)
 	}
 	if !truecolorTerm() {
 		if lightTheme {
@@ -74,11 +75,11 @@ func applyTheme(pref string) {
 	sgrCyan = "\033[" + cCyan + "m"
 }
 
-// detectLight reports a light terminal background, from an OSC 11 reply
-// or COLORFGBG; dark when unknown.
-func detectLight() bool {
-	if r, g, b, ok := queryBackground(time.Second); ok {
-		return 0.2126*float64(r)+0.7152*float64(g)+0.0722*float64(b) > 140
+// detectLight reports a light terminal background, from the terminal's
+// reply or COLORFGBG; dark when unknown.
+func detectLight(bg [3]uint8, ok bool) bool {
+	if ok {
+		return 0.2126*float64(bg[0])+0.7152*float64(bg[1])+0.0722*float64(bg[2]) > 140
 	}
 	if v := os.Getenv("COLORFGBG"); v != "" {
 		parts := strings.Split(v, ";")
@@ -89,24 +90,31 @@ func detectLight() bool {
 	return false
 }
 
-// queryBackground asks the terminal for its background color (OSC 11).
-func queryBackground(timeout time.Duration) (r, g, b uint8, ok bool) {
+// probeTerminal asks the terminal for its background color (OSC 11) and,
+// unless COLORTERM already said so, whether it takes 24-bit colors: it
+// sets one and reads it back (DECRQSS), which xterm, kitty, WezTerm,
+// foot, Ghostty and others answer, over SSH too.
+func probeTerminal(timeout time.Duration) (bg [3]uint8, ok bool) {
 	if !isTTY(os.Stdin) || !isTTY(os.Stderr) || !lineEditing {
-		return 0, 0, 0, false
+		return bg, false
 	}
 	restore, err := makeRaw(os.Stdin)
 	if err != nil {
-		return 0, 0, 0, false
+		return bg, false
 	}
 	defer restore()
-	// The background query, then Device Attributes, which every terminal
-	// answers: once that reply is in, nothing late can leak into the
-	// input (a terminal without OSC 11 support answers only the second).
-	os.Stderr.WriteString("\x1b]11;?\x07\x1b[c")
+	// Then Device Attributes, which every terminal answers: once that
+	// reply is in, nothing late can leak into the input (a terminal that
+	// knows neither query answers only this one).
+	q := "\x1b]11;?\x07"
+	if !truecolor && os.Getenv("TERM") != "linux" {
+		q += "\x1b[48;2;1;2;3m\x1bP$qm\x1b\\\x1b[0m"
+	}
+	os.Stderr.WriteString(q + "\x1b[c")
 	var reply []byte
 	deadline := time.Now().Add(timeout)
 	buf := make([]byte, 64)
-	for len(reply) < 256 {
+	for len(reply) < 512 {
 		wait := time.Until(deadline)
 		if wait <= 0 || !inputReady(os.Stdin, wait) {
 			break
@@ -120,7 +128,22 @@ func queryBackground(timeout time.Duration) (r, g, b uint8, ok bool) {
 			break
 		}
 	}
-	return parseOSC11(string(reply))
+	if sgrEcho(string(reply)) {
+		truecolor = true
+	}
+	bg[0], bg[1], bg[2], ok = parseOSC11(string(reply))
+	return bg, ok
+}
+
+// sgrEcho reports whether a DECRQSS reply echoes the 24-bit color 1,2,3
+// (as "48;2;1;2;3" or "48:2::1:2:3").
+func sgrEcho(s string) bool {
+	i := strings.Index(s, "\x1bP1$r")
+	if i < 0 {
+		return false
+	}
+	s = s[i:]
+	return strings.Contains(s, "2;1;2;3") || strings.Contains(s, ":1:2:3")
 }
 
 // da1Done reports whether the Device Attributes reply (ESC [ ? … c) has

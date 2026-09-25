@@ -203,11 +203,11 @@ func doctor(u *ui, e *slashEnv, st *mcpState) {
 	}
 
 	term := firstNonEmpty(os.Getenv("TERM_PROGRAM"), os.Getenv("TERM"), "unknown")
-	colors := "256 colors"
-	if ct := os.Getenv("COLORTERM"); ct == "truecolor" || ct == "24bit" {
-		colors = "truecolor"
+	if truecolorTerm() {
+		ok("terminal", term+" · 24-bit color")
+	} else {
+		warn("terminal", term+" · 256 colors · if it can do more, export COLORTERM=truecolor")
 	}
-	ok("terminal", term+" · "+colors)
 
 	files := agent.ContextFiles(e.cfgRoot())
 	if len(files) == 0 {

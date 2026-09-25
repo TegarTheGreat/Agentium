@@ -117,6 +117,7 @@ var helpRows = [][2]string{
 	{"/usage  /config", "tokens used · current settings"},
 	{"/update", "install the latest release"},
 	{"/doctor  /mcp  /tools", "health check · MCP servers · available tools"},
+	{"/permissions", "what runs without asking; revoke approvals"},
 	{"/exit", "quit (also ctrl+d)"},
 }
 
@@ -131,7 +132,10 @@ var keyRows = [][2]string{
 	{"ctrl+r", "search your earlier messages"},
 	{"ctrl+g", "write the message in $EDITOR"},
 	{"ctrl+o", "full output of recent steps"},
-	{"↑ ↓", "history · ctrl+a/e/u/k/w edit the line"},
+	{"↑ ↓", "line above/below, else history"},
+	{"ctrl+k/u/w  ctrl+y", "cut to line end/start, a word · paste it back"},
+	{"ctrl+_  ctrl+s", "undo typing · put the draft aside (again: bring back)"},
+	{"alt+b/f  alt+d", "word left/right · cut the next word"},
 	{"@file.png", "attach an image"},
 }
 
@@ -685,11 +689,11 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
-		u.paint(cDim, "[y] yes  [a] always "+scope+"  [n] no  [t] no, and say why ›"))
+		u.paint(cDim, "[y] yes  [a] always "+scope+"  [p] always, in this project  [n] no  [t] no, and say why ›"))
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
-		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always · n no · t tell why", "", nil)
+		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always · p always here · n no · t tell why", "", nil)
 	}
 	u.setTitle("needs you")
 	u.notify("Agentium needs your answer: " + title)
@@ -725,7 +729,7 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 		gap := time.Since(last)
 		last = time.Now()
 		ans := strings.ToLower(k)
-		isAnswer := ans == "y" || ans == "a" || ans == "n" || ans == "t" || ans == "\r" || ans == "\n"
+		isAnswer := ans == "y" || ans == "a" || ans == "p" || ans == "n" || ans == "t" || ans == "\r" || ans == "\n"
 		if gap >= 400*time.Millisecond && isAnswer {
 			if next, ok := u.keyWithin(400 * time.Millisecond); !ok {
 				switch ans {
@@ -735,6 +739,9 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 				case "a":
 					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always"))
 					return "a", nil
+				case "p":
+					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always, in this project")+u.paint(cDim, " · /permissions to review"))
+					return "p", nil
 				case "t":
 					fmt.Fprint(os.Stderr, u.paint(cRed, "no")+"\n  "+u.paint(cInk, "tell Agentium:")+" ")
 					return "t:" + u.readReply(), nil

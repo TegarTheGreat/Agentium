@@ -376,6 +376,7 @@ type approver struct {
 	gate   *policy.Gate
 	enable bool
 	always map[string]bool // scopes approved with "always"
+	saved  map[string]bool // scopes approved for this project, kept on disk
 	// feedback is what the user said when declining, by action.
 	feedback map[string]string
 }
@@ -396,7 +397,7 @@ func (a *approver) ask(action, reason string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key, scope := alwaysScope(action, reason, a.gate.Root)
-	if a.gate.GetMode() == policy.Yolo || a.always[key] { // "always" chosen earlier
+	if a.gate.GetMode() == policy.Yolo || a.always[key] || a.saved[key] { // "always" chosen earlier
 		return true
 	}
 	remember := func() {
@@ -405,10 +406,23 @@ func (a *approver) ask(action, reason string) bool {
 		}
 		a.always[key] = true
 	}
+	keep := func() {
+		remember()
+		if a.saved == nil {
+			a.saved = map[string]bool{}
+		}
+		a.saved[key] = true
+		if err := saveApprovals(a.gate.Root, a.saved); err != nil {
+			fmt.Fprintln(os.Stderr, a.ui.dim("· could not save the approval: "+err.Error()))
+		}
+	}
 	if a.ui.live && lineEditing {
 		if k, err := a.ui.approve(action, reason, scope); err == nil {
-			if k == "a" {
+			switch k {
+			case "a":
 				remember()
+			case "p":
+				keep()
 			}
 			if fb, ok := strings.CutPrefix(k, "t:"); ok {
 				if a.feedback == nil {
@@ -416,12 +430,12 @@ func (a *approver) ask(action, reason string) bool {
 				}
 				a.feedback[action] = fb
 			}
-			return k == "y" || k == "a"
+			return k == "y" || k == "a" || k == "p"
 		}
 	}
 	a.ui.mu.Lock()
 	a.ui.endLine()
-	fmt.Fprintf(os.Stderr, "⚠ %s  (%s)\n  allow? [y]es / [N]o / [a]lways %s: ", action, reason, scope)
+	fmt.Fprintf(os.Stderr, "⚠ %s  (%s)\n  allow? [y]es / [N]o / [a]lways %s / [p] always, in this project: ", action, reason, scope)
 	a.ui.mu.Unlock()
 	line, _ := a.in.ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
@@ -429,6 +443,9 @@ func (a *approver) ask(action, reason string) bool {
 		return true
 	case "a", "always":
 		remember()
+		return true
+	case "p":
+		keep()
 		return true
 	}
 	return false
@@ -625,7 +642,7 @@ func run(args []string) error {
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
 	gate.Protected = gitProtected(cwd)
-	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON}
+	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON, saved: loadApprovals(cwd)}
 	if ap.enable {
 		gate.Approve, gate.Feedback = ap.ask, ap.takeFeedback
 	}
@@ -1178,7 +1195,7 @@ func run(args []string) error {
 				printSkills(skills)
 				continue
 			}
-			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box, mem: mem, mcp: mcps}); done {
+			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box, mem: mem, mcp: mcps, ap: ap}); done {
 				return nil
 			}
 			continue
@@ -1205,6 +1222,7 @@ type slashEnv struct {
 	box   string
 	mem   *memCtl
 	mcp   *mcpState
+	ap    *approver
 }
 
 // switchModel points the agent at ref and saves it as the default.
@@ -1509,6 +1527,8 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		a.Note = strings.Join(notes, "\n")
 		_ = sess.Save()
+	case "/permissions", "/allowed":
+		showPermissions(u, e.ap)
 	case "/mcp":
 		showMCP(u, cfg, e.mcp)
 	case "/tools":

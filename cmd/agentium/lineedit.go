@@ -94,6 +94,17 @@ type editor struct {
 	searching  bool
 	query      []rune
 	found      int // history index of the search match, -1 for none
+
+	killed   []rune      // the last text cut with ctrl+k/u/w (ctrl+y puts it back)
+	stash    []rune      // a draft put aside with ctrl+s
+	undo     []editState // ctrl+_ steps back through these
+	lastEdit string      // "type" while plain typing continues (one undo step)
+}
+
+// editState is the text and cursor, for undo.
+type editState struct {
+	buf []rune
+	pos int
 }
 
 // suggestion is one entry of the completion popup.
@@ -217,8 +228,11 @@ func (e *editor) render(width int) {
 	promptW := strWidth(prompt)
 	avail := max(width-promptW-1, 10)
 	var sb strings.Builder
-	if !e.searching && len(e.buf) == 0 && e.placeholder != "" {
-		sb.WriteString("\r" + prompt + "\x1b[2m" + truncate(e.placeholder, avail) + "\x1b[0m\x1b[K\r")
+	if ph := e.placeholder; !e.searching && len(e.buf) == 0 && (ph != "" || len(e.stash) > 0) {
+		if len(e.stash) > 0 {
+			ph = "draft put aside · ctrl+s brings it back"
+		}
+		sb.WriteString("\r" + prompt + "\x1b[2m" + truncate(ph, avail) + "\x1b[0m\x1b[K\r")
 		if promptW > 0 {
 			sb.WriteString("\x1b[" + itoa(promptW) + "C")
 		}
@@ -431,6 +445,7 @@ func (e *editor) readLine() (string, error) {
 	}
 	e.buf, e.pos = e.draft, len(e.draft)
 	e.draft, e.pastes, e.sugg, e.dismissed, e.searching = nil, nil, nil, "", false
+	e.undo, e.lastEdit = nil, ""
 	hi := len(e.hist.items)
 	var draft []rune
 	width := termWidth(e.out)
@@ -514,8 +529,11 @@ func (e *editor) readLine() (string, error) {
 				continue
 			}
 		}
+		before := editState{append([]rune(nil), e.buf...), e.pos}
 		switch k {
 		case "\x1b[200~":
+			e.pushUndo(before)
+			e.lastEdit = ""
 			pasting = true
 			continue
 		case "\r":
@@ -565,9 +583,13 @@ func (e *editor) readLine() (string, error) {
 			if e.pos < len(e.buf) {
 				e.buf = append(e.buf[:e.pos], e.buf[e.pos+1:]...)
 			}
-		case "\x01", "\x1b[H", "\x1bOH", "\x1b[1~": // Home
+		case "\x01", "\x1b[H", "\x1bOH", "\x1b[1~": // Home: start of the line
+			e.pos = e.lineStart(e.pos)
+		case "\x05", "\x1b[F", "\x1bOF", "\x1b[4~": // End: end of the line
+			e.pos = e.lineEnd(e.pos)
+		case "\x1b[1;5H", "\x1b<": // ctrl+home, alt+<: start of the text
 			e.pos = 0
-		case "\x05", "\x1b[F", "\x1bOF", "\x1b[4~": // End
+		case "\x1b[1;5F", "\x1b>": // ctrl+end, alt+>: end of the text
 			e.pos = len(e.buf)
 		case "\x1b[D", "\x02":
 			if e.pos > 0 {
@@ -591,19 +613,54 @@ func (e *editor) readLine() (string, error) {
 			for e.pos < len(e.buf) && e.buf[e.pos] != ' ' {
 				e.pos++
 			}
-		case "\x15": // Ctrl-U
-			e.buf, e.pos = e.buf[e.pos:], 0
-		case "\x0b": // Ctrl-K
-			e.buf = e.buf[:e.pos]
-		case "\x17": // Ctrl-W
+		case "\x15": // Ctrl-U: cut to the start of the line
+			i := e.lineStart(e.pos)
+			if i == e.pos && i > 0 {
+				i-- // at a line's start: join it to the previous one
+			}
+			e.cut(i, e.pos)
+		case "\x0b": // Ctrl-K: cut to the end of the line
+			j := e.lineEnd(e.pos)
+			if j == e.pos && j < len(e.buf) {
+				j++
+			}
+			e.cut(e.pos, j)
+		case "\x17", "\x1b\x7f", "\x1b\x08": // Ctrl-W, Alt-Backspace: cut the word before
 			i := e.pos
-			for i > 0 && e.buf[i-1] == ' ' {
+			for i > 0 && (e.buf[i-1] == ' ' || e.buf[i-1] == '\n') {
 				i--
 			}
-			for i > 0 && e.buf[i-1] != ' ' {
+			for i > 0 && e.buf[i-1] != ' ' && e.buf[i-1] != '\n' {
 				i--
 			}
-			e.buf, e.pos = append(e.buf[:i], e.buf[e.pos:]...), i
+			e.cut(i, e.pos)
+		case "\x1bd": // Alt-D: cut the word after
+			j := e.pos
+			for j < len(e.buf) && (e.buf[j] == ' ' || e.buf[j] == '\n') {
+				j++
+			}
+			for j < len(e.buf) && e.buf[j] != ' ' && e.buf[j] != '\n' {
+				j++
+			}
+			e.cut(e.pos, j)
+		case "\x19": // Ctrl-Y: put back what was cut
+			if len(e.killed) > 0 {
+				e.insert(string(e.killed))
+			}
+		case "\x1f", "\x1b[45;5u": // Ctrl-_ (ctrl+/ on most terminals): undo
+			if n := len(e.undo); n > 0 {
+				st := e.undo[n-1]
+				e.undo = e.undo[:n-1]
+				e.buf, e.pos = st.buf, min(st.pos, len(st.buf))
+			}
+			e.lastEdit = ""
+		case "\x13": // Ctrl-S: put the draft aside, or bring it back
+			if len(e.buf) > 0 {
+				e.stash = append([]rune(nil), e.buf...)
+				e.buf, e.pos = nil, 0
+			} else if len(e.stash) > 0 {
+				e.buf, e.pos, e.stash = e.stash, len(e.stash), nil
+			}
 		case "\x0c": // Ctrl-L
 			if f := activeFS(); f != nil {
 				f.redraw()
@@ -613,8 +670,12 @@ func (e *editor) readLine() (string, error) {
 		case "\x12": // Ctrl-R
 			e.searching, e.query, e.found = true, nil, -1
 			e.sugg = nil
-		case "\x1b[A", "\x10": // Up
-			if hi > 0 {
+		case "\x1b[A", "\x10": // Up: the line above, else older history
+			if ls := e.lineStart(e.pos); ls > 0 {
+				col := e.pos - ls
+				prev := e.lineStart(ls - 1)
+				e.pos = min(prev+col, ls-1)
+			} else if hi > 0 {
 				if hi == len(e.hist.items) {
 					draft = append([]rune(nil), e.buf...)
 				}
@@ -623,8 +684,11 @@ func (e *editor) readLine() (string, error) {
 				e.pos = len(e.buf)
 				e.dismissed = string(e.buf)
 			}
-		case "\x1b[B", "\x0e": // Down
-			if hi < len(e.hist.items) {
+		case "\x1b[B", "\x0e": // Down: the line below, else newer history
+			if le := e.lineEnd(e.pos); le < len(e.buf) {
+				col := e.pos - e.lineStart(e.pos)
+				e.pos = min(le+1+col, e.lineEnd(le+1))
+			} else if hi < len(e.hist.items) {
 				hi++
 				if hi == len(e.hist.items) {
 					e.buf = draft
@@ -641,10 +705,53 @@ func (e *editor) readLine() (string, error) {
 				e.insert("  ")
 			}
 		}
+		if k != "\x1f" && k != "\x1b[45;5u" && string(before.buf) != string(e.buf) {
+			// Plain typing is one undo step until a space or another edit.
+			kind := "edit"
+			if len([]rune(k)) == 1 && k != " " && k != "\n" && k[0] >= 0x20 {
+				kind = "type"
+			}
+			if kind != "type" || e.lastEdit != "type" {
+				e.pushUndo(before)
+			}
+			e.lastEdit = kind
+		}
 		e.suggest()
 		width = termWidth(e.out)
 		e.render(width)
 	}
+}
+
+func (e *editor) pushUndo(st editState) {
+	if len(e.undo) >= 200 {
+		e.undo = e.undo[1:]
+	}
+	e.undo = append(e.undo, st)
+}
+
+// cut removes buf[i:j] into the kill buffer.
+func (e *editor) cut(i, j int) {
+	if i >= j {
+		return
+	}
+	e.killed = append([]rune(nil), e.buf[i:j]...)
+	e.buf = append(e.buf[:i], e.buf[j:]...)
+	e.pos = i
+}
+
+// lineStart and lineEnd bound the input line holding position p.
+func (e *editor) lineStart(p int) int {
+	for p > 0 && e.buf[p-1] != '\n' {
+		p--
+	}
+	return p
+}
+
+func (e *editor) lineEnd(p int) int {
+	for p < len(e.buf) && e.buf[p] != '\n' {
+		p++
+	}
+	return p
 }
 
 // insertPaste inserts pasted text; a large paste becomes a chip.

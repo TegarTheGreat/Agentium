@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,13 +48,14 @@ func shellCommand(u *ui, a *agent.Agent, cwd, cmdline string) {
 		out.WriteString(err.Error())
 	}
 	text := out.String()
-	call := provider.ToolCall{Name: "bash", Args: []byte(fmt.Sprintf(`{"cmd":%q}`, cmdline))}
+	args, _ := json.Marshal(map[string]string{"cmd": cmdline})
+	call := provider.ToolCall{Name: "bash", Args: args}
 	icon := u.paint(cGreen, "✓")
 	if code != 0 {
 		icon = u.paint(cRed, "✗")
 	}
 	width := termWidth(os.Stderr) - 1
-	fmt.Fprintf(os.Stderr, "  %s %s %s%s\n", icon, u.chip("bash"), truncate(sanitize(cmdline), width-30),
+	fmt.Fprintf(os.Stderr, "  %s %s %s%s\n", icon, u.chip("bash"), truncate(u.detail(call), width-30),
 		u.paint(cDim, fmt.Sprintf(" %.1fs · exit %d · you ran this", time.Since(start).Seconds(), code)))
 	lines := strings.Split(strings.TrimRight(ansiRE.ReplaceAllString(text, ""), "\n"), "\n")
 	if len(lines) > 20 {

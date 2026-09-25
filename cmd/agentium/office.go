@@ -368,10 +368,14 @@ func to256(c rgb) int {
 	return 16 + 36*q(c.r) + 6*q(c.g) + q(c.b)
 }
 
-func truecolorTerm() bool {
+func truecolorTerm() bool { return truecolor }
+
+// truecolor: the terminal takes 24-bit colors, from COLORTERM or, since
+// SSH rarely forwards that, from asking the terminal (see probeTerminal).
+var truecolor = func() bool {
 	ct := os.Getenv("COLORTERM")
 	return ct == "truecolor" || ct == "24bit"
-}
+}()
 
 var (
 	colSkin    = rgb{241, 194, 150}

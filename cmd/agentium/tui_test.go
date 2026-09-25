@@ -214,3 +214,43 @@ func TestCustomCommands(t *testing.T) {
 		t.Fatalf("empty: %q %v", msg, ok)
 	}
 }
+
+func TestSgrEcho(t *testing.T) {
+	for s, want := range map[string]bool{
+		"\x1bP1$r0;48;2;1;2;3m\x1b\\\x1b[?62;22c": true,
+		"\x1bP1$r48:2::1:2:3m\x1b\\":              true,
+		"\x1bP1$r0;48;5;16m\x1b\\":                false, // mapped to 256 colors
+		"\x1bP0$r\x1b\\":                          false,
+		"\x1b[?1;2c":                              false,
+	} {
+		if sgrEcho(s) != want {
+			t.Errorf("sgrEcho(%q) = %v", s, !want)
+		}
+	}
+}
+
+func TestEditorLinesAndCut(t *testing.T) {
+	e := &editor{buf: []rune("ab\ncdef\ng"), pos: 5}
+	if e.lineStart(5) != 3 || e.lineEnd(5) != 7 || e.lineStart(0) != 0 || e.lineEnd(8) != 9 {
+		t.Fatal("line bounds")
+	}
+	e.cut(3, 5)
+	if string(e.buf) != "ab\nef\ng" || string(e.killed) != "cd" || e.pos != 3 {
+		t.Fatalf("cut: %q %q %d", string(e.buf), string(e.killed), e.pos)
+	}
+}
+
+func TestProjectApprovalsPersist(t *testing.T) {
+	t.Setenv("AGENTIUM_HOME", t.TempDir())
+	root := t.TempDir()
+	if err := saveApprovals(root, map[string]bool{"bash:go": true, "write": true}); err != nil {
+		t.Fatal(err)
+	}
+	got := loadApprovals(root)
+	if !got["bash:go"] || !got["write"] || len(got) != 2 {
+		t.Fatalf("loaded %v", got)
+	}
+	if d := describeApproval("bash:go"); d != "commands starting with `go`" {
+		t.Fatal(d)
+	}
+}

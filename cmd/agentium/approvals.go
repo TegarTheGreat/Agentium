@@ -1,0 +1,136 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/tegarthegreat/agentium/internal/config"
+)
+
+// Approvals kept for a project ("p" at an approval): stored in agentium's
+// own data folder, never in the repository, so a cloned project cannot
+// approve anything for itself.
+
+func approvalsPath(root string) string {
+	return filepath.Join(config.ProjectDir(config.ProjectRoot(root)), "approvals.json")
+}
+
+func loadApprovals(root string) map[string]bool {
+	out := map[string]bool{}
+	b, err := os.ReadFile(approvalsPath(root))
+	if err != nil {
+		return out
+	}
+	var keys []string
+	if json.Unmarshal(b, &keys) == nil {
+		for _, k := range keys {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+func saveApprovals(root string, set map[string]bool) error {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	b, _ := json.MarshalIndent(keys, "", "  ")
+	p := approvalsPath(root)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, p)
+}
+
+// describeApproval turns a scope key back into words.
+func describeApproval(key string) string {
+	switch {
+	case key == "write":
+		return "file changes in the workspace"
+	case strings.HasPrefix(key, "bash:"):
+		return "commands starting with `" + strings.TrimPrefix(key, "bash:") + "`"
+	case strings.HasPrefix(key, "bash="):
+		return "the command `" + strings.TrimPrefix(key, "bash=") + "`"
+	case strings.HasPrefix(key, "network="):
+		return "network for `" + strings.TrimPrefix(key, "network=") + "`"
+	case strings.HasPrefix(key, "write="):
+		return "changes to " + strings.TrimPrefix(key, "write=")
+	case strings.HasPrefix(key, "read:"):
+		return "reading " + strings.TrimPrefix(key, "read:")
+	case strings.HasPrefix(key, "fetch:"):
+		return "fetching from " + strings.TrimPrefix(key, "fetch:")
+	}
+	return key
+}
+
+// showPermissions lists what is approved without asking, and lets the
+// user take approvals back.
+func showPermissions(u *ui, ap *approver) {
+	if ap == nil {
+		return
+	}
+	ap.mu.Lock()
+	type row struct {
+		key   string
+		saved bool
+	}
+	var rows []row
+	for k := range ap.saved {
+		rows = append(rows, row{k, true})
+	}
+	for k := range ap.always {
+		if !ap.saved[k] {
+			rows = append(rows, row{k, false})
+		}
+	}
+	mode := string(ap.gate.GetMode())
+	ap.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].saved != rows[j].saved {
+			return rows[i].saved
+		}
+		return rows[i].key < rows[j].key
+	})
+	fmt.Fprintln(os.Stderr)
+	u.note("Mode: " + mode + " · shift+tab or /mode changes it")
+	if len(rows) == 0 {
+		u.note("Nothing is approved in advance. At an approval, a = always this session, p = always in this project.")
+		return
+	}
+	items := []menuItem{{value: "", label: "Done"}}
+	for _, r := range rows {
+		where := "this session"
+		if r.saved {
+			where = "this project"
+		}
+		items = append(items, menuItem{value: r.key, label: truncate(describeApproval(r.key), 60), hint: where + " · Enter revokes"})
+	}
+	pick, err := u.choose("Approved without asking", items, "", false)
+	if err != nil || pick == "" {
+		return
+	}
+	ap.mu.Lock()
+	delete(ap.always, pick)
+	wasSaved := ap.saved[pick]
+	delete(ap.saved, pick)
+	var serr error
+	if wasSaved {
+		serr = saveApprovals(ap.gate.Root, ap.saved)
+	}
+	ap.mu.Unlock()
+	if serr != nil {
+		u.failure(serr.Error())
+		return
+	}
+	u.success("Revoked: " + describeApproval(pick))
+}
