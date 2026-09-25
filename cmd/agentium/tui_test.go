@@ -373,3 +373,18 @@ func TestVtermKeepsLinks(t *testing.T) {
 		t.Fatalf("stripped %q", p)
 	}
 }
+
+func TestUserTurns(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Text: "<recall>x</recall>\n\nfix the bug"},
+		{Role: provider.RoleAssistant, Text: "ok"},
+		{Role: provider.RoleTool, Text: "result"},
+		{Role: provider.RoleUser, Text: "[The user sent this while you were working; take it into account now:]\nalso tests"},
+		{Role: provider.RoleUser, Text: "[agentium] note"},
+		{Role: provider.RoleUser, Text: "now commit"},
+	}
+	got := userTurns(msgs)
+	if len(got) != 2 || got[0].words != "fix the bug" || got[1].index != 5 {
+		t.Fatalf("turns %+v", got)
+	}
+}

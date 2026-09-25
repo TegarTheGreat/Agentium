@@ -1375,6 +1375,10 @@ func run(args []string) error {
 				printSkills(skills)
 				continue
 			}
+			if line == "/rewind" && ed != nil && len(a.Messages) > 0 {
+				rewind(u, a, sess, store, ed)
+				continue
+			}
 			if (line == "/handoff" || strings.HasPrefix(line, "/handoff ")) && ed != nil {
 				if len(a.Messages) == 0 {
 					u.note("nothing to hand off yet")
@@ -1716,6 +1720,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 			fmt.Fprintln(os.Stderr, "·", err)
 			return false
 		}
+		refreshChanges(sess.Cwd)
 		a.Note = note
 		_ = sess.Save()
 	case "/export":

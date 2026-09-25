@@ -100,7 +100,7 @@ func (u *ui) prompt(plan bool) string {
 var helpRows = [][2]string{
 	{"Work", ""},
 	{"/plan  /go", "investigate read-only, then carry out the plan"},
-	{"/undo  /rewind", "revert the last turn, or back to an earlier one (esc esc)"},
+	{"/undo  /rewind", "revert the last turn · go back before a message: conversation, files or both (esc esc)"},
 	{"/diff  /copy", "what changed · copy the last reply"},
 	{"/review  /commit  /pr", "review the changes · commit them · open a pull request"},
 	{"/init", "write AGENTS.md for this repository"},

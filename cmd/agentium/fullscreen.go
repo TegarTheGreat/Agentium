@@ -325,6 +325,14 @@ func (f *fullscreen) setTodos(items []todoItem) {
 }
 
 // addChange records an edit for the CHANGES section.
+// resetChanges replaces the change list (after an undo or a rewind).
+func (f *fullscreen) resetChanges(cs []fileChange) {
+	f.mu.Lock()
+	f.changes = cs
+	f.dirty = true
+	f.mu.Unlock()
+}
+
 func (f *fullscreen) addChange(path string, add, del int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
