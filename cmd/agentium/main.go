@@ -1016,7 +1016,7 @@ func run(args []string) error {
 			}
 		}
 	}
-	var replies, edited []string
+	var replies []string
 	var stopHooks, userPromptHooks []string
 	startContext := ""
 	if cfg.Hooks != nil {
@@ -1087,16 +1087,6 @@ func run(args []string) error {
 			}
 			if t := strings.TrimSpace(firstNonEmpty(r.Thought, r.Reasoning)); t != "" {
 				u.keepThought(t) // ctrl+o shows it
-			}
-			for _, c := range r.ToolCalls {
-				if c.Name == "edit" {
-					var m map[string]any
-					if jsonUnmarshal(c.Args, &m) == nil {
-						if p, ok := m["path"].(string); ok {
-							edited = appendUnique(edited, p)
-						}
-					}
-				}
 			}
 		},
 	}
@@ -1221,7 +1211,7 @@ func run(args []string) error {
 	}
 	turn := func(input string) error {
 		curPrompt = input
-		replies, edited = nil, nil
+		replies = nil
 		send := input
 		if imgs, notes := mentionedImages(input, cwd, a.Env.Vision, gate.Inside); len(imgs)+len(notes) > 0 {
 			a.Attach = imgs
@@ -1316,7 +1306,7 @@ func run(args []string) error {
 			}
 		}
 		if mem != nil {
-			mem.afterTurn(input, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), u.line)
+			mem.afterTurn(input, replies, a.Ledger.TurnEdited(), a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), u.line)
 		}
 		runStopHooks(stopHooks, cwd)
 		active.Store(nil)
@@ -1368,7 +1358,21 @@ func run(args []string) error {
 		defer oneShotModel()() // before the session event: it names the model
 		jw := newJSONWriter(os.Stdout)
 		jw.emit(map[string]any{"type": "session", "id": sess.ID, "model": res.Provider + "/" + res.Model, "sandbox": a.Env.Sandbox != nil, "mode": string(gate.GetMode())})
-		a.Events.Text = func(d string) { jw.emit(map[string]any{"type": "text", "text": d}) }
+		// Text streamed by an attempt that then fails is sent again by the
+		// retry: the retry event says to drop it (discard_text).
+		var partial atomic.Bool
+		a.Events.Text = func(d string) {
+			partial.Store(true)
+			jw.emit(map[string]any{"type": "text", "text": d})
+		}
+		a.Events.TurnFinish = func(prev func(provider.Response)) func(provider.Response) {
+			return func(r provider.Response) {
+				partial.Store(false)
+				if prev != nil {
+					prev(r)
+				}
+			}
+		}(a.Events.TurnFinish)
 		a.Events.ToolStart = func(c provider.ToolCall) {
 			jw.emit(map[string]any{"type": "tool_call", "id": c.ID, "name": c.Name, "args": c.Args})
 		}
@@ -1388,7 +1392,7 @@ func run(args []string) error {
 		}
 		a.Events.Notice = func(msg string) { jw.emit(map[string]any{"type": "notice", "message": msg}) }
 		a.Events.Retry = func(err error, wait time.Duration) {
-			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds()})
+			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds(), "discard_text": partial.Swap(false)})
 		}
 		t0 := time.Now()
 		var once sync.Once
@@ -1399,9 +1403,14 @@ func run(args []string) error {
 				}
 				us, spent := a.Totals()
 				result := map[string]any{"type": "result", "ok": err == nil, "text": final, "turns": a.Turns,
-					"usage": us, "cost_usd": spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": edited}
+					"usage": us, "cost_usd": spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": a.Ledger.TurnEdited()}
 				if err != nil {
 					result["error"] = err.Error()
+				}
+				// A script resuming this run with --session must know when
+				// there is nothing to resume.
+				if e := saveError(); e != "" {
+					result["save_error"] = e
 				}
 				jw.emit(result)
 			})

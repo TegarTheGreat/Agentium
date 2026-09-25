@@ -379,6 +379,13 @@ var saveMu sync.Mutex // the turn and a signal may both save
 
 // saveSession writes the conversation; a failure is reported (once per
 // kind), since silently losing the history is worse than a warning.
+// saveError is why the last save failed, or "" after a good one.
+func saveError() string {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	return saveFailed
+}
+
 func saveSession(sess *session.Session) {
 	saveMu.Lock()
 	defer saveMu.Unlock()

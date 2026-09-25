@@ -497,7 +497,7 @@ func (s *acpServer) prompt(m rpcMsg) {
 	update := func(u map[string]any) {
 		s.notify("session/update", map[string]any{"sessionId": ss.id, "update": u})
 	}
-	var replies, edited []string
+	var replies []string
 	a.Events = agent.Events{
 		Text: func(d string) {
 			update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": d}})
@@ -543,16 +543,6 @@ func (s *acpServer) prompt(m rpcMsg) {
 			if r.Text != "" {
 				replies = append(replies, r.Text)
 			}
-			for _, c := range r.ToolCalls {
-				if c.Name == "edit" {
-					var mm map[string]any
-					if json.Unmarshal(c.Args, &mm) == nil {
-						if path, ok := mm["path"].(string); ok {
-							edited = appendUnique(edited, path)
-						}
-					}
-				}
-			}
 		},
 	}
 	send := text
@@ -567,7 +557,7 @@ func (s *acpServer) prompt(m rpcMsg) {
 	}
 	_, err := a.Run(ctx, send)
 	if ss.mem != nil {
-		ss.mem.afterTurn(text, replies, edited, a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), func(string) {})
+		ss.mem.afterTurn(text, replies, a.Ledger.TurnEdited(), a.Ledger.TurnErrors(), a.Ledger.Lessons(), a.Ledger.Untrusted(), func(string) {})
 	}
 	stop := "end_turn"
 	switch {

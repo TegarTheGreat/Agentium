@@ -98,7 +98,7 @@ On first run Agentium asks for a provider and key, then saves them. Environment 
 | `agentium -m ollama/qwen3-coder` | Use a specific model, including local ones |
 | `agentium --plan "how would we add OAuth?"` | Investigate read-only and answer with a plan |
 | `agentium --effort xhigh --fast "…"` | More reasoning, faster output where supported |
-| `agentium --json "…"` | JSON Lines events for CI (exit codes 0/1/2/130) |
+| `agentium --json "…"` | JSON Lines events for CI (exit codes 0/1/2/130): `session`, `text`, `tool_call`, `tool_result` (bash adds `exit`), `notice`, `retry` (`discard_text`: drop the text streamed since the last reply), and a final `result` with cost, `files_changed` and any `save_error` |
 | `agentium --max-cost 0.50 "…"` | Stop once the session has cost $0.50 |
 | `agentium --best-of 3 --check "go test ./..." "…"` | Run 3 attempts in parallel worktrees, keep the passing one with the smallest diff |
 | `agentium "why does @screenshot.png look broken?"` | Attach an image to the prompt |

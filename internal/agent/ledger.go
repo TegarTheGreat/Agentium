@@ -30,7 +30,8 @@ type Ledger struct {
 
 	// Per user turn.
 	turnErrors []string
-	untrusted  bool // web pages or MCP output entered the context
+	turnEdited []string // files edits changed this turn (successful ones)
+	untrusted  bool     // web pages or MCP output entered the context
 }
 
 type cmdRecord struct {
@@ -53,8 +54,16 @@ const (
 
 func (l *Ledger) startTurn() {
 	l.mu.Lock()
-	l.turnErrors, l.untrusted, l.lessons = nil, false, nil
+	l.turnErrors, l.untrusted, l.lessons, l.turnEdited = nil, false, nil, nil
 	l.mu.Unlock()
+}
+
+// TurnEdited returns the files this turn's edits changed (failed or
+// denied edits are not listed).
+func (l *Ledger) TurnEdited() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.turnEdited...)
 }
 
 // Lessons returns this turn's resolved failures: what failed and what
@@ -79,6 +88,7 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 		l.read = pushUnique(l.read, str("path"), ledgerFiles)
 	case name == "edit" && err == nil:
 		l.edited = pushUnique(l.edited, str("path"), ledgerFiles)
+		l.turnEdited = pushUnique(l.turnEdited, str("path"), 1000)
 		if l.errCmd != "" {
 			l.fixEdits = pushUnique(l.fixEdits, str("path"), 8)
 		}

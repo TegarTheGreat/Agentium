@@ -960,3 +960,17 @@ func TestStoppedReplyIsCharged(t *testing.T) {
 		t.Fatalf("usage %+v spent %v", us, spent)
 	}
 }
+
+func TestTurnEditedOnlySuccessful(t *testing.T) {
+	var l Ledger
+	l.startTurn()
+	l.record("edit", json.RawMessage(`{"path":"ok.go"}`), "edited", nil)
+	l.record("edit", json.RawMessage(`{"path":"bad.go"}`), "", errors.New("denied (policy)"))
+	if got := l.TurnEdited(); len(got) != 1 || got[0] != "ok.go" {
+		t.Fatalf("got %v", got)
+	}
+	l.startTurn()
+	if len(l.TurnEdited()) != 0 {
+		t.Fatal("not reset per turn")
+	}
+}
