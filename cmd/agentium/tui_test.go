@@ -622,3 +622,10 @@ func TestDroppedImages(t *testing.T) {
 		t.Fatal("no vision: nothing attached")
 	}
 }
+
+func TestDroppedImageWindowsPath(t *testing.T) {
+	m := droppedImage.FindAllStringSubmatch(`look "C:\Users\me\Screen Shot.png" and C:\tmp\a.png`, -1)
+	if len(m) != 2 || m[0][1] != `"C:\Users\me\Screen Shot.png"` || m[1][1] != `C:\tmp\a.png` {
+		t.Fatalf("%q", m)
+	}
+}

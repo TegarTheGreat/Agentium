@@ -12,7 +12,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var droppedImage = regexp.MustCompile(`(?i)(?:^|\s)('(?:/|~/)[^']+\.(?:png|jpe?g|gif|webp)'|"(?:/|~/)[^"]+\.(?:png|jpe?g|gif|webp)"|(?:/|~/)(?:\\ |\S)+?\.(?:png|jpe?g|gif|webp))[.,;:!?)]?(?:\s|$)`)
+var droppedImage = regexp.MustCompile(`(?i)(?:^|\s)('(?:/|~/|[A-Za-z]:\\)[^']+\.(?:png|jpe?g|gif|webp)'|"(?:/|~/|[A-Za-z]:\\)[^"]+\.(?:png|jpe?g|gif|webp)"|(?:/|~/|[A-Za-z]:\\)(?:\\ |\S)+?\.(?:png|jpe?g|gif|webp))[.,;:!?)]?(?:\s|$)`)
 
 var imageMention = regexp.MustCompile(`(?i)(?:^|\s)@("[^"]+\.(?:png|jpe?g|gif|webp)"|\S+\.(?:png|jpe?g|gif|webp))`)
 
