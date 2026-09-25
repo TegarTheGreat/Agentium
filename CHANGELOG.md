@@ -4,6 +4,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-09-25
+
 ### Changed
 
 - An answered question folds into one line saying what was decided ("✓ Always allowed for this exact command · git clone …", "✗ Declined: not needed · ls"), so a run of approvals no longer fills the screen with option grids; the ask tool's questions fold the same way ("? question → answer").
