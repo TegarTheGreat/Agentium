@@ -1073,3 +1073,33 @@ func TestStripCdRoot(t *testing.T) {
 		}
 	}
 }
+
+// Another process writes the file after this edit read it: the edit must
+// refuse rather than silently drop that change.
+func TestEditRefusesConcurrentChange(t *testing.T) {
+	e := env(t)
+	write(t, e, "conc.txt", "a1\n")
+	call(t, readTool, e, `{"path":"conc.txt"}`)
+	p := filepath.Join(e.Root, "conc.txt")
+	e.BeforeWrite = func(string) { os.WriteFile(p, []byte("a1 from the other process\n"), 0o644) }
+	if _, err := call(t, editTool, e, `{"path":"conc.txt","old":"a1","new":"a2"}`); err == nil || !strings.Contains(err.Error(), "changed on disk") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "a1 from the other process\n" {
+		t.Fatalf("the other process's change was lost: %q", b)
+	}
+}
+
+func TestEditRefusesReadOnlyFile(t *testing.T) {
+	e := env(t)
+	write(t, e, "ro.txt", "keep\n")
+	p := filepath.Join(e.Root, "ro.txt")
+	os.Chmod(p, 0o444)
+	call(t, readTool, e, `{"path":"ro.txt"}`)
+	if _, err := call(t, editTool, e, `{"path":"ro.txt","old":"keep","new":"changed"}`); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "keep\n" {
+		t.Fatalf("read-only file changed: %q", b)
+	}
+}

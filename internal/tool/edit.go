@@ -3,6 +3,8 @@ package tool
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tegarthegreat/agentium/internal/fsx"
 	"github.com/tegarthegreat/agentium/internal/lint"
 )
 
@@ -65,6 +68,11 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	}
 	if exists && st.IsDir() {
 		return "", errors.New("path is a directory")
+	}
+	if exists && st.Mode().Perm()&0o222 == 0 {
+		// The atomic rename only needs the directory to be writable; a
+		// read-only file says it is not meant to change.
+		return "", fmt.Errorf("%s is read-only (mode %v); change its permissions first if it really should be edited", a.Path, st.Mode().Perm())
 	}
 	if exists && stale {
 		return "", errors.New("file changed on disk since you read it; read it again before editing")
@@ -123,7 +131,7 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	if env.BeforeWrite != nil {
 		env.BeforeWrite(p)
 	}
-	if err := writeAtomic(p, []byte(after), perm); err != nil {
+	if err := writeIfUnchanged(p, before, exists, []byte(after), perm); err != nil {
 		return "", err
 	}
 	env.markSeen(p)
@@ -426,6 +434,24 @@ func runPostEdit(env *Env, path string) string {
 		return ""
 	}
 	return "\n" + strings.Join(notes, "\n")
+}
+
+// writeIfUnchanged writes data to p unless p no longer holds before
+// (another process, e.g. a second agentium in the same project, wrote it
+// since it was read: its change would be silently lost). A lock shared by
+// all processes covers the compare and the write.
+func writeIfUnchanged(p string, before []byte, existed bool, data []byte, perm fs.FileMode) error {
+	h := sha256.Sum256([]byte(p))
+	release := fsx.Lock(filepath.Join(os.TempDir(), "agentium-locks", hex.EncodeToString(h[:12])+".lock"), 5*time.Second)
+	defer release()
+	cur, err := os.ReadFile(p)
+	switch {
+	case existed && (err != nil || !bytes.Equal(cur, before)):
+		return errors.New("file changed on disk while this edit was being made (another process wrote it); read it again and redo the edit")
+	case !existed && err == nil:
+		return errors.New("file was created by another process meanwhile; read it, then edit it")
+	}
+	return writeAtomic(p, data, perm)
 }
 
 func shellQuote(s string) string {

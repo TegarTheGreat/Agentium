@@ -4,6 +4,11 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Two agentium processes editing one file at the same moment no longer lose one change silently: the edit re-checks the file under a lock shared by all processes just before writing, and refuses if someone else wrote it.
+- `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
+
 ## [0.24.0] - 2026-09-25
 
 ### Added
