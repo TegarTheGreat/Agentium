@@ -4,6 +4,7 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 
 // Session is one saved conversation.
 type Session struct {
+	// Version is the file format (FormatVersion when written).
+	Version  int                `json:"version,omitempty"`
 	ID       string             `json:"id"`
 	Cwd      string             `json:"cwd"`
 	Title    string             `json:"title,omitempty"` // set with /rename
@@ -46,6 +49,10 @@ type Checkpoint struct {
 }
 
 const maxCheckpoints = 50
+
+// FormatVersion is the session file format this build writes. A file
+// with a higher one is left alone rather than misread and overwritten.
+const FormatVersion = 1
 
 // AddCheckpoint appends a snapshot, keeping the newest maxCheckpoints.
 func (s *Session) AddCheckpoint(id, prompt string) {
@@ -89,6 +96,7 @@ func (s *Session) Save() error {
 		return err
 	}
 	s.Updated = time.Now()
+	s.Version = FormatVersion
 	b, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -176,6 +184,14 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 			corruptMu.Unlock()
 			continue
 		}
+		if why := unreadable(&s); why != "" && s.Cwd == cwd {
+			// Loading it would send blank messages and, on save, replace
+			// the file with them.
+			corruptMu.Lock()
+			corrupt = append(corrupt, filepath.Join(dir(), n)+": "+why)
+			corruptMu.Unlock()
+			continue
+		}
 		if s.Cwd == cwd {
 			out = append(out, &s)
 			if len(out) >= max {
@@ -184,6 +200,23 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 		}
 	}
 	return out, nil
+}
+
+// unreadable says why a decoded session cannot be used, or "".
+func unreadable(s *Session) string {
+	if s.Version > FormatVersion {
+		return fmt.Sprintf("written by a newer agentium (format %d); update to continue it", s.Version)
+	}
+	empty := 0
+	for _, m := range s.Messages {
+		if m.Role == "" || m.Text == "" && len(m.ToolCalls) == 0 && len(m.Images) == 0 && len(m.Raw) == 0 && m.ToolCallID == "" && m.Reasoning == "" {
+			empty++
+		}
+	}
+	if len(s.Messages) > 0 && empty*2 > len(s.Messages) {
+		return fmt.Sprintf("%d of %d messages have no content this version can read", empty, len(s.Messages))
+	}
+	return ""
 }
 
 // Prune deletes sessions beyond the newest keep, and any older than
@@ -209,6 +242,20 @@ func Prune(keep int, maxAge time.Duration) {
 		}
 		if old && !titled(p) {
 			_ = os.Remove(p) // a session the user named is kept
+		}
+	}
+	// Lock files of sessions that are gone, unless a process holds one.
+	for _, e := range ents {
+		n := e.Name()
+		if filepath.Ext(n) != ".lock" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir(), strings.TrimSuffix(n, ".lock")+".json")); err == nil {
+			continue
+		}
+		if release, ok := fsx.TryLock(filepath.Join(dir(), n)); ok {
+			_ = os.Remove(filepath.Join(dir(), n))
+			release()
 		}
 	}
 }

@@ -11,6 +11,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - Shell output reaches the model without color codes and with progress bars reduced to their last frame (a 200-step bar sent 7,000 characters; now one line), for every command, not only terminal jobs.
 - With more than 40 MCP tools, the model finds them with `mcp__find` and runs them with `mcp__call` instead of receiving every schema: a 300-tool server added about 40k tokens to every request and went past OpenAI's 128-tool limit.
 - An MCP server that crashes is started again on the next call (up to 3 times a session) instead of staying dead until restart; the error shows the end of its stderr log. A call that was running when it crashed is not repeated, since it may have had effects.
+- A saved conversation in a format this version cannot read (newer, or foreign) is reported and left alone. It used to load as blank messages, get sent to the model, and then replace the file. Sessions now record their format version.
+- Old session lock files are cleaned up with the sessions.
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 
 ## [0.24.0] - 2026-09-25

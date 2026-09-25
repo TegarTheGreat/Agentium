@@ -900,7 +900,7 @@ func run(args []string) error {
 				prev = findSession(list, *sessionArg)
 			}
 			if prev == nil {
-				return fmt.Errorf("no saved conversation %q in this folder (agentium sessions lists them)", *sessionArg)
+				return fmt.Errorf("no saved conversation %q in this folder (/sessions inside agentium lists them)", *sessionArg)
 			}
 		} else {
 			prev, err = session.Latest(cwd)

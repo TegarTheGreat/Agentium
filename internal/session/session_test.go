@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,4 +73,52 @@ func TestCorruptReportedAndOwn(t *testing.T) {
 		t.Fatal("first owner")
 	}
 	defer release()
+}
+
+func TestUnreadableSessionNotLoaded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTIUM_HOME", home)
+	dir := filepath.Join(home, "sessions")
+	os.MkdirAll(dir, 0o700)
+	// An older or foreign format: messages carry "content", not "text".
+	foreign := `{"id":"20240101-000000.000","cwd":"/w","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]}`
+	os.WriteFile(filepath.Join(dir, "20240101-000000.000.json"), []byte(foreign), 0o600)
+	newer := `{"version":99,"id":"20240102-000000.000","cwd":"/w","messages":[{"role":"user","text":"hi"}]}`
+	os.WriteFile(filepath.Join(dir, "20240102-000000.000.json"), []byte(newer), 0o600)
+	TakeCorrupt()
+	if s, _ := Latest("/w"); s != nil {
+		t.Fatalf("loaded %s", s.ID)
+	}
+	got := strings.Join(TakeCorrupt(), "\n")
+	if !strings.Contains(got, "newer agentium") || !strings.Contains(got, "no content this version can read") {
+		t.Fatalf("reported: %s", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "20240101-000000.000.json")); string(b) != foreign {
+		t.Fatal("the file was changed")
+	}
+}
+
+func TestPruneRemovesStaleLocks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTIUM_HOME", home)
+	s := New("/w", "m")
+	s.Messages = []provider.Message{{Role: provider.RoleUser, Text: "hi"}}
+	s.Save()
+	release, _ := s.Own()
+	dir := filepath.Join(home, "sessions")
+	os.WriteFile(filepath.Join(dir, "gone.lock"), nil, 0o600)
+	os.WriteFile(filepath.Join(dir, "held.lock"), nil, 0o600)
+	held, _ := (&Session{ID: "held"}).Own()
+	defer held()
+	Prune(100, time.Hour)
+	if _, err := os.Stat(filepath.Join(dir, "gone.lock")); err == nil {
+		t.Error("a lock without a session was kept")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "held.lock")); err != nil {
+		t.Error("a lock another process holds was removed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, s.ID+".lock")); err != nil {
+		t.Error("a live session's lock was removed")
+	}
+	release()
 }
