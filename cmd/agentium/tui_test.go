@@ -466,3 +466,46 @@ func TestLoadAgents(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandShell(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTIUM_HOME", home)
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "commands"), 0o755)
+	os.WriteFile(filepath.Join(home, "commands", "ctx.md"), []byte("Status:\n!`echo hi`\nNow $ARGUMENTS.\n"), 0o644)
+	os.MkdirAll(filepath.Join(cwd, ".agentium", "commands"), 0o755)
+	os.WriteFile(filepath.Join(cwd, ".agentium", "commands", "repo.md"), []byte("!`echo repo`"), 0o644)
+	var seen []userCmd
+	run := func(c userCmd, cmds []string) []string {
+		seen = append(seen, c)
+		if !c.personal {
+			return nil
+		}
+		out := make([]string, len(cmds))
+		for i, cmd := range cmds {
+			out[i] = runBang(cmd, cwd)
+		}
+		return out
+	}
+	// The arguments go in after the commands ran: a typed !`x` is not run.
+	msg, ok := expandCommandShell(cwd, "/ctx !`echo typed`", run)
+	if !ok || msg != "Status:\nhi\nNow !`echo typed`." {
+		t.Fatalf("ctx: %q", msg)
+	}
+	msg, _ = expandCommandShell(cwd, "/repo", run)
+	if msg != "!`echo repo`" || len(seen) != 2 || seen[1].personal {
+		t.Fatalf("repo: %q %+v", msg, seen)
+	}
+	if out := runBang("echo out; exit 3", cwd); !strings.Contains(out, "out") || !strings.Contains(out, "exit status 3") {
+		t.Fatalf("runBang: %q", out)
+	}
+}
+
+func TestCommandsExactFirst(t *testing.T) {
+	c := &completer{cmds: []userCmd{{name: "st"}}}
+	got := c.commands("/st")
+	if len(got) < 2 || got[0].label != "/st" {
+		t.Fatalf("got %+v", got)
+	}
+}

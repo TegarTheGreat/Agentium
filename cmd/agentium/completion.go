@@ -115,6 +115,14 @@ func (c *completer) commands(prefix string) []suggestion {
 			out = append(out, suggestion{insert: name + " ", label: name, hint: "skill · " + firstLine(sk.Description)})
 		}
 	}
+	// What is typed in full comes first: Enter on /st runs /st, not /style.
+	for i, sg := range out {
+		if sg.label == prefix && i > 0 {
+			copy(out[1:i+1], out[:i])
+			out[0] = sg
+			break
+		}
+	}
 	return out
 }
 

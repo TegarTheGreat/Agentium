@@ -27,6 +27,7 @@ const prPrompt = `Open a pull request for the current branch. Check git status (
 
 type userCmd struct {
 	name, desc, path string
+	personal         bool // in your home folder, not a repository's
 }
 
 // userCommands finds the custom commands; a project's win over yours.
@@ -36,12 +37,13 @@ func userCommands(cwd string) []userCmd {
 		// Agentium's own folder wins over .claude's at the same level.
 		dirs = append([]string{filepath.Join(h, ".claude", "commands")}, dirs...)
 	}
+	personal := len(dirs)
 	root := config.ProjectRoot(cwd)
 	for _, d := range []string{root, cwd} {
 		dirs = append(dirs, filepath.Join(d, ".claude", "commands"), filepath.Join(d, ".agentium", "commands"))
 	}
 	byName := map[string]userCmd{}
-	for _, dir := range dirs {
+	for di, dir := range dirs {
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
 			ext := filepath.Ext(e.Name())
@@ -53,7 +55,7 @@ func userCommands(cwd string) []userCmd {
 				continue // a repository's file cannot take over /undo or /exit
 			}
 			p := filepath.Join(dir, e.Name())
-			byName[name] = userCmd{name: name, desc: commandDesc(p), path: p}
+			byName[name] = userCmd{name: name, desc: commandDesc(p), path: p, personal: di < personal}
 		}
 	}
 	var out []userCmd
@@ -106,6 +108,13 @@ func splitFront(s string) (front, body string) {
 // expandCommand turns /init, /review and custom commands into the message
 // to send; ok is false for anything else.
 func expandCommand(cwd, line string) (msg string, ok bool) {
+	return expandCommandShell(cwd, line, nil)
+}
+
+// expandCommandShell is expandCommand that also fills a custom command's
+// !`command` spans with their output, through shell; a nil shell (or one
+// that returns nil) leaves them as written.
+func expandCommandShell(cwd, line string, shell func(c userCmd, cmds []string) []string) (msg string, ok bool) {
 	name, args, _ := strings.Cut(strings.TrimPrefix(line, "/"), " ")
 	args = strings.TrimSpace(args)
 	withArgs := func(p string) string {
@@ -135,6 +144,14 @@ func expandCommand(cwd, line string) (msg string, ok bool) {
 			return "", false
 		}
 		_, body := splitFront(string(b))
+		// The file's own commands run before the arguments go in, so
+		// nothing typed after the command is run.
+		if cmds := bangCommands(body); len(cmds) > 0 && shell != nil {
+			if outs := shell(c, cmds); len(outs) == len(cmds) {
+				i := 0
+				body = bangCmd.ReplaceAllStringFunc(body, func(string) string { i++; return outs[i-1] })
+			}
+		}
 		msg := withArgs(strings.TrimSpace(body))
 		if strings.Contains(body, "$ARGUMENTS") || positional.MatchString(body) {
 			msg = strings.TrimSpace(expandArgs(body, args))

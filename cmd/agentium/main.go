@@ -1019,7 +1019,9 @@ func run(args []string) error {
 				u.line("· " + n)
 			}
 		}
-		if msg, ok := expandCommand(cwd, input); ok && strings.HasPrefix(input, "/") {
+		if msg, ok := expandCommandShell(cwd, input, func(c userCmd, cmds []string) []string {
+			return commandShell(u, c, cmds, cwd, false)
+		}); ok && strings.HasPrefix(input, "/") {
 			if msg == "" {
 				return fmt.Errorf("%s is an empty command file", strings.Fields(input)[0])
 			}
@@ -1421,7 +1423,9 @@ func run(args []string) error {
 				line += "\n\n" + extra
 			}
 		}
-		if msg, ok := expandCommand(cwd, line); ok && strings.HasPrefix(line, "/") && !skillCall(skills, line) {
+		if msg, ok := expandCommandShell(cwd, line, func(c userCmd, cmds []string) []string {
+			return commandShell(u, c, cmds, cwd, true)
+		}); ok && strings.HasPrefix(line, "/") && !skillCall(skills, line) {
 			if msg == "" {
 				u.note(strings.Fields(line)[0] + " is an empty command file; nothing sent")
 				continue
