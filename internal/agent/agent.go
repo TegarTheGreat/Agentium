@@ -580,6 +580,18 @@ func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessa
 	return t.Run(ctx, env, args)
 }
 
+// Charge adds usage from a call made outside Run (a side question, a
+// suggestion); priced only when priced is set (the call used this
+// agent's own model, whose price Cost knows).
+func (a *Agent) Charge(us provider.Usage, priced bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Usage.Add(us)
+	if priced && a.Cost != nil {
+		a.Spent += a.Cost(us)
+	}
+}
+
 // Reset clears the conversation.
 func (a *Agent) Reset() {
 	a.Messages = nil

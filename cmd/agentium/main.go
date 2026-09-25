@@ -876,6 +876,9 @@ func run(args []string) error {
 	}()
 
 	interactive := false // type-ahead only where queued input gets sent
+	sug := &suggester{}
+	suggestOn := cfg.Suggest != nil && *cfg.Suggest ||
+		cfg.Suggest == nil && (cfg.FastModel != "" || res.Known && res.Info.Price(1_000_000, 0, 0, 0) < 1)
 	// Session totals for the full-screen status bar.
 	var totalTok atomic.Int64
 	var totalCost atomic.Uint64 // float64 bits
@@ -931,6 +934,7 @@ func run(args []string) error {
 			stopTyping = u.startTyping(cancel)
 		}
 		checkpoints := len(sess.Checkpoints)
+		sug.clear()
 		spentBefore := a.Spent
 		st, err := a.Run(ctx, send)
 		// What this turn cost, sub-agents on their own model included.
@@ -957,6 +961,9 @@ func run(args []string) error {
 		u.mu.Lock()
 		u.endLine()
 		u.mu.Unlock()
+		if err == nil && interactive && suggestOn && u.live && len(replies) > 0 {
+			sug.guess(a, input, replies[len(replies)-1])
+		}
 		if !*quiet && u.live {
 			fmt.Fprintln(os.Stderr, u.turnSummary(st, err, cost))
 		} else if !*quiet {
@@ -1098,6 +1105,9 @@ func run(args []string) error {
 		if u.live {
 			ed.echo = u.userMessage
 			ed.placeholder = "Message Agentium…  / commands · @ files"
+			if suggestOn {
+				ed.ghost = sug.get
+			}
 		}
 		ed.complete = (&completer{root: cwd, skills: skills, cmds: userCommands(cwd)}).complete
 		var lastEsc time.Time

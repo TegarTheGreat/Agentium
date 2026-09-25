@@ -126,6 +126,7 @@ var helpRows = [][2]string{
 var keyRows = [][2]string{
 	{"enter", "send · while a turn runs: steer it at the next step"},
 	{"tab  ↑", "while a turn runs: queue for after · take a message back"},
+	{"tab (empty input)", "take the suggested next message (\"suggest\": false turns it off)"},
 	{"!command", "run a shell command yourself (the agent sees it)"},
 	{"ctrl+j  shift+enter", "new line (or end a line with \\)"},
 	{"/  @", "commands · mention a file (tab or enter picks)"},

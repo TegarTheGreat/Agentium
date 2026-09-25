@@ -95,6 +95,10 @@ type editor struct {
 	query      []rune
 	found      int // history index of the search match, -1 for none
 
+	// ghost, if set, returns a suggested message, shown dimmed while the
+	// input is empty; tab takes it. It may change while the editor waits.
+	ghost func() string
+
 	killed   []rune      // the last text cut with ctrl+k/u/w (ctrl+y puts it back)
 	stash    []rune      // a draft put aside with ctrl+s
 	undo     []editState // ctrl+_ steps back through these
@@ -228,9 +232,11 @@ func (e *editor) render(width int) {
 	promptW := strWidth(prompt)
 	avail := max(width-promptW-1, 10)
 	var sb strings.Builder
-	if ph := e.placeholder; !e.searching && len(e.buf) == 0 && (ph != "" || len(e.stash) > 0) {
+	if ph := e.placeholder; !e.searching && len(e.buf) == 0 && (ph != "" || len(e.stash) > 0 || e.ghostText() != "") {
 		if len(e.stash) > 0 {
 			ph = "draft put aside · ctrl+s brings it back"
+		} else if g := e.ghostText(); g != "" {
+			ph = g + "   ⇥ tab"
 		}
 		sb.WriteString("\r" + prompt + "\x1b[2m" + truncate(ph, avail) + "\x1b[0m\x1b[K\r")
 		if promptW > 0 {
@@ -453,6 +459,18 @@ func (e *editor) readLine() (string, error) {
 	pasting, lastCR := false, false
 	var paste strings.Builder
 	for {
+		if e.ghost != nil && !pasting {
+			// Redraw when a suggestion arrives while waiting for a key.
+			shown := e.ghost()
+			for !inputReady(e.in, 250*time.Millisecond) {
+				if g := e.ghost(); g != shown {
+					shown = g
+					if len(e.buf) == 0 && !e.searching {
+						e.render(termWidth(e.out))
+					}
+				}
+			}
+		}
 		k, err := e.key()
 		if err != nil {
 			return "", err
@@ -702,7 +720,11 @@ func (e *editor) readLine() (string, error) {
 			if k != "" && k[0] >= 0x20 && k[0] != 0x7f && k[0] != 0x1b {
 				e.insert(k)
 			} else if k == "\t" {
-				e.insert("  ")
+				if g := e.ghostText(); len(e.buf) == 0 && g != "" {
+					e.insert(g) // take the suggestion
+				} else {
+					e.insert("  ")
+				}
 			}
 		}
 		if k != "\x1f" && k != "\x1b[45;5u" && string(before.buf) != string(e.buf) {
@@ -720,6 +742,13 @@ func (e *editor) readLine() (string, error) {
 		width = termWidth(e.out)
 		e.render(width)
 	}
+}
+
+func (e *editor) ghostText() string {
+	if e.ghost == nil {
+		return ""
+	}
+	return e.ghost()
 }
 
 func (e *editor) pushUndo(st editState) {

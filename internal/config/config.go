@@ -32,12 +32,15 @@ type Config struct {
 	// StatusLine is a command whose first output line is shown in the
 	// status line (JSON about the session on stdin); default: git branch.
 	StatusLine string `json:"status_line,omitempty"`
-	Mode       string `json:"mode,omitempty"`  // ask | auto | yolo
-	UI         string `json:"ui,omitempty"`    // fullscreen (default) | classic
-	Theme      string `json:"theme,omitempty"` // auto (default) | dark | light
-	Mouse      *bool  `json:"mouse,omitempty"` // full screen: wheel scrolling (default); false keeps native selection
-	MaxTokens  int    `json:"max_tokens,omitempty"`
-	MaxTurns   int    `json:"max_turns,omitempty"`
+	// Suggest shows a guess of your next message after each reply (a
+	// small extra call); default on for cheap models or with fast_model.
+	Suggest   *bool  `json:"suggest,omitempty"`
+	Mode      string `json:"mode,omitempty"`  // ask | auto | yolo
+	UI        string `json:"ui,omitempty"`    // fullscreen (default) | classic
+	Theme     string `json:"theme,omitempty"` // auto (default) | dark | light
+	Mouse     *bool  `json:"mouse,omitempty"` // full screen: wheel scrolling (default); false keeps native selection
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	MaxTurns  int    `json:"max_turns,omitempty"`
 	// FetchPrivate lets the fetch tool reach localhost/private networks.
 	FetchPrivate bool `json:"fetch_private,omitempty"`
 	// Checkpoints snapshot the workspace before each changing turn so it
