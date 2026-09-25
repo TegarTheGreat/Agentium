@@ -6,6 +6,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- `agentium -p /command` uses the command's `model:` too (your own commands; a repository's cannot ask there).
 - Empty lessons that older versions filed into MEMORY.md are hidden from the model.
 
 ## [0.22.0] - 2026-09-25

@@ -1015,6 +1015,24 @@ func run(args []string) error {
 	// Session totals for the full-screen status bar.
 	var totalTok atomic.Int64
 	var totalCost atomic.Uint64 // float64 bits
+	// oneShotModel applies a custom command's model: to agentium -p /cmd
+	// (yours only: a repository's cannot ask here).
+	oneShotModel := func() func() {
+		c, ok := commandModel(cwd, *prompt)
+		if !ok {
+			return func() {}
+		}
+		if !c.personal {
+			u.note("/" + sanitize(c.name) + " is the repository's: its model is not used here")
+			return func() {}
+		}
+		r, err := useModelOnce(c.model, cfg, &res, a, fb, *maxCost)
+		if err != nil {
+			u.note("model " + sanitize(c.model) + " not used: " + firstLine(err.Error()))
+			return func() {}
+		}
+		return r
+	}
 	turn := func(input string) error {
 		curPrompt = input
 		replies, edited = nil, nil
@@ -1168,6 +1186,7 @@ func run(args []string) error {
 			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds()})
 		}
 		t0 := time.Now()
+		defer oneShotModel()()
 		err := turn(*prompt)
 		final := ""
 		if len(replies) > 0 {
@@ -1185,6 +1204,7 @@ func run(args []string) error {
 		return nil
 	}
 	if *prompt != "" {
+		defer oneShotModel()()
 		return turn(*prompt)
 	}
 
