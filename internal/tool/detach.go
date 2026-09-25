@@ -34,6 +34,7 @@ func (s *switchWriter) set(w io.Writer) {
 type detacher struct {
 	env *Env
 	cmd string
+	ch  chan struct{}
 }
 
 type detachKey struct{}
@@ -50,16 +51,22 @@ func detachFrom(ctx context.Context) *detacher {
 
 // arm marks a foreground command as running and returns the channel a
 // detach request arrives on.
+// Tool calls may run side by side: each running command has its own
+// channel, and Ctrl-B sends all of them to the background.
 func (d *detacher) arm() <-chan struct{} {
 	d.env.mu.Lock()
 	defer d.env.mu.Unlock()
-	d.env.detachCh = make(chan struct{}, 1)
-	return d.env.detachCh
+	if d.env.detachCh == nil {
+		d.env.detachCh = map[chan struct{}]bool{}
+	}
+	d.ch = make(chan struct{}, 1)
+	d.env.detachCh[d.ch] = true
+	return d.ch
 }
 
 func (d *detacher) disarm() {
 	d.env.mu.Lock()
-	d.env.detachCh = nil
+	delete(d.env.detachCh, d.ch)
 	d.env.mu.Unlock()
 }
 
@@ -68,14 +75,13 @@ func (d *detacher) disarm() {
 func (e *Env) DetachForeground() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.detachCh == nil {
-		return false
+	for ch := range e.detachCh {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
-	select {
-	case e.detachCh <- struct{}{}:
-	default:
-	}
-	return true
+	return len(e.detachCh) > 0
 }
 
 // adopt turns the running command into a job.

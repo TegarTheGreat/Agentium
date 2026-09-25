@@ -51,10 +51,10 @@ type Env struct {
 	locks    map[string]*sync.Mutex
 	mutOnce  *sync.Once
 	seen     map[string]stamp
-	shown    map[string]stamp // read results still in the conversation
-	gitg     *gitGuard        // git config snapshot after the last command
-	jobs     *jobTable        // background jobs
-	detachCh chan struct{}    // set while a foreground command can be sent to the background
+	shown    map[string]stamp       // read results still in the conversation
+	gitg     *gitGuard              // git config snapshot after the last command
+	jobs     *jobTable              // background jobs
+	detachCh map[chan struct{}]bool // set while a foreground command can be sent to the background
 	cix      *codemap.Index
 	cixMu    sync.Mutex // serializes index updates
 }
