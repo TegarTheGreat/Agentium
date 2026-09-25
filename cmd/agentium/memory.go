@@ -389,6 +389,10 @@ func saveSession(sess *session.Session) {
 	}
 	if err.Error() != saveFailed {
 		saveFailed = err.Error()
-		fmt.Fprintln(os.Stderr, "\x1b[33m· the conversation could not be saved: "+sanitize(firstLine(err.Error()))+"\x1b[0m")
+		msg := "· the conversation could not be saved: " + sanitize(firstLine(err.Error()))
+		if os.Getenv("NO_COLOR") == "" && isTTY(os.Stderr) {
+			msg = "\x1b[33m" + msg + "\x1b[0m"
+		}
+		fmt.Fprintln(os.Stderr, msg)
 	}
 }

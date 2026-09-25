@@ -61,7 +61,7 @@ func termWidth(f *os.File) int {
 	if r, _, _ := procGetScreenBufInfo.Call(f.Fd(), uintptr(unsafe.Pointer(&info))); r == 0 || info.Right <= info.Left {
 		return 80
 	}
-	return int(info.Right-info.Left) + 1
+	return max(int(info.Right-info.Left)+1, 20)
 }
 
 // Windows consoles show ANSI colors only with virtual terminal

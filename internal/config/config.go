@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -153,7 +154,36 @@ func readJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(b, v)
+	if err := json.Unmarshal(b, v); err != nil {
+		return jsonError(path, b, err)
+	}
+	return nil
+}
+
+// jsonError names the file, line and column of a JSON mistake, so a typo
+// in config.json is quick to find.
+func jsonError(path string, b []byte, err error) error {
+	off := -1
+	var se *json.SyntaxError
+	var te *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &se):
+		off = int(se.Offset)
+	case errors.As(err, &te):
+		off = int(te.Offset)
+	}
+	if off < 0 || off > len(b) {
+		return fmt.Errorf("%s: %v", path, err)
+	}
+	line, col := 1, 1
+	for _, c := range b[:off] {
+		if c == '\n' {
+			line, col = line+1, 1
+		} else {
+			col++
+		}
+	}
+	return fmt.Errorf("%s, line %d, column %d: %v", path, line, col, err)
 }
 
 func writeJSON(path string, v any, perm os.FileMode) error {

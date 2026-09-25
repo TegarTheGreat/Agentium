@@ -52,15 +52,20 @@ func makeRawOS(f *os.File) (func(), error) {
 
 func termWidth(f *os.File) int {
 	if fs := activeFS(); fs != nil && f == fs.pw {
-		return fs.width()
+		return max(fs.width(), minTermWidth)
 	}
 	var ws struct{ Row, Col, X, Y uint16 }
 	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
 	if e != 0 || ws.Col == 0 {
 		return 80
 	}
-	return int(ws.Col)
+	// Layouts need a few columns; a window narrower than that wraps
+	// instead of breaking the drawing code.
+	return max(int(ws.Col), minTermWidth)
 }
+
+// minTermWidth is the narrowest width layouts are computed for.
+const minTermWidth = 20
 
 // termRows is the terminal height (24 when unknown).
 func termRows(f *os.File) int {

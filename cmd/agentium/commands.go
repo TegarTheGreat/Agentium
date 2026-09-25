@@ -300,6 +300,10 @@ func openCheckpoints(cfg config.Config, root string) *checkpoint.Store {
 	}
 	s, err := checkpoint.Open(filepath.Join(config.Home(), "checkpoints"), root)
 	if err != nil {
+		if !errors.Is(err, checkpoint.ErrNoGit) {
+			// Undo silently missing is worse than a line saying so.
+			fmt.Fprintln(os.Stderr, "· undo is unavailable: "+sanitize(firstLine(err.Error())))
+		}
 		return nil
 	}
 	return s
