@@ -1044,6 +1044,23 @@ func run(args []string) error {
 				totalCost.Store(math.Float64bits(a.Spent))
 			}
 		}(a.Events.TurnFinish)
+		extra := &statusExtra{dir: cwd, command: cfg.StatusLine, session: func() map[string]any {
+			used, limit := a.ContextUsed()
+			model, _ := curModel.Load().(string)
+			return map[string]any{"model": model, "mode": string(gate.GetMode()), "cwd": cwd, "session_id": sess.ID,
+				"cost_usd": math.Float64frombits(totalCost.Load()), "tokens": totalTok.Load(),
+				"context_used": used, "context_max": limit}
+		}}
+		extra.refresh()
+		extra.every(15 * time.Second)
+		a.Events.TurnFinish = func(prev func(provider.Response)) func(provider.Response) {
+			return func(r provider.Response) {
+				if prev != nil {
+					prev(r)
+				}
+				extra.refresh()
+			}
+		}(a.Events.TurnFinish)
 		screen.mu.Lock()
 		screen.info = func() statusInfo {
 			used, limit := a.ContextUsed()
@@ -1052,7 +1069,8 @@ func run(args []string) error {
 				model = model[i+1:]
 			}
 			return statusInfo{model: model, mode: string(gate.GetMode()), box: box,
-				tokens: int(totalTok.Load()), cost: math.Float64frombits(totalCost.Load()), ctxUsed: used, ctxMax: limit}
+				tokens: int(totalTok.Load()), cost: math.Float64frombits(totalCost.Load()), ctxUsed: used, ctxMax: limit,
+				extra: extra.get()}
 		}
 		screen.mu.Unlock()
 		u.welcome(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)

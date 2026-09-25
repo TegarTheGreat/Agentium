@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -252,5 +253,33 @@ func TestProjectApprovalsPersist(t *testing.T) {
 	}
 	if d := describeApproval("bash:go"); d != "commands starting with `go`" {
 		t.Fatal(d)
+	}
+}
+
+func TestGitStatusAndSanitize(t *testing.T) {
+	dir := t.TempDir()
+	if gitStatus(dir) != "" {
+		t.Fatal("not a repository")
+	}
+	run := func(args ...string) {
+		c := exec.Command("git", args...)
+		c.Dir = dir
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Skipf("git: %v %s", err, out)
+		}
+	}
+	run("init", "-q", "-b", "work")
+	os.WriteFile(filepath.Join(dir, "a"), []byte("x"), 0o644)
+	if got := stripANSI(gitStatus(dir)); got != "work · 1 changed" {
+		t.Fatalf("got %q", got)
+	}
+	run("add", "a")
+	run("commit", "-qm", "a", "--no-gpg-sign")
+	if got := stripANSI(gitStatus(dir)); got != "work" {
+		t.Fatalf("got %q", got)
+	}
+	if got := sanitizeStatus("\x1b[32mok\x1b[0m\x1b]0;title\x07\x1b[2J!"); got != "\x1b[32mok\x1b[0m!\x1b[0m" {
+		t.Fatalf("sanitize %q", got)
 	}
 }

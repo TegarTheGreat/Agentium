@@ -44,6 +44,7 @@ type statusInfo struct {
 	tokens           int
 	cost             float64
 	ctxUsed, ctxMax  int
+	extra            string // git branch, or the user's status_line output
 }
 
 type todoItem struct{ text, status string }
@@ -666,6 +667,9 @@ func (f *fullscreen) statusRow() string {
 		}
 		left = " " + sgr(cAccent) + "◆ agentium\x1b[0m" + sgr(cGray) + " · \x1b[0m" + in.model + sgr(cGray) + " · \x1b[0m" +
 			sgr(modeColor) + in.mode + "\x1b[0m" + sgr(cGray) + " · " + in.box + "\x1b[0m"
+		if in.extra != "" {
+			left += sgr(cGray) + " · \x1b[0m" + in.extra
+		}
 	}
 	var right []string
 	if in.ctxMax > 0 && !f.sidebar() {
