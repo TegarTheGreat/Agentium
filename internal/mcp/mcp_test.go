@@ -55,6 +55,9 @@ func fakeServer() {
 				Arguments map[string]string `json:"arguments"`
 			}
 			json.Unmarshal(req.Params, &p)
+			if p.Name == "crash" {
+				os.Exit(3)
+			}
 			if p.Name == "fail" {
 				reply(map[string]any{"content": []any{map[string]any{"type": "text", "text": "boom"}}, "isError": true})
 			} else {
@@ -129,5 +132,43 @@ func TestCappedLog(t *testing.T) {
 	b, _ := os.ReadFile(f.Name())
 	if !strings.HasPrefix(string(b), "0123456012\n[log truncated") {
 		t.Fatalf("log = %q", b)
+	}
+}
+
+func TestRestartAfterCrash(t *testing.T) {
+	self, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, err := Start(ctx, "fake", Config{Command: self, Env: map[string]string{"AGENTIUM_FAKE_MCP": "1"}}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	cur := c
+	for i := 0; i < MaxRestarts; i++ {
+		if _, _, err := cur.CallTool(ctx, "crash", nil); err == nil {
+			t.Fatal("a crashing call succeeded")
+		}
+		for deadline := time.Now().Add(5 * time.Second); cur.Err() == nil && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if cur.Err() == nil {
+			t.Fatal("a dead server still looks up")
+		}
+		nc, err := cur.Restart(ctx)
+		if err != nil {
+			t.Fatalf("restart %d: %v", i+1, err)
+		}
+		if out, _, err := nc.CallTool(ctx, "echo", json.RawMessage(`{"text":"back"}`)); err != nil || !strings.HasPrefix(out, "echo: back") {
+			t.Fatalf("after restart: %q %v", out, err)
+		}
+		cur = nc
+	}
+	cur.CallTool(ctx, "crash", nil)
+	for deadline := time.Now().Add(5 * time.Second); cur.Err() == nil && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := cur.Restart(ctx); err == nil || !strings.Contains(err.Error(), "not restarting") {
+		t.Fatalf("restarts must stop after %d: %v", MaxRestarts, err)
 	}
 }

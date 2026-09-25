@@ -67,6 +67,11 @@ type Client struct {
 	closed chan struct{}
 	once   sync.Once
 	err    error
+
+	cfg      Config
+	dir      string
+	restarts int     // how many times Restart replaced this server
+	next     *Client // the replacement after a Restart, closed with this one
 }
 
 type response struct {
@@ -91,7 +96,7 @@ const protocolVersion = "2025-06-18"
 
 // Start connects to the server, performs the handshake and lists its tools.
 func Start(ctx context.Context, name string, cfg Config, dir string) (*Client, error) {
-	c := &Client{Name: name, wait: map[int64]chan response{}, closed: make(chan struct{})}
+	c := &Client{Name: name, wait: map[int64]chan response{}, closed: make(chan struct{}), cfg: cfg, dir: dir}
 	switch {
 	case cfg.URL != "" && cfg.Type == "sse":
 		tr, err := startSSE(ctx, c, cfg)
@@ -455,11 +460,46 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	return strings.TrimSpace(sb.String()), res.IsError, nil
 }
 
-// Close disconnects from (or stops) the server.
+// Close disconnects from (or stops) the server, and any replacement
+// Restart started.
 func (c *Client) Close() {
 	c.tr.close()
 	c.shutdown("closed")
+	c.mu.Lock()
+	next := c.next
+	c.mu.Unlock()
+	if next != nil {
+		next.Close()
+	}
 }
+
+// MaxRestarts bounds how often a crashed server is started again in one
+// session: one that keeps crashing is broken, not unlucky.
+const MaxRestarts = 3
+
+// Restart starts a server whose connection died again and returns the
+// new connection (Close on c closes it too).
+func (c *Client) Restart(ctx context.Context) (*Client, error) {
+	c.mu.Lock()
+	n := c.restarts
+	c.mu.Unlock()
+	if n >= MaxRestarts {
+		return nil, fmt.Errorf("mcp %s: stopped %d times, not restarting again this session", c.Name, n)
+	}
+	nc, err := Start(ctx, c.Name, c.cfg, c.dir)
+	c.mu.Lock()
+	c.restarts++
+	if err == nil {
+		nc.restarts = c.restarts
+		c.next = nc
+	}
+	c.mu.Unlock()
+	return nc, err
+}
+
+// LogTail is the end of the server's stderr log, to explain a failure
+// ("" when there is none).
+func (c *Client) LogTail() string { return logTail(c.cfg.LogPath) }
 
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
