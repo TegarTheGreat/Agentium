@@ -8,6 +8,10 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/tegarthegreat/agentium/internal/agent"
+	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/provider"
 )
 
 // A custom command can carry live context, as in Claude Code: !`git diff`
@@ -102,4 +106,48 @@ func hasFormatChars(s string) bool {
 		}
 	}
 	return false
+}
+
+// commandModel is the "model:" of the custom command line runs, if any.
+func commandModel(cwd, line string) string {
+	if !strings.HasPrefix(line, "/") {
+		return ""
+	}
+	name, _, _ := strings.Cut(strings.TrimPrefix(line, "/"), " ")
+	for _, c := range userCommands(cwd) {
+		if c.name == strings.ToLower(name) {
+			return c.model
+		}
+	}
+	return ""
+}
+
+// useModelOnce points the agent at ref for one turn; the returned func
+// puts the session's model back.
+func useModelOnce(ref string, cfg config.Config, res *provider.Resolved, a *agent.Agent, fb *provider.Fallback, maxCost float64) (func(), error) {
+	if fb != nil {
+		return nil, errors.New("not with a fallback chain")
+	}
+	auth, err := config.LoadAuth()
+	if err != nil {
+		return nil, err
+	}
+	nr, err := provider.Resolve(ref, cfg, auth)
+	if err != nil {
+		return nil, err
+	}
+	if maxCost > 0 && !nr.Known {
+		return nil, errors.New("no known price, and --max-cost could not count it")
+	}
+	old := *res
+	oc, om, ov, or, octx, oout := a.Client, a.Model, a.Env.Vision, a.Reasoning, a.ContextTokens, a.MaxOutput
+	*res = nr
+	a.Client, a.Model, a.Env.Vision = nr.Client, nr.Model, nr.Vision()
+	a.Reasoning = nr.Reasoning(or.Effort)
+	a.ContextTokens = firstPositive(cfg.ContextTokens, nr.Info.Context, provider.ContextWindow(nr.Model))
+	a.MaxOutput = nr.Info.Output
+	return func() {
+		*res = old
+		a.Client, a.Model, a.Env.Vision, a.Reasoning, a.ContextTokens, a.MaxOutput = oc, om, ov, or, octx, oout
+	}, nil
 }

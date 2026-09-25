@@ -29,6 +29,7 @@ const prPrompt = `Open a pull request for the current branch. Check git status (
 type userCmd struct {
 	name, desc, path string
 	hint             string // argument-hint: what to type after it
+	model            string // model: the model its turn runs on
 	personal         bool   // in your home folder, not a repository's
 }
 
@@ -67,8 +68,8 @@ func userCommands(cwd string) []userCmd {
 				continue // a repository's file cannot take over /undo or /exit
 			}
 			p := filepath.Join(dir, e.Name())
-			desc, hint := commandDesc(p)
-			byName[name] = userCmd{name: name, desc: desc, hint: hint, path: p, personal: di < personal}
+			desc, hint, model := commandDesc(p)
+			byName[name] = userCmd{name: name, desc: desc, hint: hint, model: model, path: p, personal: di < personal}
 		}
 	}
 	var out []userCmd
@@ -81,10 +82,10 @@ func userCommands(cwd string) []userCmd {
 
 // commandDesc is the front matter's description (or the first line) and
 // argument-hint.
-func commandDesc(path string) (desc, hint string) {
+func commandDesc(path string) (desc, hint, model string) {
 	b, err := readCapped(path, 1<<20)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	front, body := splitFront(string(b))
 	for _, l := range strings.Split(front, "\n") {
@@ -93,12 +94,14 @@ func commandDesc(path string) (desc, hint string) {
 			desc = strings.Trim(strings.TrimSpace(v), `"'`)
 		} else if v, ok := strings.CutPrefix(l, "argument-hint:"); ok {
 			hint = strings.Trim(strings.TrimSpace(v), `"'`)
+		} else if v, ok := strings.CutPrefix(l, "model:"); ok {
+			model = strings.Trim(strings.TrimSpace(v), `"'`)
 		}
 	}
 	if desc == "" {
 		desc = firstLine(strings.TrimSpace(body))
 	}
-	return sanitize(oneLine(desc, 200)), sanitize(oneLine(hint, 80))
+	return sanitize(oneLine(desc, 200)), sanitize(oneLine(hint, 80)), sanitize(oneLine(model, 100))
 }
 
 // builtinCommand reports whether /name is one of agentium's own.

@@ -576,3 +576,17 @@ func TestSkillDiff(t *testing.T) {
 		t.Fatalf("%q", n)
 	}
 }
+
+func TestCommandModel(t *testing.T) {
+	t.Setenv("AGENTIUM_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	os.MkdirAll(filepath.Join(cwd, ".agentium", "commands"), 0o755)
+	os.WriteFile(filepath.Join(cwd, ".agentium", "commands", "fastq.md"), []byte("---\nmodel: \"deepseek/deepseek-v4-flash\"\n---\nx"), 0o644)
+	if m := commandModel(cwd, "/fastq hi"); m != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("%q", m)
+	}
+	if m := commandModel(cwd, "fastq hi"); m != "" {
+		t.Fatalf("no slash: %q", m)
+	}
+}

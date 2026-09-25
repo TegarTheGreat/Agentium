@@ -1472,6 +1472,10 @@ func run(args []string) error {
 				sess.SystemHash = hashString(a.System)
 			}
 		}
+		cmdModel := ""
+		if !skillCall(skills, line) {
+			cmdModel = commandModel(cwd, line)
+		}
 		if skillCall(skills, line) {
 			// a skill: sent as it is, below
 		} else if msg, ok := expandCommandShell(cwd, line, func(c userCmd, cmds []string) []string {
@@ -1604,7 +1608,21 @@ func run(args []string) error {
 			}
 			continue
 		}
-		if err := turn(line); err != nil {
+		restore := func() {}
+		if cmdModel != "" {
+			// A command's own model ("model:" in its front matter) runs this
+			// one turn; the session's comes back after.
+			r, err := useModelOnce(cmdModel, cfg, &res, a, fb, *maxCost)
+			if err != nil {
+				u.note("model " + sanitize(cmdModel) + " not used: " + firstLine(err.Error()))
+			} else {
+				restore = r
+				u.note("this turn on " + res.Provider + "/" + res.Model)
+			}
+		}
+		err = turn(line)
+		restore()
+		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				fmt.Fprintln(os.Stderr, u.dim("· interrupted"))
 				continue
