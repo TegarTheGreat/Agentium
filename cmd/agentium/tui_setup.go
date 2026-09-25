@@ -105,6 +105,7 @@ var helpRows = [][2]string{
 	{"/review  /commit  /pr", "review the changes · commit them · open a pull request"},
 	{"/init", "write AGENTS.md for this repository"},
 	{"/btw <question>", "a side question, not added to the conversation"},
+	{"/watch", "act on comments you end with AI! (a change) or AI? (a question)"},
 	{"!command", "run a shell command yourself (the agent sees it)"},
 	{"Conversation", ""},
 	{"/context  /compact", "what fills the context · summarize to free it"},

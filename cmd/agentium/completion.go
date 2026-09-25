@@ -38,6 +38,7 @@ var slashCommands = []slashCmd{
 	{"/btw", "ask a side question (not added to the conversation)", true},
 	{"/theme", "auto · dark · light", false},
 	{"/vim", "vim keys in the message box (on/off)", false},
+	{"/watch", "act on AI! and AI? comments you save in the code (on/off)", false},
 	{"/memory", "what I remember, and where (edit to change it)", false},
 	{"/export", "save the conversation as Markdown", false},
 	{"/sessions", "list saved conversations", false},

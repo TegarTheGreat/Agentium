@@ -98,6 +98,9 @@ type editor struct {
 	// ghost, if set, returns a suggested message, shown dimmed while the
 	// input is empty; tab takes it. It may change while the editor waits.
 	ghost func() string
+	// inject, if set, returns a message to send now (from /watch) while
+	// the input is empty; "" for none.
+	inject func() string
 
 	vim        bool   // vim mode ("vim": true, /vim)
 	vimNormal  bool   // in vim's normal mode (else insert)
@@ -493,16 +496,29 @@ func (e *editor) readLine() (string, error) {
 	pasting, lastCR := false, false
 	var paste strings.Builder
 	for {
-		if e.ghost != nil && !pasting {
-			// Redraw when a suggestion arrives while waiting for a key.
-			shown := e.ghost()
-			for !inputReady(e.in, 250*time.Millisecond) {
-				if g := e.ghost(); g != shown {
+		if (e.ghost != nil || e.inject != nil) && !pasting {
+			// While waiting for a key: redraw when a suggestion arrives,
+			// and send a message that arrives from elsewhere (/watch).
+			shown := e.ghostText()
+			injected := ""
+			for injected == "" && !inputReady(e.in, 250*time.Millisecond) {
+				if g := e.ghostText(); g != shown {
 					shown = g
 					if len(e.buf) == 0 && !e.searching {
 						e.render(termWidth(e.out))
 					}
 				}
+				if e.inject != nil && len(e.buf) == 0 && !e.searching {
+					injected = e.inject()
+				}
+			}
+			if injected != "" {
+				e.sugg = nil
+				e.drawPopup(width, 0)
+				if e.echo != nil {
+					e.out.WriteString("\r\x1b[K" + e.echo(injected))
+				}
+				return injected, nil
 			}
 		}
 		k, err := e.key()

@@ -143,6 +143,8 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 
 **More folders.** `agentium --add-dir ../lib` (repeatable, or `"dirs"` in the config, or `/add-dir` in a session) lets the agent work in another directory as freely as in the current one (git internals there still ask). `/undo` and `/rewind` cover the main folder only. Your home folder and `/` cannot be added.
 
+**Work from your editor.** `/watch` watches the project. A comment you end with `AI!` (a change) or `AI?` (a question) is picked up when you save the file.
+
 **Vim keys.** `/vim` (or `"vim": true`) gives the message box normal and insert modes.
 
 **Parallel sessions.** `agentium --worktree NAME` works in a separate git worktree on branch `agentium/NAME`, so two sessions never edit the same files. When you leave, the worktree is removed if nothing changed; otherwise Agentium prints how to merge or remove it.

@@ -1191,6 +1191,12 @@ func run(args []string) error {
 		}
 	}()
 	var ed *editor
+	var watch *watcher // /watch
+	defer func() {
+		if watch != nil {
+			watch.close()
+		}
+	}()
 	if lineEditing && isTTY(os.Stderr) {
 		ed = &editor{in: os.Stdin, out: os.Stderr, hist: loadHistory(), prompt: "› "}
 		if u.live {
@@ -1346,6 +1352,20 @@ func run(args []string) error {
 		if strings.HasPrefix(line, "/") && !skillCall(skills, line) {
 			if line == "/skills" {
 				printSkills(skills)
+				continue
+			}
+			if line == "/watch" && ed != nil {
+				if watch != nil {
+					watch.close()
+					watch, ed.inject = nil, nil
+					u.success("Stopped watching for AI comments")
+				} else {
+					comp := &completer{root: cwd}
+					watch = newWatcher(cwd, comp.projectFiles)
+					ed.inject = watch.take
+					u.success("Watching the project: end a comment with AI! to ask for a change, AI? to ask a question" +
+						u.paint(cDim, " · /watch again stops"))
+				}
 				continue
 			}
 			if line == "/vim" && ed != nil {
