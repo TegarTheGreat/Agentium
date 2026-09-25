@@ -279,6 +279,7 @@ func (u *ui) permanent(s string) {
 	u.clearLive()
 	u.endLine()
 	fmt.Fprintln(os.Stderr, s)
+	u.lastPerm, u.subCount = s, 1
 	u.drawLive()
 }
 
@@ -336,7 +337,19 @@ func (u *ui) subAgentTool(task string, c provider.ToolCall) {
 	defer u.mu.Unlock()
 	u.lastKey = ""
 	label := u.kindColor(c.Name, styleFor(c.Name).label)
-	u.permanent("    " + mark + who + label + " " + u.paint(cDim, truncate(u.detail(c), termWidth(os.Stderr)-30)))
+	line := "    " + mark + who + label + " " + u.paint(cDim, truncate(u.detail(c), termWidth(os.Stderr)-30))
+	if line == u.lastPerm && !u.paused && c.Name != "bash" {
+		// The same step again (a staff member reading one file in parts):
+		// counted on its line.
+		n := u.subCount + 1
+		u.clearLive()
+		os.Stderr.WriteString("\033[1A\r\033[2K")
+		fmt.Fprintln(os.Stderr, line+u.paint(cDim, fmt.Sprintf(" ×%d", n)))
+		u.subCount = n
+		u.drawLive()
+		return
+	}
+	u.permanent(line)
 }
 
 func (u *ui) beginTurn() {
@@ -349,7 +362,7 @@ func (u *ui) beginTurn() {
 	if u.live && u.wrap != nil {
 		u.wrap.setMargin(2, "")
 	}
-	u.lastKey, u.afterTool = "", false
+	u.lastKey, u.lastPerm, u.afterTool = "", "", false
 	if u.live {
 		u.thinking, u.thinkT = true, time.Now()
 	}
@@ -426,6 +439,7 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 		}
 	}
 	u.keepOutput(c, out)
+	u.lastPerm = "" // a line printed here is not a sub-agent step to count on
 	icon, fail := u.paint(cGreen, "✓"), ""
 	if errors.Is(err, context.Canceled) {
 		icon, fail = u.paint(cYellow, "■"), "interrupted"
@@ -452,6 +466,13 @@ func (u *ui) toolDone(c provider.ToolCall, out string, err error, d time.Duratio
 	}
 	fail = truncate(fail, max(width/2, 20))
 	detail := truncate(u.detail(c), width-strWidth(name)-len(dur)-strWidth(fail)-8)
+	if f := activeFS(); f != nil && c.Name == "task" {
+		// Which staff member did it, in their color.
+		prompt, _ := taskArgs(c)
+		if col, who, ok := f.office.staffOf(prompt); ok {
+			detail = fgColor(col, f.truecolor) + who + "\x1b[0m" + u.paint(cDim, " · ") + truncate(u.detail(c), width-strWidth(name)-len(dur)-strWidth(fail)-18)
+		}
+	}
 	key := name + " " + detail
 	// Commands are not collapsed (running one twice can matter), except
 	// polling a background job.

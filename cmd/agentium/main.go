@@ -225,6 +225,8 @@ type ui struct {
 	// approvalWait is the total time spent waiting on approval prompts.
 	approvalWait time.Duration
 	lastKey      string // the last tool line, for collapsing repeats
+	lastPerm     string // the last line printed with permanent (sub-agent repeats)
+	subCount     int    // how many times that sub-agent step repeated
 	lastCount    int
 	lastDur      time.Duration
 	outputs      []stepOutput // recent step output, for Ctrl-O
@@ -251,7 +253,7 @@ func (u *ui) text(d string) {
 	defer u.mu.Unlock()
 	u.clearLive()
 	u.thinking = false
-	u.lastKey = ""
+	u.lastKey, u.lastPerm = "", ""
 	if u.afterTool && d != "" {
 		os.Stderr.WriteString("\n")
 		u.afterTool = false
@@ -298,7 +300,7 @@ func (u *ui) line(s string) {
 	}
 	u.clearLive()
 	u.endLine()
-	u.lastKey = ""
+	u.lastKey, u.lastPerm = "", ""
 	if u.live {
 		fmt.Fprintln(os.Stderr, "  "+u.noteLine(s))
 	} else {
