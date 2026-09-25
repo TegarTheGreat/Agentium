@@ -29,3 +29,11 @@ func fileLink(cwd, path, text string) string {
 	}
 	return "\x1b]8;;" + u.String() + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 }
+
+// fileLinkURL makes text a link to a web address.
+func fileLinkURL(uri, text string) string {
+	if !linksOn || strings.ContainsAny(uri, "\x1b\x07") {
+		return text
+	}
+	return "\x1b]8;;" + uri + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+}

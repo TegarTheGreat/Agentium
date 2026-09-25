@@ -122,6 +122,7 @@ var helpRows = [][2]string{
 	{"/style", "how I talk: default, explanatory, learning, terse"},
 	{"/skills  /<name> [args]", "skills, and your commands in .agentium/commands"},
 	{"/agents", "your specialist sub-agents (.agentium/agents, .claude/agents)"},
+	{"/bug [what]", "open a prefilled GitHub issue for Agentium"},
 	{"/doctor  /mcp  /tools", "health check · MCP servers · available tools"},
 	{"/usage  /config  /update", "tokens used · settings · install the latest release"},
 	{"/exit", "quit (also ctrl+d)"},

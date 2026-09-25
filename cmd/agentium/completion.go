@@ -49,6 +49,7 @@ var slashCommands = []slashCmd{
 	{"/usage", "tokens used in this session", false},
 	{"/skills", "list skills", false},
 	{"/agents", "your specialist sub-agents", false},
+	{"/bug", "open a prefilled bug report", true},
 	{"/config", "show current settings", false},
 	{"/update", "install the latest release", false},
 	{"/doctor", "check the model, key, tools, terminal and MCP servers", false},

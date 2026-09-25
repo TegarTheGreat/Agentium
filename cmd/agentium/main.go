@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1513,6 +1514,16 @@ func run(args []string) error {
 				sess.SystemHash = hashString(a.System)
 				_ = config.Set("style", cfg.Style)
 				u.success("Style: " + cfg.Style + u.paint(cDim, " (saved)"))
+				continue
+			}
+			if line == "/bug" || strings.HasPrefix(line, "/bug ") {
+				model, _ := curModel.Load().(string)
+				what := strings.TrimSpace(strings.TrimPrefix(line, "/bug"))
+				body := fmt.Sprintf("**What happened**\n%s\n\n**Expected**\n\n**Setup**\nagentium %s · %s/%s · %s · %s\n",
+					what, version, runtime.GOOS, runtime.GOARCH, firstNonEmpty(os.Getenv("TERM_PROGRAM"), os.Getenv("TERM")), model)
+				link := "https://github.com/TegarTheGreat/Agentium/issues/new?title=" + url.QueryEscape(oneLine(firstNonEmpty(what, "Bug: "), 80)) + "&body=" + url.QueryEscape(body)
+				u.success("Report it here (the form is filled in; nothing is sent until you submit it):")
+				fmt.Fprintln(os.Stderr, "  "+fileLinkURL(link, link))
 				continue
 			}
 			if line == "/agents" {
