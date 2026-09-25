@@ -178,6 +178,44 @@ func TestMaxTurns(t *testing.T) {
 	}
 }
 
+func TestNoStepLimit(t *testing.T) {
+	var steps []func(provider.Request) (provider.Response, error)
+	for i := 0; i < 150; i++ {
+		args := fmt.Sprintf(`{"cmd":"echo step %d"}`, i) // each step different: not stuck
+		steps = append(steps, func(provider.Request) (provider.Response, error) {
+			return provider.Response{ToolCalls: []provider.ToolCall{tc(fmt.Sprint("c", len(args)), "bash", args)}}, nil
+		})
+	}
+	steps = append(steps, func(provider.Request) (provider.Response, error) { return provider.Response{Text: "all done"}, nil })
+	a := newAgent(t, &script{steps: steps})
+	a.MaxTurns, a.Verify = -1, false
+	st, err := a.Run(context.Background(), "a long task")
+	if err != nil || st.Turns != 151 {
+		t.Fatalf("err = %v after %d steps", err, st.Turns)
+	}
+}
+
+func TestWrapUpAfterLimit(t *testing.T) {
+	loop := func(provider.Request) (provider.Response, error) {
+		return provider.Response{ToolCalls: []provider.ToolCall{tc("x", "read", `{"path":"."}`)}}, nil
+	}
+	report := func(provider.Request) (provider.Response, error) {
+		return provider.Response{Text: "done: a.go; left: tests"}, nil
+	}
+	a := newAgent(t, &script{steps: []func(provider.Request) (provider.Response, error){loop, loop, report}})
+	a.MaxTurns = 2
+	tools := len(a.Tools)
+	if _, err := a.Run(context.Background(), "go"); !errors.Is(err, ErrMaxTurns) {
+		t.Fatal(err)
+	}
+	if err := a.WrapUp(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if last := a.Messages[len(a.Messages)-1]; last.Text != "done: a.go; left: tests" || a.MaxTurns != 2 || len(a.Tools) != tools {
+		t.Fatalf("report %q, limit %d restored?", last.Text, a.MaxTurns)
+	}
+}
+
 func TestElide(t *testing.T) {
 	a := &Agent{ContextChars: 5000}
 	big := strings.Repeat("z", 2000)

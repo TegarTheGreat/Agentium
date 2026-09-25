@@ -76,7 +76,7 @@ Flags:
   --add-dir PATH      another working directory the agent may change (repeatable; config "dirs")
   --worktree NAME     work in a separate git worktree (branch agentium/NAME) so sessions don't collide
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
-  --max-turns N       stop after N model turns (default 100)
+  --max-turns N       stop after N model steps (default: none in a session, 100 for -p)
 
 In a session: /help lists commands and keys (/model /mode /undo /rewind /diff /context /compact /memory /btw …),
   @file mentions a file, !cmd runs a shell command, Esc stops a turn, Enter during a turn steers it.
@@ -1103,6 +1103,16 @@ func run(args []string) error {
 		a.Typed = input // kept with the message (/rewind puts it back)
 		spentBefore := a.Spent
 		st, err := a.Run(ctx, send)
+		if errors.Is(err, agent.ErrMaxTurns) && interactive && ctx.Err() == nil {
+			// Out of steps mid-task: say where things stand, so "continue"
+			// picks up from a clear point.
+			steps := a.MaxTurns
+			if steps <= 0 {
+				steps = 100
+			}
+			u.line(u.paint(cYellow, fmt.Sprintf("%d steps used for this message; asking for a status report", steps)))
+			_ = a.WrapUp(ctx, steps)
+		}
 		// What this turn cost, sub-agents on their own model included.
 		cost := a.Spent - spentBefore
 		totalTok.Store(int64(a.Usage.Input + a.Usage.CacheRead + a.Usage.CacheWrite + a.Usage.Output))
@@ -1275,6 +1285,12 @@ func run(args []string) error {
 		recap(u, a.Messages)
 	}
 	interactive = true
+	if a.MaxTurns <= 0 {
+		// An interactive session has no step limit, as in Claude Code: the
+		// task runs until it is done, Esc stops it, and the stuck detector
+		// and --max-cost still end a loop. "max_turns" sets one if wanted.
+		a.MaxTurns = -1
+	}
 	if *resumePick {
 		u.mu.Lock()
 		u.queued = append([]string{"/resume"}, u.queued...) // open the picker first
@@ -1650,6 +1666,14 @@ func run(args []string) error {
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				fmt.Fprintln(os.Stderr, u.dim("· interrupted"))
+				continue
+			}
+			if errors.Is(err, agent.ErrMaxTurns) {
+				// Not a failure: the work can go on.
+				u.note(u.paint(cYellow, "Paused at the step limit") + u.paint(cDim, " · press Enter to continue (\"max_turns\" in the config raises it)"))
+				if ed != nil {
+					ed.draft = []rune("continue")
+				}
 				continue
 			}
 			fmt.Fprintln(os.Stderr, "error:", err)

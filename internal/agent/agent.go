@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -190,9 +191,15 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 	}
 	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input, Images: a.Attach, Typed: typed, At: start})
 	a.Attach = nil
+	// MaxTurns: 0 means the default (100, for one-shot runs and scripts);
+	// below 0, no step limit (an interactive session works until the task
+	// is done; the stuck detector and the cost limit still stop a loop).
 	maxTurns := a.MaxTurns
-	if maxTurns <= 0 {
+	if maxTurns == 0 {
 		maxTurns = 100
+	}
+	if maxTurns < 0 {
+		maxTurns = math.MaxInt
 	}
 	defs := tool.Defs(a.Tools)
 	before := a.Usage

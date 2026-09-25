@@ -4,6 +4,10 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- **No step limit in a session.** A long task used to stop with "error: stopped: reached max turns" after 100 steps, even when the work was going fine. Interactive sessions (and IDE sessions) now work until the task is done, as in Claude Code: `Esc` stops it, and the stuck detector and `--max-cost` still end a loop. One-shot runs (`-p`) keep a limit of 100. `"max_turns"` or `--max-turns` sets a limit if you want one. When a limit you set is reached, the agent reports what is done and what is left, and `continue` is ready in the message box.
+
 ### Fixed
 
 - Asked which model it runs on, the agent can say (the session's starting model is in its instructions).

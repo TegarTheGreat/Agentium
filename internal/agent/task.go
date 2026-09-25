@@ -203,3 +203,14 @@ func pickMode(explore bool) string {
 	}
 	return "read-write"
 }
+
+// WrapUp asks for a status report after the step limit: what is done,
+// what is left, the next step. Tools stay declared (the history holds
+// tool calls, and the prompt cache is reused) but no longer run.
+func (a *Agent) WrapUp(ctx context.Context, steps int) error {
+	mt, tools, verify := a.MaxTurns, a.Tools, a.Verify
+	a.MaxTurns, a.Tools, a.Verify = 1, refuseAll(a.Tools), false
+	defer func() { a.MaxTurns, a.Tools, a.Verify = mt, tools, verify }()
+	_, err := a.Run(ctx, fmt.Sprintf("[agentium] You have used all %d steps for this message; the user can say continue. Do not call tools. Reply briefly: what is done (exact paths), what is verified, what is left, and the next step.", steps))
+	return err
+}
