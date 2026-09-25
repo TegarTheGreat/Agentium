@@ -859,12 +859,21 @@ func TestEditReportsLSPErrors(t *testing.T) {
 }
 
 func TestWebSearch(t *testing.T) {
+	ddgDown := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/ddg":
+			if ddgDown {
+				w.WriteHeader(202)
+				fmt.Fprint(w, "anomaly detected")
+				return
+			}
 			r.ParseForm()
 			fmt.Fprintf(w, `<div><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%%3A%%2F%%2Fgo.dev%%2Fdoc%%2F&rut=x">The <b>Go</b> docs</a>
-<a class="result__snippet" href="x">Docs for %s &amp; more</a></div>`, r.Form.Get("q"))
+<a class="result__snippet" href="x">Docs for %s &amp; more</a></div>
+<div><a class="result__a" href="https://example.com/other">Other site</a><a class="result__snippet" href="x">off topic</a></div>`, r.Form.Get("q"))
+		case "/bing":
+			fmt.Fprint(w, `<ol><li class="b_algo" data-id><h2 class=""><a target="_blank" href="https://www.bing.com/ck/a?!&amp;&amp;p=x&amp;u=a1aHR0cHM6Ly9nby5kZXYvZG9jL2luc3RhbGw&amp;ntb=1">Download and install - The <strong>Go</strong> Programming Language</a></h2><div class="b_caption"><p class="b_lineclamp2">Download packages for Windows &amp; Linux.</p></div></li></ol>`)
 		case "/brave":
 			if r.Header.Get("X-Subscription-Token") != "bk" {
 				w.WriteHeader(401)
@@ -874,23 +883,40 @@ func TestWebSearch(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	oldD, oldB := ddgURL, braveURL
-	ddgURL, braveURL = srv.URL+"/ddg", srv.URL+"/brave"
-	defer func() { ddgURL, braveURL = oldD, oldB }()
+	oldD, oldB, oldBi := ddgURL, braveURL, bingURL
+	ddgURL, braveURL, bingURL = srv.URL+"/ddg", srv.URL+"/brave", srv.URL+"/bing"
+	defer func() { ddgURL, braveURL, bingURL = oldD, oldB, oldBi }()
 	e := env(t)
 	e.AllowPrivateNet = true // the test server is on localhost
-	t.Setenv("BRAVE_API_KEY", "")
-	t.Setenv("TAVILY_API_KEY", "")
-	out, err := call(t, fetchTool, e, `{"search":"go generics"}`)
+	for _, k := range []string{"BRAVE_API_KEY", "TAVILY_API_KEY", "EXA_API_KEY", "SERPER_API_KEY", "SEARXNG_URL"} {
+		t.Setenv(k, "")
+	}
+	out, err := call(t, webSearchTool, e, `{"query":"go generics"}`)
 	if err != nil || !strings.Contains(out, "DuckDuckGo results") || !strings.Contains(out, "1. The Go docs\n   https://go.dev/doc/") || !strings.Contains(out, "Docs for go generics & more") {
 		t.Fatalf("ddg: %q %v", out, err)
 	}
+	// domains keeps only those sites, whatever the engine returned.
+	out, _ = call(t, webSearchTool, e, `{"query":"go","domains":["go.dev"]}`)
+	if strings.Contains(out, "example.com") || !strings.Contains(out, "go.dev/doc/") {
+		t.Fatalf("domains: %q", out)
+	}
+	// DuckDuckGo refusing (rate limit) falls through to Bing.
+	ddgDown = true
+	out, err = call(t, webSearchTool, e, `{"query":"install go"}`)
+	if err != nil || !strings.Contains(out, "Bing results") || !strings.Contains(out, "1. Download and install - The Go Programming Language\n   https://go.dev/doc/install\n   Download packages for Windows & Linux.") || !strings.Contains(out, "tried first: DuckDuckGo") {
+		t.Fatalf("bing fallback: %q %v", out, err)
+	}
+	ddgDown = false
 	t.Setenv("BRAVE_API_KEY", "bk")
-	out, _ = call(t, fetchTool, e, `{"search":"x"}`)
+	out, _ = call(t, webSearchTool, e, `{"query":"x"}`)
 	if !strings.Contains(out, "Brave results") || !strings.Contains(out, "1. Brave hit\n   https://b.example/\n   about it") {
 		t.Fatalf("brave: %q", out)
 	}
-	if _, err := call(t, fetchTool, e, `{"search":"leak sk-ant-abcdefghijklmnopqrstu"}`); err == nil {
+	// The older form (fetch with search) still works.
+	if out, _ := call(t, fetchTool, e, `{"search":"x"}`); !strings.Contains(out, "Brave results") {
+		t.Fatalf("fetch search: %q", out)
+	}
+	if _, err := call(t, webSearchTool, e, `{"query":"leak sk-ant-abcdefghijklmnopqrstu"}`); err == nil {
 		t.Fatal("a query carrying a secret must be refused")
 	}
 }
@@ -1177,5 +1203,59 @@ func TestManyMCPToolsGoThroughFindAndCall(t *testing.T) {
 	}
 	if _, err := call(t, ts[1], e, `{"name":"mcp__srv__nope"}`); err == nil {
 		t.Fatal("unknown tool ran")
+	}
+}
+
+func TestFetchPagesFindJSON(t *testing.T) {
+	var long strings.Builder
+	long.WriteString("<html><body><main>")
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&long, "<h2>Section %d</h2><p>Paragraph %d talks about ordinary things at some length to fill the page.</p>", i, i)
+	}
+	long.WriteString("<h2>Rate limits</h2><p>Clients may send 600 requests per minute.</p></main></body></html>")
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		switch r.URL.Path {
+		case "/long":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, long.String())
+		case "/api":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"name":"x","items":[1,2]}`)
+		case "/img":
+			w.Header().Set("Content-Type", "image/png")
+			w.Write([]byte("\x89PNG\r\n\x1a\n\x00\x00"))
+		}
+	}))
+	defer srv.Close()
+	e := env(t)
+	e.AllowPrivateNet = true
+	out, err := call(t, fetchTool, e, `{"url":"`+srv.URL+`/long"}`)
+	if err != nil || !strings.Contains(out, "## Section 0") || !strings.Contains(out, "more: fetch again with offset=") || len(out) > fetchMaxText+600 {
+		t.Fatalf("first page: %d %v %q", len(out), err, out[:200])
+	}
+	var next int
+	fmt.Sscanf(out[strings.Index(out, "offset=")+7:], "%d", &next)
+	out2, _ := call(t, fetchTool, e, fmt.Sprintf(`{"url":"%s/long","offset":%d}`, srv.URL, next))
+	if !strings.Contains(out2, "[… from character") || strings.Contains(out2, "## Section 0\n") {
+		t.Fatalf("second page: %q", out2[:300])
+	}
+	out3, _ := call(t, fetchTool, e, `{"url":"`+srv.URL+`/long","find":"requests per minute"}`)
+	if !strings.Contains(out3, "## Rate limits") || !strings.Contains(out3, "600 requests per minute") || len(out3) > 2000 {
+		t.Fatalf("find: %q", out3)
+	}
+	if hits != 1 {
+		t.Fatalf("paging and find should reuse the page: %d downloads", hits)
+	}
+	out, _ = call(t, fetchTool, e, `{"url":"`+srv.URL+`/api"}`)
+	if !strings.Contains(out, "{\n  \"name\": \"x\",") {
+		t.Fatalf("json: %q", out)
+	}
+	if _, err := call(t, fetchTool, e, `{"url":"`+srv.URL+`/img"}`); err == nil || !strings.Contains(err.Error(), "not text") {
+		t.Fatalf("image: %v", err)
+	}
+	if got := rawGitHub("https://github.com/golang/go/blob/master/src/errors/wrap.go#L10"); got != "https://raw.githubusercontent.com/golang/go/master/src/errors/wrap.go" {
+		t.Fatal(got)
 	}
 }

@@ -577,6 +577,8 @@ func toolLabel(name string) string {
 		return "Search"
 	case "fetch":
 		return "Fetch"
+	case "web_search":
+		return "Web search"
 	case "todo":
 		return "Todo"
 	case "task":

@@ -666,6 +666,9 @@ func approvalTitle(action, reason string) (title, what string) {
 		title = "Read this file?"
 	case "fetch":
 		title = "Fetch this URL?"
+		if q, ok := strings.CutPrefix(what, "search: "); ok {
+			title, what = "Search the web for this?", q
+		}
 	case "mcp":
 		title = "Use this MCP tool?"
 	default:

@@ -203,6 +203,15 @@ func clipOrSpill(out string) string {
 		return out
 	}
 	s := Clip(out, bashMaxOutput)
+	if p := saveOutput("out-*.log", out); p != "" {
+		s = strings.TrimRight(s, "\n") + fmt.Sprintf("\n[the full output (%d lines) is in %s: grep it or read parts with the read tool instead of re-running]", strings.Count(strings.TrimRight(out, "\n"), "\n")+1, p)
+	}
+	return s
+}
+
+// saveOutput keeps text too long to show in a file (named after pattern)
+// the model can grep or read in parts; "" when it could not be written.
+func saveOutput(pattern, text string) string {
 	dir := filepath.Join(os.TempDir(), "agentium-output")
 	spillSweep.Do(func() { // yesterday's spills are not needed any more
 		ents, _ := os.ReadDir(dir)
@@ -212,14 +221,16 @@ func clipOrSpill(out string) string {
 			}
 		}
 	})
-	if os.MkdirAll(dir, 0o700) == nil {
-		if f, err := os.CreateTemp(dir, "out-*.log"); err == nil {
-			f.WriteString(out)
-			f.Close()
-			s = strings.TrimRight(s, "\n") + fmt.Sprintf("\n[the full output (%d lines) is in %s: grep it or read parts with the read tool instead of re-running]", strings.Count(strings.TrimRight(out, "\n"), "\n")+1, f.Name())
-		}
+	if os.MkdirAll(dir, 0o700) != nil {
+		return ""
 	}
-	return s
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return ""
+	}
+	f.WriteString(text)
+	f.Close()
+	return f.Name()
 }
 
 func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, box *sandbox.Config, passEnv []string) (string, error) {

@@ -390,7 +390,7 @@ func summarizeCall(c provider.ToolCall) string {
 		}
 		return ""
 	}
-	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "title", "prompt")
+	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "query", "title", "prompt")
 	if j, ok := m["job"].(float64); ok {
 		s = fmt.Sprintf("job %d", int(j))
 		if pick("stdin") != "" {
@@ -593,6 +593,9 @@ func alwaysScope(action, reason, root string) (key, label string) {
 	case "read":
 		return "read:" + rest, "for this file"
 	case "fetch":
+		if strings.HasPrefix(rest, "search: ") {
+			return "fetch:search", "for web searches"
+		}
 		host := rest
 		if u, err := url.Parse(rest); err == nil && u.Host != "" {
 			host = u.Host
@@ -668,6 +671,7 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
+	exportSearchKeys(auth)
 	ref := firstNonEmpty(*modelRef, os.Getenv("AGENTIUM_MODEL"), cfg.Model)
 	res, err := provider.Resolve(ref, cfg, auth)
 	if err != nil && stdinTTY && isTTY(os.Stderr) && !*asJSON && lineEditing && !dumbTerm() {

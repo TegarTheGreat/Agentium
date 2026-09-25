@@ -71,9 +71,27 @@ func cmdLogin(args []string) error {
 		return fmt.Errorf("usage: agentium login [--oauth] <provider>   (see `agentium providers`)")
 	}
 	id := fs.Arg(0)
+	if env, ok := searchKeyEnv[id]; ok {
+		if _, isProvider := specs[id]; !isProvider {
+			// A web search service: its key is for the web_search tool.
+			key, err := readSecret(fmt.Sprintf("API key for %s web search: ", id))
+			if err != nil {
+				return err
+			}
+			if key == "" {
+				return errors.New("empty key")
+			}
+			where, err := saveKey(searchAuthID(id), key)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "✓ %s web search key saved in %s (%s in the environment takes precedence)\n", id, where, env)
+			return nil
+		}
+	}
 	s, ok := specs[id]
 	if !ok {
-		return fmt.Errorf("unknown provider %q; add it under \"providers\" in %s/config.json", id, config.Home())
+		return fmt.Errorf("unknown provider %q; add it under \"providers\" in %s/config.json (web search keys: brave, tavily, exa, serper)", id, config.Home())
 	}
 	switch {
 	case id == "bedrock":
@@ -117,6 +135,13 @@ func cmdLogin(args []string) error {
 func cmdLogout(args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: agentium logout <provider>")
+	}
+	if _, ok := searchKeyEnv[args[0]]; ok {
+		if auth, err := config.LoadAuth(); err == nil {
+			if _, stored := auth[searchAuthID(args[0])]; stored {
+				args = []string{searchAuthID(args[0])}
+			}
+		}
 	}
 	if auth, err := config.LoadAuth(); err == nil {
 		if _, ok := auth[args[0]]; !ok {

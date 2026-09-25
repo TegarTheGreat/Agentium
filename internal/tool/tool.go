@@ -228,7 +228,7 @@ func schema(s string) json.RawMessage { return json.RawMessage(s) }
 
 // All returns the tool set in a stable order (stable = cacheable prefix).
 func All() []Tool {
-	return []Tool{readTool, editTool, bashTool, searchTool, fetchTool}
+	return []Tool{readTool, editTool, bashTool, searchTool, fetchTool, webSearchTool}
 }
 
 // Defs returns the tool definitions for the model.

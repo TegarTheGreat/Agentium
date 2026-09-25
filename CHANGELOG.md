@@ -4,6 +4,11 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- **`web_search` tool**, separate from `fetch`: results limited to or excluding sites (`domains`, `exclude`), up to 20 results, and a chain of engines tried in turn: Brave, Tavily, Exa, Serper (Google) or SearXNG when configured, then DuckDuckGo and Bing without a key. Results from key-free pages are kept only when they are about the query (Bing sends unrelated pages to requests it takes for bots). `agentium login brave|tavily|exa|serper` stores a search key like a provider key.
+- **`fetch` reads pages properly**: the main content as Markdown with links, fenced code blocks (whitespace and language kept), lists and tables, without navigation, footers, forms or hidden elements; JSON pretty-printed; PDFs as text; GitHub file pages as the raw file; a note when a redirect changes the host. Long pages come in parts (`offset`), the whole text is saved to a file to grep, and `find` returns only the sections that mention some words. Pages are cached for 15 minutes, so paging does not download again.
+
 ## [0.25.1] - 2026-09-25
 
 ### Changed

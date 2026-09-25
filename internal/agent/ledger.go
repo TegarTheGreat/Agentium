@@ -92,7 +92,7 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 		if l.errCmd != "" {
 			l.fixEdits = pushUnique(l.fixEdits, str("path"), 8)
 		}
-	case name == "fetch" || strings.HasPrefix(name, "mcp__"):
+	case name == "fetch" || name == "web_search" || strings.HasPrefix(name, "mcp__"):
 		l.untrusted = true
 	}
 	failed := err != nil

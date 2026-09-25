@@ -106,37 +106,47 @@ var readTool = Tool{
 
 // readPDF returns a PDF's text, pages marked, through poppler's pdftotext.
 func readPDF(ctx context.Context, p string, offset, limit int) (string, error) {
+	text, note, err := pdfText(ctx, p)
+	if err != nil || note != "" {
+		return note, err
+	}
+	return sliceLines(text, offset, limit), nil
+}
+
+// pdfText is a PDF's text with "--- page N ---" markers; note explains
+// instead when there is none (no pdftotext, a scanned document).
+func pdfText(ctx context.Context, p string) (text, note string, err error) {
 	bin, err := exec.LookPath("pdftotext")
 	if err != nil {
-		return "(PDF file: its text needs pdftotext, which is not installed: poppler-utils on Linux, `brew install poppler` on macOS)", nil
+		return "", "(PDF file: its text needs pdftotext, which is not installed: poppler-utils on Linux, `brew install poppler` on macOS)", nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "-layout", "-enc", "UTF-8", "--", p, "-")
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if err := cmd.Start(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	b, _ := io.ReadAll(io.LimitReader(out, 8<<20))
 	_ = cmd.Process.Kill() // a huge document: the first 8 MB of text is plenty
 	_ = cmd.Wait()
 	if len(bytes.TrimSpace(b)) == 0 {
 		if msg := strings.TrimSpace(errb.String()); msg != "" && ctx.Err() == nil {
-			return "", fmt.Errorf("pdftotext: %s", firstLineOf(msg))
+			return "", "", fmt.Errorf("pdftotext: %s", firstLineOf(msg))
 		}
-		return "(PDF with no extractable text: probably scanned images)", nil
+		return "", "(PDF with no extractable text: probably scanned images)", nil
 	}
 	pages := strings.Split(strings.TrimRight(string(b), "\f\n"), "\f")
 	var sb strings.Builder
 	for i, pg := range pages {
 		fmt.Fprintf(&sb, "--- page %d ---\n%s\n", i+1, strings.TrimRight(pg, "\n "))
 	}
-	return sliceLines(sb.String(), offset, limit), nil
+	return sb.String(), "", nil
 }
 
 func firstLineOf(s string) string {

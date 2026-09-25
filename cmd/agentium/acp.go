@@ -463,7 +463,7 @@ func (s *acpServer) askPermission(ss *acpSession, action, reason string) bool {
 	return false
 }
 
-var toolKinds = map[string]string{"read": "read", "edit": "edit", "bash": "execute", "search": "search", "fetch": "fetch", "todo": "think", "task": "other"}
+var toolKinds = map[string]string{"read": "read", "edit": "edit", "bash": "execute", "search": "search", "fetch": "fetch", "web_search": "fetch", "todo": "think", "task": "other"}
 
 func (s *acpServer) prompt(m rpcMsg) {
 	var p struct {

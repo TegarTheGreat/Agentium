@@ -254,7 +254,7 @@ Subscription logins are offered only where the provider's terms allow third-part
 
 ## Tools
 
-The model has seven tools, plus any tools from configured MCP servers.
+The model has eight tools, plus any tools from configured MCP servers.
 
 | Tool | What it does |
 |---|---|
@@ -262,9 +262,12 @@ The model has seven tools, plus any tools from configured MCP servers.
 | `edit` | Create or change files: tolerant matching (CRLF, whitespace, indentation), lint-gated, atomic |
 | `bash` | Run commands in the sandbox; background jobs with input, output and stop controls; pseudo-terminal mode for interactive programs |
 | `search` | Text search, symbol definitions (`Type.Method`), references with their enclosing function, and past memory |
-| `fetch` | Fetch a URL as text, or search the web (Brave, Tavily or DuckDuckGo) |
+| `fetch` | Read a URL as Markdown: the main content with links and code blocks, JSON pretty-printed, PDFs as text, GitHub file links as the raw file. Long pages come in parts (`offset`), `find` returns only the sections that mention some words, and pages are cached for 15 minutes |
+| `web_search` | Search the web, optionally limited to or excluding sites; see below for engines |
 | `todo` | Keep a checklist for multi-step work |
 | `task` | Hand a self-contained job to a sub-agent with a fresh context; several can run in parallel, optionally read-only |
+
+**Web search.** Engines with a key are tried first: `agentium login brave` (or `tavily`, `exa`, `serper`) stores one, as do the `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY` and `SERPER_API_KEY` variables; `SEARXNG_URL` points at your own SearXNG. Without a key, DuckDuckGo and then Bing result pages are used, keeping only results that are about the query; they can refuse or degrade (often from cloud machines), so a key is the reliable choice.
 
 **Code intelligence.**
 - The code index is cached per project and refreshed only for changed files.

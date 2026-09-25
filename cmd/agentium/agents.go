@@ -28,7 +28,7 @@ import (
 var agentTools = map[string]string{
 	"read": "read", "edit": "edit", "write": "edit", "multiedit": "edit", "notebookedit": "edit",
 	"bash": "bash", "grep": "search", "glob": "search", "ls": "search", "search": "search",
-	"webfetch": "fetch", "websearch": "fetch", "fetch": "fetch", "todowrite": "todo", "todo": "todo",
+	"webfetch": "fetch", "websearch": "web_search", "web_search": "web_search", "fetch": "fetch", "todowrite": "todo", "todo": "todo",
 	"oracle": "oracle",
 }
 
@@ -86,6 +86,9 @@ func loadAgents(cwd string) []agentFile {
 						denied = append(denied, n)
 					default:
 						f.def.Tools = append(f.def.Tools, n)
+						if n == "fetch" { // fetch used to search the web too
+							f.def.Tools = append(f.def.Tools, "web_search")
+						}
 					}
 				}
 			}
@@ -127,7 +130,7 @@ func loadAgents(cwd string) []agentFile {
 				f.def.Tools = []string{"read", "search"}
 			}
 			if !hasTools && !f.project && len(denied) > 0 {
-				f.def.Tools = []string{"read", "edit", "bash", "search", "fetch", "todo", "oracle"}
+				f.def.Tools = []string{"read", "edit", "bash", "search", "fetch", "web_search", "todo", "oracle"}
 			}
 			if len(f.def.Tools) > 0 { // else: your own agent, every tool
 				f.def.Tools = without(uniq(f.def.Tools), denied)

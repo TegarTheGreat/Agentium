@@ -101,7 +101,7 @@ func TestLoopRunsToolsAndStops(t *testing.T) {
 	}
 	// System prompt and tools are identical on every turn (cacheable).
 	for _, r := range s.reqs[1:] {
-		if r.System != s.reqs[0].System || len(r.Tools) != 5 {
+		if r.System != s.reqs[0].System || len(r.Tools) != len(tool.All()) || len(r.Tools) != len(s.reqs[0].Tools) {
 			t.Fatal("prefix changed between turns")
 		}
 	}
