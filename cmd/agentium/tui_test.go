@@ -613,13 +613,27 @@ func TestDroppedImages(t *testing.T) {
 	b := filepath.Join(dir, "b.png")
 	os.WriteFile(a, png, 0o644)
 	os.WriteFile(b, png, 0o644)
-	in := "what is this '" + a + "' and " + strings.ReplaceAll(a, " ", `\ `) + " and " + b + ". Also /nope/x.png"
-	imgs, notes := mentionedImages(in, dir, true)
-	if len(imgs) != 2 {
+	c := filepath.Join(dir, "c (1).png")
+	os.WriteFile(c, png, 0o644)
+	in := "'" + a + "' " + strings.ReplaceAll(a, " ", `\ `) + " " + b + " " + `"` + c + `"` + " what are these? Also /nope/x.png"
+	imgs, notes := mentionedImages(in, dir, true, nil)
+	if len(imgs) != 3 {
 		t.Fatalf("%d images: %v", len(imgs), notes)
 	}
-	if imgs, _ := mentionedImages("see "+b, dir, false); len(imgs) != 0 {
-		t.Fatal("no vision: nothing attached")
+	esc := strings.NewReplacer(" ", `\ `, "(", `\(`, ")", `\)`).Replace(c)
+	if imgs, notes := mentionedImages(esc+" and file://"+b, dir, true, nil); len(imgs) != 2 {
+		t.Fatalf("escaped and file://: %v", notes)
+	}
+	// Outside the workspace and not where a drag puts it: not sent.
+	outside := func(string) bool { return false }
+	if imgs, _ := mentionedImages("the log says it wrote "+b, dir, true, outside); len(imgs) != 0 {
+		t.Fatal("a path mentioned in passing was attached")
+	}
+	if imgs, _ := mentionedImages(b+" what is this?", dir, true, outside); len(imgs) != 1 {
+		t.Fatal("a dropped path at the start was not attached")
+	}
+	if imgs, notes := mentionedImages(b+" see", dir, false, nil); len(imgs)+len(notes) != 0 {
+		t.Fatal("no vision: nothing attached, no note")
 	}
 }
 

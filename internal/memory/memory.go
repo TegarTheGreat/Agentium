@@ -174,7 +174,7 @@ func (s *Store) visible(path string, now time.Time) string {
 			}
 			continue
 		}
-		if strings.HasPrefix(e.Text, "lesson: ``") {
+		if strings.HasPrefix(e.Text, "lesson: `` failed") {
 			continue // an empty lesson older versions filed from job reads
 		}
 		if valid, _ := e.valid(s.Root, now); valid {
@@ -423,7 +423,7 @@ func (s *Store) Lessons(ls []string, trusted bool) []string {
 	var out []string
 	for _, l := range ls {
 		l = Redact(l)
-		if strings.HasPrefix(l, "``") {
+		if strings.HasPrefix(l, "`` failed") {
 			continue // no command: nothing learned (older versions filed these)
 		}
 		if !trusted || suspicious.MatchString(l) || !strings.Contains(past, lessonKey(l)) {

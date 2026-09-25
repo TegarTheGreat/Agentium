@@ -1037,7 +1037,7 @@ func run(args []string) error {
 		curPrompt = input
 		replies, edited = nil, nil
 		send := input
-		if imgs, notes := mentionedImages(input, cwd, a.Env.Vision); len(imgs)+len(notes) > 0 {
+		if imgs, notes := mentionedImages(input, cwd, a.Env.Vision, gate.Inside); len(imgs)+len(notes) > 0 {
 			a.Attach = imgs
 			for _, n := range notes {
 				u.line("· " + n)
@@ -1165,6 +1165,7 @@ func run(args []string) error {
 		return bestOfN(ctx, *bestOf, *check, *prompt, cwd, res, a, u)
 	}
 	if *prompt != "" && *asJSON {
+		defer oneShotModel()() // before the session event: it names the model
 		jw := newJSONWriter(os.Stdout)
 		jw.emit(map[string]any{"type": "session", "id": sess.ID, "model": res.Provider + "/" + res.Model, "sandbox": a.Env.Sandbox != nil, "mode": string(gate.GetMode())})
 		a.Events.Text = func(d string) { jw.emit(map[string]any{"type": "text", "text": d}) }
@@ -1186,7 +1187,6 @@ func run(args []string) error {
 			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds()})
 		}
 		t0 := time.Now()
-		defer oneShotModel()()
 		err := turn(*prompt)
 		final := ""
 		if len(replies) > 0 {

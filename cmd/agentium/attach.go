@@ -3,36 +3,87 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var droppedImage = regexp.MustCompile(`(?i)(?:^|\s)('(?:/|~/|[A-Za-z]:\\)[^']+\.(?:png|jpe?g|gif|webp)'|"(?:/|~/|[A-Za-z]:\\)[^"]+\.(?:png|jpe?g|gif|webp)"|(?:/|~/|[A-Za-z]:\\)(?:\\ |\S)+?\.(?:png|jpe?g|gif|webp))[.,;:!?)]?(?:\s|$)`)
+// droppedImage is an image path as a terminal pastes a dragged file:
+// quoted, with backslash escapes, or as a file:// URL.
+var droppedImage = regexp.MustCompile(`(?i)(?:^|[\s(\[<])('(?:/|~/|[A-Za-z]:\\)[^']+\.(?:png|jpe?g|gif|webp)'|"(?:/|~/|[A-Za-z]:\\)[^"]+\.(?:png|jpe?g|gif|webp)"|file://\S+?\.(?:png|jpe?g|gif|webp)|(?:/|~/|[A-Za-z]:\\)(?:\\.|\S)+?\.(?:png|jpe?g|gif|webp))[.,;:!?)\]>]?(?:\s|$)`)
+
+var shellEscape = regexp.MustCompile(`\\(.)`)
+
+// droppedPaths finds dropped image paths; one right after another counts
+// too (the separating space is not used up).
+func droppedPaths(input string) (paths []string, first int) {
+	first = -1
+	for off := 0; off < len(input) && len(paths) < 8; {
+		m := droppedImage.FindStringSubmatchIndex(input[off:])
+		if m == nil {
+			break
+		}
+		raw := input[off+m[2] : off+m[3]]
+		if first < 0 {
+			first = off + m[2]
+		}
+		off += m[3]
+		p := raw
+		switch {
+		case strings.HasPrefix(raw, "'") || strings.HasPrefix(raw, `"`):
+			p = strings.Trim(raw, `"'`)
+		case strings.HasPrefix(strings.ToLower(raw), "file://"):
+			u, err := url.Parse(raw)
+			if err != nil || (u.Host != "" && u.Host != "localhost") {
+				continue
+			}
+			p = u.Path
+		case runtime.GOOS != "windows":
+			p = shellEscape.ReplaceAllString(raw, "$1") // "Screen\ Shot\ \(1\).png"
+		}
+		paths = append(paths, p)
+	}
+	return paths, first
+}
 
 var imageMention = regexp.MustCompile(`(?i)(?:^|\s)@("[^"]+\.(?:png|jpe?g|gif|webp)"|\S+\.(?:png|jpe?g|gif|webp))`)
 
 // mentionedImages loads the image files named with @path in a prompt.
 // Mentions that are not existing files are left alone (they may be
 // memory directives or plain text). notes are for the user.
-func mentionedImages(input, cwd string, vision bool) (imgs []provider.Image, notes []string) {
+func mentionedImages(input, cwd string, vision bool, inside func(string) bool) (imgs []provider.Image, notes []string) {
 	var paths []string
 	for _, m := range imageMention.FindAllStringSubmatch(input, 8) {
 		paths = append(paths, strings.Trim(m[1], `"`))
 	}
-	// A file dragged into the terminal arrives as its full path, quoted or
-	// with escaped spaces: an image there is attached too.
-	for _, m := range droppedImage.FindAllStringSubmatch(input, 8) {
-		p := strings.Trim(m[1], `"'`)
-		if !strings.HasPrefix(m[1], "'") && !strings.HasPrefix(m[1], `"`) {
-			p = strings.ReplaceAll(p, `\ `, " ")
+	// A file dragged into the terminal arrives as its full path: an image
+	// there is attached too, when it is in the workspace or the message
+	// starts with it (as a drag leaves it). A path merely mentioned in
+	// pasted text elsewhere on the disk is not sent.
+	dropped, first := droppedPaths(input)
+	lead := first >= 0 && strings.TrimLeft(input[:first], " \t\n([<") == ""
+	var extra []string
+	for _, p := range dropped {
+		abs := p
+		if strings.HasPrefix(abs, "~/") {
+			if h, err := os.UserHomeDir(); err == nil {
+				abs = filepath.Join(h, abs[2:])
+			}
 		}
-		paths = append(paths, p)
+		if lead || inside == nil || inside(abs) {
+			extra = append(extra, p)
+		}
 	}
+	if !vision && len(imageMention.FindAllString(input, 1)) == 0 {
+		extra = nil // no "cannot view images" notes for paths merely mentioned
+	}
+	paths = append(paths, extra...)
 	seen := map[string]bool{}
 	for _, p := range paths {
 		if strings.HasPrefix(p, "~/") {

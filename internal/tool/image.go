@@ -8,6 +8,7 @@ import (
 	_ "image/gif" // register decoders for DecodeConfig
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,7 +67,14 @@ func imageType(path string, head []byte) string {
 
 // LoadImage reads an image file for sending to a model.
 func LoadImage(path string) (provider.Image, error) {
-	st, err := os.Stat(path)
+	// Opened without blocking (a FIFO named .png must not hang), checked
+	// on the open file, read no further than the limit.
+	f, err := os.OpenFile(path, os.O_RDONLY|nonblockFlag, 0)
+	if err != nil {
+		return provider.Image{}, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
 	if err != nil {
 		return provider.Image{}, err
 	}
@@ -76,9 +84,12 @@ func LoadImage(path string) (provider.Image, error) {
 	if st.Size() > MaxImageBytes {
 		return provider.Image{}, fmt.Errorf("image is %d bytes; the limit is %d (downscale it first)", st.Size(), MaxImageBytes)
 	}
-	b, err := os.ReadFile(path)
+	b, err := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
 	if err != nil {
 		return provider.Image{}, err
+	}
+	if len(b) > MaxImageBytes {
+		return provider.Image{}, fmt.Errorf("image is over the %d-byte limit", MaxImageBytes)
 	}
 	t := imageType(path, b[:min(len(b), 512)])
 	if t == "" {
