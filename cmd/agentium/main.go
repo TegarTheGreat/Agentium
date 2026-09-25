@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -202,6 +203,13 @@ func (j *jsonWriter) emit(v any) {
 	defer j.mu.Unlock()
 	_ = j.enc.Encode(v)
 }
+
+// jsonExitLine finds a bash result's exit status.
+var jsonExitLine = regexp.MustCompile(`\[exit (\d+)\]\s*$`)
+
+// onTerminate, when set, runs before exiting on SIGTERM/SIGHUP;
+// termSignal is the signal's name once one arrived.
+var onTerminate, termSignal atomic.Value
 
 func clipText(s string, n int) string {
 	if len(s) <= n {
@@ -1085,6 +1093,11 @@ func run(args []string) error {
 	go func() {
 		for s := range sig {
 			if s != os.Interrupt {
+				name := "SIGTERM"
+				if s == syscall.SIGHUP {
+					name = "SIGHUP"
+				}
+				termSignal.Store(name)
 				// Terminated or the terminal closed: stop the turn (and the
 				// command it runs), keep the conversation, leave the
 				// terminal usable.
@@ -1099,6 +1112,9 @@ func run(args []string) error {
 				}
 				sess.Messages = provider.CloseToolCalls(a.Messages)
 				saveSession(sess)
+				if f, ok := onTerminate.Load().(func(os.Signal)); ok {
+					f(s)
+				}
 				restoreTerm()
 				a.Env.KillJobs()
 				code := 128 + 15
@@ -1302,6 +1318,10 @@ func run(args []string) error {
 		}
 		a.Events.ToolDone = func(c provider.ToolCall, out string, err error, d time.Duration) {
 			ev := map[string]any{"type": "tool_result", "id": c.ID, "name": c.Name, "ok": err == nil, "ms": d.Milliseconds(), "output": clipText(out, 2000)}
+			if m := jsonExitLine.FindStringSubmatch(out); m != nil && c.Name == "bash" {
+				code, _ := strconv.Atoi(m[1])
+				ev["exit"], ev["ok"] = code, err == nil && code == 0
+			}
 			if err != nil {
 				ev["error"] = err.Error()
 			}
@@ -1312,17 +1332,29 @@ func run(args []string) error {
 			jw.emit(map[string]any{"type": "retry", "error": err.Error(), "wait_ms": wait.Milliseconds()})
 		}
 		t0 := time.Now()
+		var once sync.Once
+		emitResult := func(err error, final string) {
+			once.Do(func() {
+				if sig, ok := termSignal.Load().(string); ok {
+					err = errors.New("terminated by " + sig)
+				}
+				us, spent := a.Totals()
+				result := map[string]any{"type": "result", "ok": err == nil, "text": final, "turns": a.Turns,
+					"usage": us, "cost_usd": spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": edited}
+				if err != nil {
+					result["error"] = err.Error()
+				}
+				jw.emit(result)
+			})
+		}
+		// Killed (a CI timeout, SIGTERM): still report what was spent.
+		onTerminate.Store(func(os.Signal) { emitResult(nil, "") })
 		err := turn(*prompt)
 		final := ""
 		if len(replies) > 0 {
 			final = replies[len(replies)-1]
 		}
-		result := map[string]any{"type": "result", "ok": err == nil, "text": final, "turns": a.Turns,
-			"usage": a.Usage, "cost_usd": a.Spent, "elapsed_ms": time.Since(t0).Milliseconds(), "files_changed": edited}
-		if err != nil {
-			result["error"] = err.Error()
-		}
-		jw.emit(result)
+		emitResult(err, final)
 		if err != nil {
 			return &jsonOut{code: exitCode(err)}
 		}
