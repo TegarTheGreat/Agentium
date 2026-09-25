@@ -180,7 +180,7 @@ func TestCustomCommands(t *testing.T) {
 	if len(cmds) != 2 || cmds[0].name != "fix-issue" || cmds[0].desc != "fix a GitHub issue" {
 		t.Fatalf("commands: %+v", cmds)
 	}
-	if msg, ok := expandCommand(cwd, "/fix-issue 42"); !ok || msg != "Fix issue #42 and add a test.\n" {
+	if msg, ok := expandCommand(cwd, "/fix-issue 42"); !ok || msg != "Fix issue #42 and add a test." {
 		t.Fatalf("expand: %q %v", msg, ok)
 	}
 	if msg, ok := expandCommand(cwd, "/standup quickly"); !ok || msg != "Summarize yesterday's commits.\n\nquickly" {
@@ -191,5 +191,26 @@ func TestCustomCommands(t *testing.T) {
 	}
 	if _, ok := expandCommand(cwd, "/model"); ok {
 		t.Fatal("built-in commands are not prompt commands")
+	}
+	// A repository cannot take over a built-in command.
+	os.WriteFile(filepath.Join(cwd, ".claude", "commands", "undo.md"), []byte("rm -rf everything"), 0o644)
+	if _, ok := expandCommand(cwd, "/undo"); ok {
+		t.Fatal("/undo was taken over by a command file")
+	}
+	// Windows line endings; agentium's folder wins over .claude's.
+	os.WriteFile(filepath.Join(cwd, ".claude", "commands", "Dup.MD"), []byte("---\r\ndescription: claude\r\n---\r\nfrom claude\r\n"), 0o644)
+	os.MkdirAll(filepath.Join(cwd, ".agentium", "commands"), 0o755)
+	os.WriteFile(filepath.Join(cwd, ".agentium", "commands", "dup.md"), []byte("---\r\ndescription: ours\r\n---\r\nfrom agentium\r\n"), 0o644)
+	if msg, ok := expandCommand(cwd, "/dup"); !ok || msg != "from agentium" {
+		t.Fatalf("dup: %q %v", msg, ok)
+	}
+	for _, c := range userCommands(cwd) {
+		if c.name == "dup" && c.desc != "ours" {
+			t.Fatalf("desc %q", c.desc)
+		}
+	}
+	os.WriteFile(filepath.Join(cwd, ".agentium", "commands", "empty.md"), []byte("---\ndescription: x\n---\n"), 0o644)
+	if msg, ok := expandCommand(cwd, "/empty"); !ok || msg != "" {
+		t.Fatalf("empty: %q %v", msg, ok)
 	}
 }

@@ -18,8 +18,8 @@ import (
 // Session is one saved conversation.
 type Session struct {
 	ID       string             `json:"id"`
-	Title    string             `json:"title,omitempty"` // set with /rename
 	Cwd      string             `json:"cwd"`
+	Title    string             `json:"title,omitempty"` // set with /rename
 	Model    string             `json:"model"`
 	Updated  time.Time          `json:"updated"`
 	Messages []provider.Message `json:"messages"`
@@ -174,12 +174,27 @@ func Prune(keep int, maxAge time.Duration) {
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	for i, n := range names {
 		p := filepath.Join(dir(), n)
-		if i >= keep {
-			_ = os.Remove(p)
-		} else if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > maxAge {
-			_ = os.Remove(p)
+		old := i >= keep
+		if !old {
+			st, err := os.Stat(p)
+			old = err == nil && time.Since(st.ModTime()) > maxAge
+		}
+		if old && !titled(p) {
+			_ = os.Remove(p) // a session the user named is kept
 		}
 	}
+}
+
+// titled reports whether the saved session at p has a name.
+func titled(p string) bool {
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 8192)
+	k, _ := io.ReadFull(f, head)
+	return bytes.Contains(head[:k], []byte(`"title":`))
 }
 
 // Label is the session's title, or its first request.

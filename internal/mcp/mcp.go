@@ -238,6 +238,21 @@ func (c *Client) shutdown(why string) {
 	})
 }
 
+// Err reports why the connection is dead, or nil while it is up.
+func (c *Client) Err() error {
+	select {
+	case <-c.closed:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.err == nil {
+			return errors.New("closed")
+		}
+		return c.err
+	default:
+		return nil
+	}
+}
+
 func (c *Client) send(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -249,6 +264,32 @@ func (c *Client) send(v any) error {
 }
 
 // --- stdio ---
+
+// maxLogBytes caps a stdio server's stderr log, so a chatty server
+// cannot fill the disk over a long session.
+const maxLogBytes = 2 << 20
+
+// cappedLog writes until its budget is spent, then drops the rest.
+type cappedLog struct {
+	f    *os.File
+	left int
+}
+
+func (l *cappedLog) Write(p []byte) (int, error) {
+	if l.left <= 0 {
+		return len(p), nil
+	}
+	b := p
+	if len(b) > l.left {
+		b = b[:l.left]
+	}
+	l.left -= len(b)
+	l.f.Write(b)
+	if l.left <= 0 {
+		l.f.WriteString("\n[log truncated: more than 2 MiB]\n")
+	}
+	return len(p), nil
+}
 
 type stdioTransport struct {
 	cmd   *exec.Cmd
@@ -280,7 +321,7 @@ func startStdio(c *Client, cfg Config, dir string) (*stdioTransport, error) {
 		if err := os.MkdirAll(filepath.Dir(cfg.LogPath), 0o700); err == nil {
 			if f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
 				t.log = f
-				cmd.Stderr = f
+				cmd.Stderr = &cappedLog{f: f, left: maxLogBytes}
 			}
 		}
 	}

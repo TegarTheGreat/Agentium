@@ -26,20 +26,25 @@ type userCmd struct {
 func userCommands(cwd string) []userCmd {
 	dirs := []string{filepath.Join(config.Home(), "commands")}
 	if h, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(h, ".claude", "commands"))
+		// Agentium's own folder wins over .claude's at the same level.
+		dirs = append([]string{filepath.Join(h, ".claude", "commands")}, dirs...)
 	}
 	root := config.ProjectRoot(cwd)
 	for _, d := range []string{root, cwd} {
-		dirs = append(dirs, filepath.Join(d, ".agentium", "commands"), filepath.Join(d, ".claude", "commands"))
+		dirs = append(dirs, filepath.Join(d, ".claude", "commands"), filepath.Join(d, ".agentium", "commands"))
 	}
 	byName := map[string]userCmd{}
 	for _, dir := range dirs {
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
-			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			ext := filepath.Ext(e.Name())
+			if e.IsDir() || !strings.EqualFold(ext, ".md") {
 				continue
 			}
-			name := strings.ToLower(strings.TrimSuffix(e.Name(), ".md"))
+			name := strings.ToLower(strings.TrimSuffix(e.Name(), ext))
+			if builtinCommand(name) || name == "" {
+				continue // a repository's file cannot take over /undo or /exit
+			}
 			p := filepath.Join(dir, e.Name())
 			byName[name] = userCmd{name: name, desc: commandDesc(p), path: p}
 		}
@@ -67,7 +72,22 @@ func commandDesc(path string) string {
 	return firstLine(strings.TrimSpace(body))
 }
 
+// builtinCommand reports whether /name is one of agentium's own.
+func builtinCommand(name string) bool {
+	switch name {
+	case "plan", "go", "skills", "settings", "new", "quit", "q", "?", "init", "review":
+		return true
+	}
+	for _, c := range slashCommands {
+		if c.name == "/"+name {
+			return true
+		}
+	}
+	return false
+}
+
 func splitFront(s string) (front, body string) {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
 	if rest, ok := strings.CutPrefix(s, "---\n"); ok {
 		if i := strings.Index(rest, "\n---"); i >= 0 {
 			return rest[:i], strings.TrimLeft(rest[i+4:], "\n")
@@ -102,10 +122,11 @@ func expandCommand(cwd, line string) (msg string, ok bool) {
 			return "", false
 		}
 		_, body := splitFront(string(b))
+		msg := withArgs(strings.TrimSpace(body))
 		if strings.Contains(body, "$ARGUMENTS") {
-			return strings.ReplaceAll(body, "$ARGUMENTS", args), true
+			msg = strings.TrimSpace(strings.ReplaceAll(body, "$ARGUMENTS", args))
 		}
-		return withArgs(strings.TrimSpace(body)), true
+		return msg, true // "" for an empty file: the caller says so
 	}
 	return "", false
 }

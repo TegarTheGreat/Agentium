@@ -283,7 +283,13 @@ func (a *Agent) compact(ctx context.Context) error {
 	var asks []string
 	for _, m := range a.Messages[:split] {
 		if m.Role == provider.RoleUser && m.Text != "" && !strings.HasPrefix(m.Text, "[agentium]") && !strings.HasPrefix(m.Text, "[Summary of the earlier") {
-			asks = append(asks, clip(strings.TrimSpace(m.Text), 2000))
+			t := m.Text
+			if j := strings.Index(t, "</recall>"); j >= 0 {
+				t = t[j+len("</recall>"):] // recalled memory is not the user's words
+			}
+			if t = strings.TrimSpace(t); t != "" {
+				asks = append(asks, clip(t, 2000))
+			}
 		}
 	}
 	if n := len(asks); n > 0 {

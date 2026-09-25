@@ -313,7 +313,7 @@ func (s *acpServer) newSession(m rpcMsg) {
 		servers[ms.Name] = sc
 	}
 	if len(servers) > 0 {
-		ss.clients = startMCP(servers, cwd, s.log)
+		ss.clients = startMCP(servers, cwd, s.log).clients
 		tools = append(tools, tool.MCPTools(ss.clients)...)
 	}
 	mem := openMemory(s.cfg, cwd)
@@ -333,6 +333,13 @@ func (s *acpServer) newSession(m rpcMsg) {
 		Verify:        s.cfg.Verify == nil || *s.cfg.Verify,
 	}
 	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
+	if s.cfg.SubagentModel != "" {
+		if sub, _, err := subModel(s.cfg, s.auth, s.cfg.Effort); err == nil {
+			a.Sub = sub
+		} else {
+			s.log("subagent_model ignored: " + firstLine(err.Error()))
+		}
+	}
 	if mem != nil {
 		a.Env.Recall = mem.search
 		a.OnRemember = func(fact string) { mem.store.Apply([]memory.Directive{{Kind: "remember", Text: fact}}) }

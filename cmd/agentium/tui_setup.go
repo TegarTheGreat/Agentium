@@ -16,19 +16,6 @@ import (
 	"github.com/tegarthegreat/agentium/internal/provider"
 )
 
-// turnCost is the price of a turn's usage, 0 when unknown.
-func turnCost(res provider.Resolved, fb *provider.Fallback, st agent.Stats) float64 {
-	info, known := res.Info, res.Known
-	if fb != nil {
-		act := fb.Active()
-		info, known = act.Info, act.Known
-	}
-	if !known {
-		return 0
-	}
-	return info.Price(st.Usage.Input, st.Usage.Output, st.Usage.CacheRead, st.Usage.CacheWrite)
-}
-
 // turnSummary is the receipt printed after each turn: a rule with the
 // time, steps, tokens and cost.
 func (u *ui) turnSummary(st agent.Stats, err error, cost float64) string {
@@ -129,6 +116,7 @@ var helpRows = [][2]string{
 	{"/<command> [args]", "your commands: .agentium/commands/<name>.md ($ARGUMENTS)"},
 	{"/usage  /config", "tokens used · current settings"},
 	{"/update", "install the latest release"},
+	{"/doctor  /mcp  /tools", "health check · MCP servers · available tools"},
 	{"/exit", "quit (also ctrl+d)"},
 }
 

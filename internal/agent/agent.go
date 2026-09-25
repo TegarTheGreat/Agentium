@@ -102,6 +102,7 @@ type SubModel struct {
 	Cost          func(provider.Usage) float64
 	ContextTokens int
 	MaxOutput     int
+	Reasoning     provider.Reasoning
 }
 
 // Stats summarizes one Run.

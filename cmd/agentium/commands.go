@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/bench"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
 	"github.com/tegarthegreat/agentium/internal/config"
@@ -399,12 +400,13 @@ func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) 
 
 // startMCP starts the configured MCP servers concurrently (10s budget) and
 // returns those that came up. Only users who configure MCP pay this cost.
-func startMCP(servers map[string]config.MCPServer, dir string, report func(string)) []*mcp.Client {
+func startMCP(servers map[string]config.MCPServer, dir string, report func(string)) *mcpState {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	type res struct {
-		c   *mcp.Client
-		err error
+		name string
+		c    *mcp.Client
+		err  error
 	}
 	ch := make(chan res, len(servers))
 	for name, sc := range servers {
@@ -412,21 +414,24 @@ func startMCP(servers map[string]config.MCPServer, dir string, report func(strin
 			c, err := mcp.Start(ctx, name, mcp.Config{Command: sc.Command, Args: sc.Args, Env: sc.Env,
 				URL: sc.URL, Type: sc.Type, Headers: sc.Headers, Tokens: mcpTokens(), Literal: sc.Literal,
 				LogPath: filepath.Join(config.Home(), "logs", "mcp-"+name+".log")}, dir)
-			ch <- res{c, err}
+			ch <- res{name, c, err}
 		}(name, sc)
 	}
+	st := &mcpState{failed: map[string]string{}}
 	var out []*mcp.Client
 	for range servers {
 		r := <-ch
 		if r.err != nil {
 			report("mcp: " + r.err.Error())
+			st.failed[r.name] = r.err.Error()
 			continue
 		}
 		report(fmt.Sprintf("mcp: %s ready (%d tools)", r.c.Name, len(r.c.Tools)))
 		out = append(out, r.c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name }) // stable tool order = cacheable prefix
-	return out
+	st.clients = out
+	return st
 }
 
 // runStopHooks runs the user's post-turn commands in the background.
@@ -515,4 +520,24 @@ func cmdMCP(args []string) error {
 func gitProtected(root string) []string {
 	hooks, includes := tool.GitExtras(root)
 	return append(hooks, includes...)
+}
+
+// subModel resolves cfg.SubagentModel: the model sub-agents run on, with
+// its own limits, price and reasoning effort. known is false when its
+// price is unknown (its spending then counts as 0).
+func subModel(cfg config.Config, auth config.Auth, effort string) (*agent.SubModel, bool, error) {
+	sr, err := provider.Resolve(cfg.SubagentModel, cfg, auth)
+	if err != nil {
+		return nil, false, err
+	}
+	info, known := sr.Info, sr.Known
+	return &agent.SubModel{Client: sr.Client, Model: sr.Model, MaxOutput: info.Output,
+		ContextTokens: firstPositive(info.Context, provider.ContextWindow(sr.Model)),
+		Reasoning:     sr.Reasoning(effort),
+		Cost: func(us provider.Usage) float64 {
+			if !known {
+				return 0
+			}
+			return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
+		}}, known, nil
 }

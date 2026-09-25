@@ -657,18 +657,19 @@ func run(args []string) error {
 		}
 	}
 	tools := tool.All()
+	var mcps *mcpState
 	if len(cfg.MCP) > 0 {
-		clients := startMCP(cfg.MCP, cwd, func(msg string) {
+		mcps = startMCP(cfg.MCP, cwd, func(msg string) {
 			if !*quiet {
 				fmt.Fprintln(os.Stderr, u.dim("· "+msg))
 			}
 		})
 		defer func() {
-			for _, c := range clients {
+			for _, c := range mcps.clients {
 				c.Close()
 			}
 		}()
-		tools = append(tools, tool.MCPTools(clients)...)
+		tools = append(tools, tool.MCPTools(mcps.clients)...)
 	}
 	skills := skill.Discover(config.Home(), cwd)
 	if !*quiet {
@@ -699,16 +700,11 @@ func run(args []string) error {
 		}
 	}
 	if cfg.SubagentModel != "" {
-		if sr, err := provider.Resolve(cfg.SubagentModel, cfg, auth); err == nil {
-			info, known := sr.Info, sr.Known
-			a.Sub = &agent.SubModel{Client: sr.Client, Model: sr.Model, MaxOutput: info.Output,
-				ContextTokens: firstPositive(info.Context, provider.ContextWindow(sr.Model)),
-				Cost: func(us provider.Usage) float64 {
-					if !known {
-						return 0
-					}
-					return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
-				}}
+		if sub, known, err := subModel(cfg, auth, firstNonEmpty(*effort, cfg.Effort)); err == nil {
+			a.Sub = sub
+			if *maxCost > 0 && !known && !*quiet {
+				fmt.Fprintln(os.Stderr, u.dim("· --max-cost: no price known for subagent_model; its spending is not counted"))
+			}
 		} else if !*quiet {
 			fmt.Fprintln(os.Stderr, u.dim("· subagent_model ignored: "+firstLine(err.Error())))
 		}
@@ -870,6 +866,9 @@ func run(args []string) error {
 			}
 		}
 		if msg, ok := expandCommand(cwd, input); ok && strings.HasPrefix(input, "/") {
+			if msg == "" {
+				return fmt.Errorf("%s is an empty command file", strings.Fields(input)[0])
+			}
 			send = msg // agentium -p /review, and the like
 		}
 		if msg, ok, err := skill.Invoke(skills, input); ok {
@@ -893,7 +892,10 @@ func run(args []string) error {
 			stopTyping = u.startTyping(cancel)
 		}
 		checkpoints := len(sess.Checkpoints)
+		spentBefore := a.Spent
 		st, err := a.Run(ctx, send)
+		// What this turn cost, sub-agents on their own model included.
+		cost := a.Spent - spentBefore
 		totalTok.Store(int64(a.Usage.Input + a.Usage.CacheRead + a.Usage.CacheWrite + a.Usage.Output))
 		totalCost.Store(math.Float64bits(a.Spent))
 		stopTyping()
@@ -917,18 +919,11 @@ func run(args []string) error {
 		u.endLine()
 		u.mu.Unlock()
 		if !*quiet && u.live {
-			fmt.Fprintln(os.Stderr, u.turnSummary(st, err, turnCost(res, fb, st)))
+			fmt.Fprintln(os.Stderr, u.turnSummary(st, err, cost))
 		} else if !*quiet {
 			line := statsLine(st)
-			info, known := res.Info, res.Known
-			if fb != nil {
-				act := fb.Active()
-				info, known = act.Info, act.Known
-			}
-			if known {
-				if c := info.Price(st.Usage.Input, st.Usage.Output, st.Usage.CacheRead, st.Usage.CacheWrite); c > 0 {
-					line += fmt.Sprintf(" · $%.4f", c)
-				}
+			if cost > 0 {
+				line += fmt.Sprintf(" · $%.4f", cost)
 			}
 			fmt.Fprintln(os.Stderr, u.dim(line))
 		}
@@ -1172,6 +1167,10 @@ func run(args []string) error {
 			}
 		}
 		if msg, ok := expandCommand(cwd, line); ok && strings.HasPrefix(line, "/") && !skillCall(skills, line) {
+			if msg == "" {
+				u.note(strings.Fields(line)[0] + " is an empty command file; nothing sent")
+				continue
+			}
 			line = msg // /init, /review or a custom command: a message
 		}
 		if strings.HasPrefix(line, "/") && !skillCall(skills, line) {
@@ -1179,7 +1178,7 @@ func run(args []string) error {
 				printSkills(skills)
 				continue
 			}
-			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box, mem: mem}); done {
+			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box, mem: mem, mcp: mcps}); done {
 				return nil
 			}
 			continue
@@ -1205,6 +1204,7 @@ type slashEnv struct {
 	u     *ui
 	box   string
 	mem   *memCtl
+	mcp   *mcpState
 }
 
 // switchModel points the agent at ref and saves it as the default.
@@ -1391,26 +1391,26 @@ func slash(line string, e *slashEnv) (exit bool) {
 			u.note("usage: /rename <name>")
 			return false
 		}
+		if r := []rune(name); len(r) > 80 {
+			name = string(r[:80])
+		}
 		sess.Title = name
 		_ = sess.Save()
 		u.success("This session is now “" + name + "”" + u.paint(cDim, " (/resume "+name+" continues it later)"))
 	case "/resume":
-		list, _ := session.ForCwd(sess.Cwd, 20)
+		arg := strings.TrimSpace(strings.TrimPrefix(line, "/resume"))
+		limit := 20
+		if arg != "" {
+			limit = 500 // a name may belong to an older conversation
+		}
+		list, _ := session.ForCwd(sess.Cwd, limit)
 		if len(list) == 0 {
 			fmt.Fprintln(os.Stderr, "· no saved sessions here")
 			return false
 		}
-		arg := strings.TrimSpace(strings.TrimPrefix(line, "/resume"))
 		var chosen *session.Session
-		if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= len(list) {
-			chosen = list[n-1]
-		} else if arg != "" {
-			for _, ss := range list {
-				if strings.Contains(strings.ToLower(ss.Label()), strings.ToLower(arg)) {
-					chosen = ss
-					break
-				}
-			}
+		if arg != "" {
+			chosen = findSession(list, arg)
 		} else {
 			var items []menuItem
 			for i, ss := range list {
@@ -1509,6 +1509,12 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		a.Note = strings.Join(notes, "\n")
 		_ = sess.Save()
+	case "/mcp":
+		showMCP(u, cfg, e.mcp)
+	case "/tools":
+		showTools(u, a)
+	case "/doctor":
+		doctor(u, e, e.mcp)
 	case "/usage":
 		u := a.Usage
 		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
@@ -1516,6 +1522,25 @@ func slash(line string, e *slashEnv) (exit bool) {
 		u.failure("unknown command " + f[0] + u.paint(cDim, " · /help lists commands"))
 	}
 	return false
+}
+
+// findSession picks the session arg names: an exact title first, then a
+// number from /sessions, then a title or first request containing arg.
+func findSession(list []*session.Session, arg string) *session.Session {
+	for _, ss := range list {
+		if strings.EqualFold(ss.Title, arg) {
+			return ss
+		}
+	}
+	if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= min(len(list), 20) {
+		return list[n-1]
+	}
+	for _, ss := range list {
+		if strings.Contains(strings.ToLower(ss.Label()), strings.ToLower(arg)) {
+			return ss
+		}
+	}
+	return nil
 }
 
 func hashString(s string) string {

@@ -83,7 +83,7 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 		// A separate (usually cheaper) model: its own system prompt cache.
 		sub.Client, sub.Model, sub.Cost = m.Client, m.Model, m.Cost
 		sub.Fast, sub.FastModel = nil, ""
-		sub.Reasoning = provider.Reasoning{}
+		sub.Reasoning = m.Reasoning
 		if m.ContextTokens > 0 {
 			sub.ContextTokens = m.ContextTokens
 		}

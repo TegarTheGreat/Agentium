@@ -113,3 +113,21 @@ func TestClient(t *testing.T) {
 		t.Fatalf("long names: %s %s", l1, l2)
 	}
 }
+
+func TestCappedLog(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &cappedLog{f: f, left: 10}
+	for i := 0; i < 5; i++ {
+		if n, err := l.Write([]byte("0123456")); n != 7 || err != nil {
+			t.Fatalf("write = %d, %v", n, err)
+		}
+	}
+	f.Close()
+	b, _ := os.ReadFile(f.Name())
+	if !strings.HasPrefix(string(b), "0123456012\n[log truncated") {
+		t.Fatalf("log = %q", b)
+	}
+}
