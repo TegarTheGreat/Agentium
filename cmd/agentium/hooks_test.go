@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tegarthegreat/agentium/internal/config"
 	"github.com/tegarthegreat/agentium/internal/provider"
@@ -58,5 +59,18 @@ func TestUserWords(t *testing.T) {
 	}
 	if got := provider.UserWords("plain <recall> text"); got != "plain <recall> text" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestHookTimeoutEndsChildren(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh hooks")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	t0 := time.Now()
+	runHook(ctx, "sleep 5 & sleep 5; true", t.TempDir(), nil)
+	if d := time.Since(t0); d > 3*time.Second {
+		t.Fatalf("hook ran %v past its deadline", d)
 	}
 }

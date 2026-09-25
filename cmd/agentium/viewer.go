@@ -136,8 +136,9 @@ func (p *pager) find(from, dir int) {
 // jump moves to the next or previous message you sent.
 func (p *pager) jump(dir int) {
 	lines := p.view().lines
+	mine := func(i int) bool { return i >= 0 && i < len(lines) && strings.HasPrefix(stripANSI(lines[i]), "▌") }
 	for i := p.top + dir; i >= 0 && i < len(lines); i += dir {
-		if strings.HasPrefix(stripANSI(lines[i]), "▌") {
+		if mine(i) && !mine(i-1) { // the first line of a message
 			p.top = i
 			return
 		}

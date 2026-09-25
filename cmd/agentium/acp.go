@@ -350,6 +350,7 @@ func (s *acpServer) newSession(m rpcMsg) {
 	}
 	if s.cfg.Hooks != nil {
 		a.Env.PostEdit = s.cfg.Hooks.PostEdit
+		a.PreTool = preToolHook(s.cfg.Hooks.PreTool, cwd, s.log)
 	}
 	setupSandbox(a.Env, s.cfg, cwd, false)
 	if store := openCheckpoints(s.cfg, cwd); store != nil {

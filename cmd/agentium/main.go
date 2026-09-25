@@ -417,11 +417,11 @@ func (a *approver) ask(action, reason string) bool {
 		}
 	}
 	if a.ui.live && lineEditing {
-		if k, err := a.ui.approve(action, reason, scope); err == nil {
-			switch k {
-			case "a":
+		if k, err := a.ui.approve(action, reason, scope, keepable(key)); err == nil {
+			switch {
+			case k == "a" || k == "p" && !keepable(key):
 				remember()
-			case "p":
+			case k == "p":
 				keep()
 			}
 			if fb, ok := strings.CutPrefix(k, "t:"); ok {
@@ -435,7 +435,11 @@ func (a *approver) ask(action, reason string) bool {
 	}
 	a.ui.mu.Lock()
 	a.ui.endLine()
-	fmt.Fprintf(os.Stderr, "⚠ %s  (%s)\n  allow? [y]es / [N]o / [a]lways %s / [p] always, in this project: ", action, reason, scope)
+	keepHint := ""
+	if keepable(key) {
+		keepHint = " / [p] always, in this project"
+	}
+	fmt.Fprintf(os.Stderr, "⚠ %s  (%s)\n  allow? [y]es / [N]o / [a]lways %s%s: ", action, reason, scope, keepHint)
 	a.ui.mu.Unlock()
 	line, _ := a.in.ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
@@ -445,7 +449,11 @@ func (a *approver) ask(action, reason string) bool {
 		remember()
 		return true
 	case "p":
-		keep()
+		if keepable(key) {
+			keep()
+		} else {
+			remember()
+		}
 		return true
 	}
 	return false
@@ -846,6 +854,24 @@ func run(args []string) error {
 		a.Events.SubToolStart, a.Events.SubAgentTool = nil, u.subAgentTool
 		u.canSteer = true
 		a.Steer = u.takeSteer
+		if len(userPromptHooks) > 0 {
+			// Messages sent mid-turn pass the user_prompt hooks too.
+			a.Steer = func() []string {
+				var out []string
+				for _, m := range u.takeSteer() {
+					added, err := promptHooks(userPromptHooks, cwd, m, func(s string) { u.line("· " + firstLine(s)) })
+					if err != nil {
+						u.line("· not sent: " + err.Error())
+						continue
+					}
+					if added != "" {
+						m = "<hook-context>\n" + added + "\n</hook-context>\n\n" + m
+					}
+					out = append(out, m)
+				}
+				return out
+			}
+		}
 		u.startTicker()
 	}
 
@@ -1054,7 +1080,7 @@ func run(args []string) error {
 		extra := &statusExtra{dir: cwd, command: cfg.StatusLine, session: func() map[string]any {
 			used, limit := a.ContextUsed()
 			model, _ := curModel.Load().(string)
-			return map[string]any{"model": model, "mode": string(gate.GetMode()), "cwd": cwd, "session_id": sess.ID,
+			return map[string]any{"model": model, "mode": string(gate.GetMode()), "cwd": cwd,
 				"cost_usd": math.Float64frombits(totalCost.Load()), "tokens": totalTok.Load(),
 				"context_used": used, "context_max": limit}
 		}}
@@ -1136,7 +1162,10 @@ func run(args []string) error {
 				return submit("/help")
 			case k == "\x1bp" || k == "\x1bt": // Alt-P, Alt-T: model, effort
 				if len(e.buf) > 0 {
-					e.stash = append([]rune(nil), e.buf...) // ctrl+s brings it back
+					if len(e.stash.buf) > 0 {
+						return true // a draft is already put aside: don't lose this one
+					}
+					e.stash = e.capture(e.buf) // ctrl+s brings it back
 				}
 				if k == "\x1bp" {
 					return submit("/model")

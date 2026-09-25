@@ -59,7 +59,7 @@ type liveTool struct {
 
 const liveTail = 3
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|\x1b[=>]`)
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|\x1b[=>]`)
 
 // feed adds command output, keeping the last few lines. A carriage
 // return (progress bars) replaces the current line.

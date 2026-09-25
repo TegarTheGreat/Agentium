@@ -644,7 +644,7 @@ func approvalTitle(action, reason string) (title, what string) {
 }
 
 // approve asks for permission with a single key press.
-func (u *ui) approve(action, reason, scope string) (string, error) {
+func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 	title, what := approvalTitle(action, reason)
 	what = u.relative(what)
 	u.mu.Lock()
@@ -691,13 +691,17 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 			body.WriteString("  " + u.paint(cYellow, fmt.Sprintf("%d changes to this file are pending; each is asked for separately", len(match))) + "\n")
 		}
 	}
+	keepOpt, keepKey := "  [p] always, in this project", " · p always here"
+	if !keep {
+		keepOpt, keepKey = "", ""
+	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
-		u.paint(cDim, "[y] yes  [a] always "+scope+"  [p] always, in this project  [n] no  [t] no, and say why ›"))
+		u.paint(cDim, "[y] yes  [a] always "+scope+keepOpt+"  [n] no  [t] no, and say why ›"))
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
-		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always · p always here · n no · t tell why", "", nil)
+		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always"+keepKey+" · n no · t tell why", "", nil)
 	}
 	u.setTitle("needs you")
 	u.notify("Agentium needs your answer: " + title)
@@ -744,6 +748,10 @@ func (u *ui) approve(action, reason, scope string) (string, error) {
 					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always"))
 					return "a", nil
 				case "p":
+					if !keep {
+						fmt.Fprintln(os.Stderr, u.paint(cGreen, "always")+u.paint(cDim, " (this session; this one is not kept)"))
+						return "a", nil
+					}
 					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always, in this project")+u.paint(cDim, " · /permissions to review"))
 					return "p", nil
 				case "t":

@@ -185,16 +185,37 @@ func Prune(keep int, maxAge time.Duration) {
 	}
 }
 
-// titled reports whether the saved session at p has a name.
+// titled reports whether the saved session at p has a name: its
+// top-level "title", read without loading the messages.
 func titled(p string) bool {
 	f, err := os.Open(p)
 	if err != nil {
 		return false
 	}
 	defer f.Close()
-	head := make([]byte, 8192)
-	k, _ := io.ReadFull(f, head)
-	return bytes.Contains(head[:k], []byte(`"title":`))
+	dec := json.NewDecoder(io.LimitReader(f, 1<<20))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return false
+	}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		key, _ := t.(string)
+		if key == "messages" {
+			return false // title comes before the messages
+		}
+		var v json.RawMessage
+		if dec.Decode(&v) != nil {
+			return false
+		}
+		if key == "title" {
+			var title string
+			return json.Unmarshal(v, &title) == nil && title != ""
+		}
+	}
+	return false
 }
 
 // Label is the session's title, or its first request.

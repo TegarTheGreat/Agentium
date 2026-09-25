@@ -121,6 +121,7 @@ func bestOfN(ctx context.Context, n int, check, prompt, cwd string, res provider
 				Client: a.Client, Model: a.Model, System: agent.SystemPrompt(c.work, false, "") + skill.Prompt(skill.Discover(config.Home(), c.work)),
 				Tools: tool.All(), Env: env, MaxTurns: a.MaxTurns, MaxTokens: a.MaxTokens,
 				ContextTokens: a.ContextTokens, Verify: true, Reasoning: a.Reasoning, FastMode: a.FastMode, Cost: a.Cost,
+				PreTool: a.PreTool,
 				Events: agent.Events{
 					ToolStart: func(tc provider.ToolCall) { u.line(fmt.Sprintf("  [%d] › %s", c.n, summarizeCall(tc))) },
 				},

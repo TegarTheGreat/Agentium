@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -35,12 +34,10 @@ func (h hookStop) Is(target error) bool { return target == errHookStop }
 func runHook(ctx context.Context, command, dir string, input []byte) (stdout string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hookTimeout)
 	defer cancel()
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", command)
-	}
+	cmd := hookCommand(ctx, command)
+	// A hook that leaves a child holding its output must not hold the
+	// turn: stop waiting shortly after it is ended.
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(input)
 	var out, errb bytes.Buffer

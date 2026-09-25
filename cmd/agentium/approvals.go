@@ -15,8 +15,17 @@ import (
 // own data folder, never in the repository, so a cloned project cannot
 // approve anything for itself.
 
+// approvalsPath is per working folder, not per repository: "file
+// changes" approved in repo/docs must not cover all of repo.
 func approvalsPath(root string) string {
-	return filepath.Join(config.ProjectDir(config.ProjectRoot(root)), "approvals.json")
+	return filepath.Join(config.ProjectDir(filepath.Clean(root)), "approvals.json")
+}
+
+// keepable reports whether an approval may be kept for the project:
+// not for writes outside the workspace or into git internals, nor for
+// reading files outside it (credentials); those last one session.
+func keepable(key string) bool {
+	return !strings.HasPrefix(key, "write=") && !strings.HasPrefix(key, "read:")
 }
 
 func loadApprovals(root string) map[string]bool {

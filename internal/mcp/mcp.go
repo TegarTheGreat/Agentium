@@ -322,6 +322,9 @@ func startStdio(c *Client, cfg Config, dir string) (*stdioTransport, error) {
 			if f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
 				t.log = f
 				cmd.Stderr = &cappedLog{f: f, left: maxLogBytes}
+				// The log is copied through a pipe: a grandchild that keeps
+				// it open (npx, uvx, wrapper scripts) must not hang Close.
+				cmd.WaitDelay = time.Second
 			}
 		}
 	}

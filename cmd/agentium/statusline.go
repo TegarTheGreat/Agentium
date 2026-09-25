@@ -102,7 +102,14 @@ func sanitizeStatus(s string) string {
 		}
 		b.WriteByte(c)
 	}
-	return b.String() + "\x1b[0m"
+	// C1 controls (U+0080–U+009F) act as ESC sequences on some terminals.
+	out := strings.Map(func(r rune) rune {
+		if r >= 0x80 && r <= 0x9f {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(b.String(), ""))
+	return out + "\x1b[0m"
 }
 
 // gitStatus is the branch (in color) and the number of changed files,
@@ -111,7 +118,9 @@ func sanitizeStatus(s string) string {
 func gitStatus(dir string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-b", "--untracked-files=normal")
+	// --no-optional-locks: never hold .git/index.lock against the user's
+	// or the agent's own git commands.
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-b", "--untracked-files=normal")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -127,7 +136,8 @@ func gitStatus(dir string) string {
 	if strings.HasPrefix(head, "HEAD (no branch)") {
 		branch = "detached"
 	}
-	t := sgr(cInk) + branch + "\x1b[0m"
+	// A branch name comes from the repository: no control characters.
+	t := sgr(cInk) + strings.TrimSuffix(sanitizeStatus(branch), "\x1b[0m") + "\x1b[0m"
 	if i := strings.Index(rest, "[ahead "); i >= 0 {
 		if n, err := strconv.Atoi(strings.TrimRight(strings.Fields(rest[i+7:])[0], "],")); err == nil {
 			t += sgr(cGray) + " ↑" + strconv.Itoa(n) + "\x1b[0m"

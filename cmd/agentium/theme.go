@@ -107,7 +107,13 @@ func probeTerminal(timeout time.Duration) (bg [3]uint8, ok bool) {
 	// reply is in, nothing late can leak into the input (a terminal that
 	// knows neither query answers only this one).
 	q := "\x1b]11;?\x07"
-	if !truecolor && os.Getenv("TERM") != "linux" {
+	// Not under screen or tmux: they answer Device Attributes themselves
+	// but may pass the color query on, so its reply could come late and
+	// land in the input.
+	term := os.Getenv("TERM")
+	probe := !truecolor && term != "linux" && !strings.HasPrefix(term, "screen") && !strings.HasPrefix(term, "tmux") &&
+		os.Getenv("STY") == "" && os.Getenv("TMUX") == ""
+	if probe {
 		q += "\x1b[48;2;1;2;3m\x1bP$qm\x1b\\\x1b[0m"
 	}
 	os.Stderr.WriteString(q + "\x1b[c")
@@ -130,6 +136,15 @@ func probeTerminal(timeout time.Duration) (bg [3]uint8, ok bool) {
 	}
 	if sgrEcho(string(reply)) {
 		truecolor = true
+	} else if probe {
+		// A late color reply is swallowed here, not typed into the prompt.
+		for inputReady(os.Stdin, 50*time.Millisecond) {
+			if n, err := os.Stdin.Read(buf); err != nil || n == 0 {
+				break
+			} else if sgrEcho(string(buf[:n])) {
+				truecolor = true
+			}
+		}
 	}
 	bg[0], bg[1], bg[2], ok = parseOSC11(string(reply))
 	return bg, ok

@@ -99,10 +99,35 @@ type editor struct {
 	// input is empty; tab takes it. It may change while the editor waits.
 	ghost func() string
 
-	killed   []rune      // the last text cut with ctrl+k/u/w (ctrl+y puts it back)
-	stash    []rune      // a draft put aside with ctrl+s
+	killed   clip        // the last text cut with ctrl+k/u/w (ctrl+y puts it back)
+	stash    clip        // a draft put aside with ctrl+s
 	undo     []editState // ctrl+_ steps back through these
 	lastEdit string      // "type" while plain typing continues (one undo step)
+}
+
+// clip is text taken out of the input, with the pastes its chips stand
+// for (pastes are numbered per message, so they travel with the text).
+type clip struct {
+	buf    []rune
+	pastes []string
+}
+
+func (e *editor) capture(rs []rune) clip {
+	return clip{append([]rune(nil), rs...), append([]string(nil), e.pastes...)}
+}
+
+// restore returns c's text with its chips renumbered into this input.
+func (e *editor) restore(c clip) []rune {
+	off := len(e.pastes)
+	e.pastes = append(e.pastes, c.pastes...)
+	out := make([]rune, len(c.buf))
+	for i, r := range c.buf {
+		if isChip(r) {
+			r += rune(off)
+		}
+		out[i] = r
+	}
+	return out
 }
 
 // editState is the text and cursor, for undo.
@@ -232,8 +257,8 @@ func (e *editor) render(width int) {
 	promptW := strWidth(prompt)
 	avail := max(width-promptW-1, 10)
 	var sb strings.Builder
-	if ph := e.placeholder; !e.searching && len(e.buf) == 0 && (ph != "" || len(e.stash) > 0 || e.ghostText() != "") {
-		if len(e.stash) > 0 {
+	if ph := e.placeholder; !e.searching && len(e.buf) == 0 && (ph != "" || len(e.stash.buf) > 0 || e.ghostText() != "") {
+		if len(e.stash.buf) > 0 {
 			ph = "draft put aside · ctrl+s brings it back"
 		} else if g := e.ghostText(); g != "" {
 			ph = g + "   ⇥ tab"
@@ -662,8 +687,8 @@ func (e *editor) readLine() (string, error) {
 			}
 			e.cut(e.pos, j)
 		case "\x19": // Ctrl-Y: put back what was cut
-			if len(e.killed) > 0 {
-				e.insert(string(e.killed))
+			if len(e.killed.buf) > 0 {
+				e.insert(string(e.restore(e.killed)))
 			}
 		case "\x1f", "\x1b[45;5u": // Ctrl-_ (ctrl+/ on most terminals): undo
 			if n := len(e.undo); n > 0 {
@@ -673,11 +698,15 @@ func (e *editor) readLine() (string, error) {
 			}
 			e.lastEdit = ""
 		case "\x13": // Ctrl-S: put the draft aside, or bring it back
-			if len(e.buf) > 0 {
-				e.stash = append([]rune(nil), e.buf...)
-				e.buf, e.pos = nil, 0
-			} else if len(e.stash) > 0 {
-				e.buf, e.pos, e.stash = e.stash, len(e.stash), nil
+			// With both a draft and one put aside, they swap.
+			old := e.stash
+			e.stash, e.buf, e.pos = clip{}, nil, 0
+			if len(before.buf) > 0 {
+				e.stash = e.capture(before.buf)
+			}
+			if len(old.buf) > 0 {
+				e.buf = e.restore(old)
+				e.pos = len(e.buf)
 			}
 		case "\x0c": // Ctrl-L
 			if f := activeFS(); f != nil {
@@ -727,6 +756,9 @@ func (e *editor) readLine() (string, error) {
 				}
 			}
 		}
+		if string(before.buf) == string(e.buf) && before.pos != e.pos {
+			e.lastEdit = "" // typing after moving the cursor is a new undo step
+		}
 		if k != "\x1f" && k != "\x1b[45;5u" && string(before.buf) != string(e.buf) {
 			// Plain typing is one undo step until a space or another edit.
 			kind := "edit"
@@ -763,7 +795,7 @@ func (e *editor) cut(i, j int) {
 	if i >= j {
 		return
 	}
-	e.killed = append([]rune(nil), e.buf[i:j]...)
+	e.killed = e.capture(e.buf[i:j])
 	e.buf = append(e.buf[:i], e.buf[j:]...)
 	e.pos = i
 }

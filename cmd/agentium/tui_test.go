@@ -236,8 +236,18 @@ func TestEditorLinesAndCut(t *testing.T) {
 		t.Fatal("line bounds")
 	}
 	e.cut(3, 5)
-	if string(e.buf) != "ab\nef\ng" || string(e.killed) != "cd" || e.pos != 3 {
-		t.Fatalf("cut: %q %q %d", string(e.buf), string(e.killed), e.pos)
+	if string(e.buf) != "ab\nef\ng" || string(e.killed.buf) != "cd" || e.pos != 3 {
+		t.Fatalf("cut: %q %q %d", string(e.buf), string(e.killed.buf), e.pos)
+	}
+	// A paste chip keeps its text when put aside and brought back in a
+	// later message (whose pastes are numbered afresh).
+	e = &editor{pastes: []string{"PASTED"}}
+	e.buf = []rune("see " + string(rune(chipBase)))
+	c := e.capture(e.buf)
+	e.pastes, e.buf = []string{"OTHER"}, nil
+	e.buf = e.restore(c)
+	if e.text() != "see PASTED" {
+		t.Fatalf("restored %q", e.text())
 	}
 }
 
@@ -279,7 +289,14 @@ func TestGitStatusAndSanitize(t *testing.T) {
 	if got := stripANSI(gitStatus(dir)); got != "work" {
 		t.Fatalf("got %q", got)
 	}
-	if got := sanitizeStatus("\x1b[32mok\x1b[0m\x1b]0;title\x07\x1b[2J!"); got != "\x1b[32mok\x1b[0m!\x1b[0m" {
+	if got := sanitizeStatus("\x1b[32mok\x1b[0m\x1b]0;title\x07\x1b[2J!\u009d52;x\u009c"); got != "\x1b[32mok\x1b[0m!52;x\x1b[0m" {
 		t.Fatalf("sanitize %q", got)
+	}
+}
+
+func TestTruncateColonColors(t *testing.T) {
+	s := truncate("\x1b[38:2::255:0:0mredredredred\x1b[0m", 5)
+	if strings.Count(s, "\x1b[38:2::255:0:0m") != 1 || strings.Contains(stripANSI(s), "38") {
+		t.Fatalf("got %q", s)
 	}
 }

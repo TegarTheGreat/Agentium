@@ -122,19 +122,21 @@ On Linux and macOS, `agentium` opens a full-screen workspace; Windows uses the i
 - **Composer.** Its border shows what is running (`◐ Running go test · 0:04 · esc to stop`). Messages typed during a turn queue up there.
 - **Approvals.** File changes show their diff before you answer:
   - `y` yes
-  - `a` always
+  - `a` always, for this session
+  - `p` always, in this project (kept in Agentium's data folder, never in the repository; `/permissions` lists and revokes them)
   - `n` no
   - `t` no, and tell Agentium why; your words go to the model.
-- **Status line.** Model, mode, tokens and cost.
+- **Status line.** Model, mode, git branch and changed files, tokens and cost. `"status_line": "<command>"` shows your own instead (session JSON on stdin).
+- **Suggested next message.** After a reply, a guess at what you will send next shows dimmed in the empty composer; `Tab` takes it (`"suggest": false` turns it off).
 - **Attention.** The terminal title shows the state (working, needs you, ready). A bell or a desktop notification says when Agentium needs an answer or has finished a long turn.
 
 Night Shift, the default palette, uses truecolor and follows your terminal's light or dark background (`"theme": "light"` or `"dark"` overrides it). On exit, the conversation is printed to the terminal. `agentium --classic` (or `"ui": "classic"`) gives the inline interface with the same look. `"mouse": false` keeps the terminal's own text selection.
 
 | | |
 |---|---|
-| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/diff` `/context` `/compact` `/btw` `/theme` `/sessions` `/resume <n>` `/clear` `/usage` `/skills` `/<skill> [task]` `/update` `/exit` |
-| **Typing** | `/` shows commands with what they do · `@` fuzzy-finds project files · big pastes become `[Pasted text #1 +40 lines]` chips · `Ctrl-J`, `Shift-Enter` or a trailing `\` for a new line · `Ctrl-R` searches earlier messages · `Ctrl-G` writes the message in `$EDITOR` · `↑`/`↓` history |
-| **While it works** | `Enter` steers: your message reaches the agent at its next step · `Tab` queues it for after the turn · `↑` takes a pending message back · `Esc` stops the turn · `Ctrl-O` shows the full output of recent steps |
+| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/diff` `/context` `/compact` `/btw` `/theme` `/memory` `/export` `/sessions` `/resume` `/rename` `/fork` `/clear` `/usage` `/skills` `/<skill> [task]` `/init` `/review` `/commit` `/pr` `/permissions` `/doctor` `/mcp` `/tools` `/update` `/exit` |
+| **Typing** | `/` shows commands with what they do · `@` fuzzy-finds project files · big pastes become `[Pasted text #1 +40 lines]` chips · `Ctrl-J`, `Shift-Enter` or a trailing `\` for a new line · `Ctrl-R` searches earlier messages · `Ctrl-G` writes the message in `$EDITOR` · `↑`/`↓` move between lines, then through history · `Ctrl-K`/`Ctrl-U`/`Ctrl-W` cut and `Ctrl-Y` pastes back · `Ctrl-_` undoes · `Ctrl-S` puts a draft aside · `Alt-P`/`Alt-T` switch model and effort |
+| **While it works** | `Enter` steers: your message reaches the agent at its next step · `Tab` queues it for after the turn · `↑` takes a pending message back · `Esc` stops the turn · `Ctrl-O` shows the full output of recent steps; there `t` shows the whole conversation, `/` searches, `[` `]` jump between your messages, `e` opens it in `$EDITOR` |
 | **More commands** | `!command` runs a shell command yourself (the agent sees the output with your next message) · `/diff` shows what changed · `/context` shows what fills the context window · `/compact` summarizes older conversation · `/btw <question>` asks on the side without adding to the conversation · `/theme` switches the palette |
 | **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds file changes to an earlier turn · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
 
@@ -194,7 +196,16 @@ Subscription logins are offered only where the provider's terms allow third-part
   "ui": "fullscreen",
   "theme": "auto",
   "sandbox": { "network": "ask", "write": ["~/data"] },
-  "hooks": { "post_edit": ["gofmt -w {path}"], "stop": ["notify-send agentium done"] },
+  "subagent_model": "anthropic/claude-haiku-4-5",
+  "status_line": "~/bin/agentium-status",
+  "suggest": true,
+  "hooks": {
+    "post_edit": ["gofmt -w {path}"],
+    "stop": ["notify-send agentium done"],
+    "pre_tool": [{ "match": "bash", "command": "~/bin/check-command" }],
+    "user_prompt": ["git log -3 --oneline"],
+    "session_start": ["echo \"branch: $(git branch --show-current)\""]
+  },
   "mcp": {
     "github": { "command": "github-mcp-server", "args": ["stdio"], "env": { "GITHUB_TOKEN": "$GITHUB_TOKEN" } },
     "docs":   { "url": "https://mcp.example.com/mcp" }
@@ -290,7 +301,13 @@ agentium mcp login docs   # opens the browser; tokens are stored and refreshed a
 agentium mcp list         # servers and login status
 ```
 
-**Hooks.** `post_edit` runs after each edit (`{path}` is substituted). `stop` runs when a task finishes.
+**Hooks** (only from `~/.agentium/config.json`, so a repository cannot add any):
+- `post_edit` runs after each edit (`{path}` is substituted); `stop` runs when a task finishes.
+- `pre_tool` runs before each tool call whose name matches `match` (a regular expression), with the call as JSON on stdin. Exit code 2 blocks the call, and what the hook wrote to stderr is what the model is told. Sub-agents are covered too.
+- `user_prompt` runs before each message is sent (the message is on stdin); what it prints goes along as context, and exit code 2 stops the message.
+- `session_start` runs once; what it prints goes along with the first message.
+
+**Commands.** `/init` writes `AGENTS.md`, `/review` reviews the current changes, `/commit` commits them in the repository's style and `/pr` opens a pull request. Your own commands are Markdown files in `.agentium/commands/` or `.claude/commands/` (in the project, `~/.agentium/commands` or `~/.claude/commands`); `$ARGUMENTS` is replaced by what follows the command. They cannot replace a built-in command.
 
 **Editors.** `agentium acp` implements the [Agent Client Protocol](https://agentclientprotocol.com), so ACP clients such as Zed and JetBrains IDEs can use Agentium. Tool calls, plans and permission prompts appear in the editor.
 

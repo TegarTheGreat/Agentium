@@ -33,6 +33,10 @@ func TestPruneKeepsNamedSessions(t *testing.T) {
 		if i == 0 {
 			s.Title = "keep me"
 		}
+		if i == 1 { // a tool call's "title" is not the session's
+			s.Messages = append(s.Messages, provider.Message{Role: provider.RoleAssistant,
+				ToolCalls: []provider.ToolCall{{ID: "1", Name: "mcp__gh__create_issue", Args: []byte(`{"title":"bug"}`)}}})
+		}
 		if err := s.Save(); err != nil {
 			t.Fatal(err)
 		}
