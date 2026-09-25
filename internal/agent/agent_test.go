@@ -828,3 +828,10 @@ func TestOpenTodosNudgeOnce(t *testing.T) {
 		t.Fatalf("nudge: %q", last)
 	}
 }
+
+func TestStripToolMarkup(t *testing.T) {
+	in := "Add mode() to calc.py.\nRun the tests.\n<tool_calls>\n<invoke name=\"bash\"><parameter name=\"cmd\">pytest</parameter></invoke>\n</tool_calls>"
+	if got := stripToolMarkup(in); got != "Add mode() to calc.py.\nRun the tests." {
+		t.Fatalf("got %q", got)
+	}
+}

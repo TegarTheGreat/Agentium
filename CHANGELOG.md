@@ -2,6 +2,16 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`/handoff [goal]`** starts a new conversation with a brief the model writes for that goal: the relevant files, the decisions, the current state and the first steps. It is an alternative to compacting a long session, as in Amp. The brief waits in the message box for you to edit and send, and the old conversation stays resumable.
+
+### Fixed
+
+- Summaries and hand-off briefs no longer end with tool-call markup that some models write as text.
+
 ## [0.18.0] - 2026-09-25
 
 ### Added

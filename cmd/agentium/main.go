@@ -1303,7 +1303,9 @@ func run(args []string) error {
 			}
 		} else if ed != nil {
 			ed.prompt = ps
-			ed.draft = []rune(draft)
+			if len(ed.draft) == 0 { // a /handoff brief may be waiting
+				ed.draft = []rune(draft)
+			}
 			fmt.Fprint(os.Stderr, "\n")
 			line, err = ed.readLine()
 			if errors.Is(err, errInterrupt) || errors.Is(err, errEOF) {
@@ -1368,6 +1370,35 @@ func run(args []string) error {
 		if strings.HasPrefix(line, "/") && !skillCall(skills, line) {
 			if line == "/skills" {
 				printSkills(skills)
+				continue
+			}
+			if (line == "/handoff" || strings.HasPrefix(line, "/handoff ")) && ed != nil {
+				if len(a.Messages) == 0 {
+					u.note("nothing to hand off yet")
+					continue
+				}
+				goal := strings.TrimSpace(strings.TrimPrefix(line, "/handoff"))
+				u.note("writing the hand-off…")
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				brief, err := a.Handoff(ctx, goal)
+				cancel()
+				if err != nil {
+					u.failure("hand-off failed: " + firstLine(err.Error()))
+					continue
+				}
+				old := sess.Label()
+				_ = sess.Save()
+				a.Reset()
+				*sess = *session.New(sess.Cwd, sess.Model)
+				ed.draft = []rune(brief)
+				fmt.Fprintln(os.Stderr)
+				for _, l := range strings.Split(brief, "\n") {
+					for _, w := range wordWrap(l, termWidth(os.Stderr)-14) {
+						fmt.Fprintln(os.Stderr, u.paint(cDim, "    │ ")+w)
+					}
+				}
+				u.success("New conversation · the hand-off is in the message box: edit it (ctrl+g opens an editor), then enter" +
+					u.paint(cDim, " · the old one: /resume "+oneLine(old, 30)))
 				continue
 			}
 			if line == "/watch" && ed != nil {

@@ -59,6 +59,7 @@ var slashCommands = []slashCmd{
 	{"/commit", "commit the changes with a message in the repo's style", false},
 	{"/pr", "push the branch and open a pull request", false},
 	{"/fork", "continue in a copy of this conversation", false},
+	{"/handoff", "start fresh with a brief for a new goal (instead of compacting)", true},
 	{"/help", "commands and keys (also ?)", false},
 	{"/exit", "quit (also ctrl+d)", false},
 }

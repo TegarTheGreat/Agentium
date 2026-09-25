@@ -222,25 +222,7 @@ func (a *Agent) compact(ctx context.Context) error {
 	if split <= 0 {
 		return fmt.Errorf("no safe split point")
 	}
-	var tr strings.Builder
-	for _, m := range a.Messages[:split] {
-		switch m.Role {
-		case provider.RoleUser:
-			fmt.Fprintf(&tr, "\nUSER: %s\n", m.Text)
-			if len(m.Images) > 0 {
-				fmt.Fprintf(&tr, "[user attached %d image(s)]\n", len(m.Images))
-			}
-		case provider.RoleAssistant:
-			if m.Text != "" {
-				fmt.Fprintf(&tr, "\nASSISTANT: %s\n", m.Text)
-			}
-			for _, c := range m.ToolCalls {
-				fmt.Fprintf(&tr, "TOOL CALL %s %s\n", c.Name, clip(string(c.Args), 400))
-			}
-		case provider.RoleTool:
-			fmt.Fprintf(&tr, "RESULT: %s\n", clip(m.Text, 600))
-		}
-	}
+	tr := transcript(a.Messages[:split])
 	client, model := a.Client, a.Model
 	if a.Fast != nil {
 		client, model = a.Fast, a.FastModel
@@ -250,7 +232,7 @@ func (a *Agent) compact(ctx context.Context) error {
 		Model:  model,
 		System: "You compress coding-agent conversations into precise working notes.",
 		// The most recent history matters most: keep the end if too long.
-		Messages:  []provider.Message{{Role: provider.RoleUser, Text: clipHead(tr.String(), 400000) + "\n\n---\n" + compactPrompt}},
+		Messages:  []provider.Message{{Role: provider.RoleUser, Text: clipHead(tr, 400000) + "\n\n---\n" + compactPrompt}},
 		MaxTokens: 4000,
 	}, nil)
 	if err != nil {
@@ -262,7 +244,7 @@ func (a *Agent) compact(ctx context.Context) error {
 		a.Spent += a.Cost(resp.Usage)
 	}
 	a.mu.Unlock()
-	summary := strings.TrimSpace(resp.Text)
+	summary := stripToolMarkup(resp.Text)
 	if summary == "" {
 		return fmt.Errorf("empty summary")
 	}
@@ -302,6 +284,73 @@ func (a *Agent) compact(ctx context.Context) error {
 	}
 	a.invalidateFrom(0)
 	return nil
+}
+
+// stripToolMarkup cuts tool-call markup a model wrote as text (seen
+// when the transcript it summarizes shows tool calls).
+func stripToolMarkup(s string) string {
+	for _, m := range []string{"<tool_calls>", "<function_calls>", "<invoke ", "<tool_call>", "<｜tool", "<|tool"} {
+		if i := strings.Index(s, m); i >= 0 {
+			s = s[:i]
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
+// transcript renders messages as plain text for a summarizing model.
+func transcript(msgs []provider.Message) string {
+	var tr strings.Builder
+	for _, m := range msgs {
+		switch m.Role {
+		case provider.RoleUser:
+			fmt.Fprintf(&tr, "\nUSER: %s\n", m.Text)
+			if len(m.Images) > 0 {
+				fmt.Fprintf(&tr, "[user attached %d image(s)]\n", len(m.Images))
+			}
+		case provider.RoleAssistant:
+			if m.Text != "" {
+				fmt.Fprintf(&tr, "\nASSISTANT: %s\n", m.Text)
+			}
+			for _, c := range m.ToolCalls {
+				fmt.Fprintf(&tr, "TOOL CALL %s %s\n", c.Name, clip(string(c.Args), 400))
+			}
+		case provider.RoleTool:
+			fmt.Fprintf(&tr, "RESULT: %s\n", clip(m.Text, 600))
+		}
+	}
+	return tr.String()
+}
+
+const handoffPrompt = `Write the first message of a NEW session with a coding agent that continues this work with a fresh context. The new session's goal: %s
+
+Write it as the user, in the user's language, addressed to the agent. Include only what that goal needs: the goal itself, the relevant files (paths), decisions already made and why, the current state (what works, what fails, exact errors), constraints the user gave, and the first steps. Be specific and brief (at most about 30 lines). Plain text only: do not call tools or write tool-call markup. No preamble.`
+
+// Handoff writes the opening message for a new session that continues
+// this one toward goal, with only the context the goal needs (Amp's
+// handoff: a fresh start instead of a lossy compaction).
+func (a *Agent) Handoff(ctx context.Context, goal string) (string, error) {
+	if goal == "" {
+		goal = "carry on with the current task"
+	}
+	client, model := a.Client, a.Model
+	if a.Fast != nil {
+		client, model = a.Fast, a.FastModel
+	}
+	resp, err := client.Stream(ctx, provider.Request{
+		Model:     model,
+		System:    "You write precise hand-off briefs between coding-agent sessions.",
+		Messages:  []provider.Message{{Role: provider.RoleUser, Text: clipHead(transcript(a.Messages), 300000) + "\n\n---\n" + fmt.Sprintf(handoffPrompt, goal)}},
+		MaxTokens: 4000,
+	}, nil)
+	if err != nil {
+		return "", err
+	}
+	a.Charge(resp.Usage, a.Fast == nil)
+	brief := stripToolMarkup(resp.Text)
+	if brief == "" {
+		return "", fmt.Errorf("the model wrote nothing")
+	}
+	return brief, nil
 }
 
 func clip(s string, n int) string {
