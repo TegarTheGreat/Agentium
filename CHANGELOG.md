@@ -4,6 +4,10 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- `/usage` shows the session's cost as well, and `/cost` is another name for it.
+
 ### Fixed
 
 - `agentium -p /command` uses the command's `model:` too (your own commands; a repository's cannot ask there).

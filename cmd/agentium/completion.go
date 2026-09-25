@@ -46,7 +46,7 @@ var slashCommands = []slashCmd{
 	{"/resume", "continue a saved conversation (picker, number or name)", false},
 	{"/rename", "name this conversation", true},
 	{"/clear", "start a new conversation", false},
-	{"/usage", "tokens used in this session", false},
+	{"/usage", "tokens and cost of this session (also /cost)", false},
 	{"/skills", "list skills", false},
 	{"/agents", "your specialist sub-agents", false},
 	{"/bug", "open a prefilled bug report", true},

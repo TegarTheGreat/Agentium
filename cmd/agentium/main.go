@@ -2027,9 +2027,13 @@ func slash(line string, e *slashEnv) (exit bool) {
 		showTools(u, a)
 	case "/doctor":
 		doctor(u, e, e.mcp)
-	case "/usage":
-		u := a.Usage
-		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s\n", a.Turns, plural(a.Turns), fmtK(u.Input+u.CacheRead+u.CacheWrite), fmtK(u.CacheRead), fmtK(u.Output))
+	case "/usage", "/cost":
+		used, spent := a.Totals()
+		cost := ""
+		if spent > 0 {
+			cost = fmt.Sprintf(" · $%.4f", spent)
+		}
+		fmt.Fprintf(os.Stderr, "· %d turn%s · in %s (cached %s) · out %s%s\n", a.Turns, plural(a.Turns), fmtK(used.Input+used.CacheRead+used.CacheWrite), fmtK(used.CacheRead), fmtK(used.Output), cost)
 	default:
 		u.failure("unknown command " + f[0] + u.paint(cDim, " · /help lists commands"))
 	}

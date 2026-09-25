@@ -661,3 +661,10 @@ func firstNonEmptyStr(ss ...string) string {
 	}
 	return ""
 }
+
+// Totals is the session's usage and cost so far (sub-agents included).
+func (a *Agent) Totals() (provider.Usage, float64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Usage, a.Spent
+}
