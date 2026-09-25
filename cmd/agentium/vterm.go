@@ -19,7 +19,7 @@ type vterm struct {
 	st       vstyle
 	pending  []byte // an incomplete UTF-8 sequence or escape
 	maxLines int
-	dropped  int // lines trimmed from the top so far
+	dropped  int            // lines trimmed from the top so far
 	links    []string       // hyperlink targets (OSC 8), by vstyle.link-1
 	linkIDs  map[string]int // target → index+1
 }
