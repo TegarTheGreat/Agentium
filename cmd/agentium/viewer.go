@@ -59,7 +59,7 @@ func sanitizeKeepTabs(s string) string {
 		if r == '\t' {
 			return ' '
 		}
-		if r < 0x20 && r != '\n' || r == 0x7f {
+		if r < 0x20 && r != '\n' || r == 0x7f || r >= 0x80 && r < 0xa0 { // C0, DEL, C1
 			return -1
 		}
 		return r

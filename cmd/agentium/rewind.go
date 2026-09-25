@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tegarthegreat/agentium/internal/agent"
 	"github.com/tegarthegreat/agentium/internal/checkpoint"
@@ -14,8 +15,9 @@ import (
 
 // turnStart is a message the user typed, where a turn begins.
 type turnStart struct {
-	index int    // in the conversation
-	words string // what the user typed
+	index int       // in the conversation
+	words string    // what the user typed
+	at    time.Time // when (zero in sessions saved before this was kept)
 }
 
 // userTurns lists the turns still in the conversation (compaction folds
@@ -26,13 +28,17 @@ func userTurns(msgs []provider.Message) []turnStart {
 		if m.Role != provider.RoleUser {
 			continue
 		}
+		if m.Typed != "" {
+			out = append(out, turnStart{i, m.Typed, m.At})
+			continue
+		}
 		t := m.Text
 		if strings.HasPrefix(t, "[agentium]") || strings.HasPrefix(t, "[Summary of the earlier") ||
 			strings.HasPrefix(t, "[The user sent this while") || strings.HasPrefix(t, "[The user approved") {
 			continue
 		}
 		if w := provider.UserWords(t); w != "" {
-			out = append(out, turnStart{i, w})
+			out = append(out, turnStart{index: i, words: w})
 		}
 	}
 	return out
@@ -57,14 +63,21 @@ func rewind(u *ui, a *agent.Agent, sess *session.Session, store *checkpoint.Stor
 		return
 	}
 	k, _ := strconv.Atoi(pick)
-	// The checkpoints of that turn and every later one.
-	later := map[string]bool{}
-	for _, t := range turns[k:] {
-		later[strings.TrimSpace(t.words)] = true
-	}
+	// The checkpoints of that turn and every later one: taken after its
+	// message was sent (older sessions: matched by the prompt).
 	undoable := 0
-	for i := len(sess.Checkpoints) - 1; i >= 0 && later[strings.TrimSpace(sess.Checkpoints[i].Prompt)]; i-- {
-		undoable++
+	if at := turns[k].at; !at.IsZero() {
+		for i := len(sess.Checkpoints) - 1; i >= 0 && !sess.Checkpoints[i].Time.Before(at); i-- {
+			undoable++
+		}
+	} else {
+		later := map[string]bool{}
+		for _, t := range turns[k:] {
+			later[strings.TrimSpace(t.words)] = true
+		}
+		for i := len(sess.Checkpoints) - 1; i >= 0 && later[strings.TrimSpace(sess.Checkpoints[i].Prompt)]; i-- {
+			undoable++
+		}
 	}
 	what := []menuItem{{value: "chat", label: "Conversation only", hint: "files stay as they are"}}
 	if store != nil && undoable > 0 {
@@ -88,18 +101,17 @@ func rewind(u *ui, a *agent.Agent, sess *session.Session, store *checkpoint.Stor
 			}
 		}
 		a.Env.ForgetReads()
-		if choice == "code" {
-			a.Note = strings.Join(notes, "\n")
+		if choice == "code" && len(notes) > 0 {
+			a.Note = strings.TrimSpace(a.Note + "\n" + strings.Join(notes, "\n"))
 		}
+		refreshChanges(sess.Cwd)
 	}
 	if choice == "both" || choice == "chat" {
 		a.Messages = append([]provider.Message(nil), a.Messages[:turns[k].index]...)
 		sess.Messages = a.Messages
-		a.Note = ""
 		ed.draft = []rune(turns[k].words) // edit it and send again
 	}
 	_ = sess.Save()
-	refreshChanges(sess.Cwd)
 	switch choice {
 	case "both":
 		u.success("Rewound the conversation and the files · your message is back in the box")
@@ -111,25 +123,34 @@ func rewind(u *ui, a *agent.Agent, sess *session.Session, store *checkpoint.Stor
 }
 
 // refreshChanges sets the side panel's change list from git's view of
-// the working tree, after files were put back.
+// the working tree (relative to the folder, new files included), after
+// files were put back.
 func refreshChanges(dir string) {
 	f := activeFS()
 	if f == nil {
 		return
 	}
-	out, err := git(dir, "diff", "--numstat", "HEAD")
+	out, err := git(dir, "diff", "--numstat", "-z", "--relative", "HEAD")
 	if err != nil {
+		f.resetChanges(nil)
 		return
 	}
 	var cs []fileChange
-	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
-		p := strings.Fields(l)
-		if len(p) < 3 {
-			continue
+	for _, rec := range strings.Split(strings.TrimRight(out, "\x00"), "\x00") {
+		p := strings.SplitN(rec, "\t", 3)
+		if len(p) < 3 || p[2] == "" {
+			continue // a rename record: its paths follow; skipped
 		}
 		add, _ := strconv.Atoi(p[0])
 		del, _ := strconv.Atoi(p[1])
-		cs = append(cs, fileChange{strings.Join(p[2:], " "), add, del})
+		cs = append(cs, fileChange{p[2], add, del})
+	}
+	if untracked, err := git(dir, "ls-files", "-z", "--others", "--exclude-standard"); err == nil {
+		for _, p := range strings.Split(strings.TrimRight(untracked, "\x00"), "\x00") {
+			if p != "" {
+				cs = append(cs, fileChange{p, 0, 0})
+			}
+		}
 	}
 	f.resetChanges(cs)
 }

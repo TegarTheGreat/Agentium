@@ -114,7 +114,9 @@ func (v *vterm) put(r rune) {
 		return
 	}
 	if v.col+w > v.width {
+		link := v.st.link
 		v.newline()
+		v.st.link = link // a wrapped link continues on the next row
 	}
 	line := v.lines[v.row]
 	for len(line) < v.col+w {
@@ -168,7 +170,7 @@ func (v *vterm) escape(p []byte) (used int, ok bool) {
 				return end, true
 			}
 		}
-		if len(p) > 512 {
+		if len(p) > 4096 {
 			return len(p), true // an unterminated OSC: drop it
 		}
 		return 0, false

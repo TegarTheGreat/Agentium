@@ -243,13 +243,17 @@ func truncate(s string, w int) string {
 		return s
 	}
 	var sb strings.Builder
-	n, styled := 0, false
+	n, styled, linked := 0, false, false
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b {
 			if loc := ansiRE.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
-				sb.WriteString(s[i : i+loc[1]])
+				seq := s[i : i+loc[1]]
+				sb.WriteString(seq)
 				i += loc[1]
 				styled = true
+				if strings.HasPrefix(seq, "\x1b]8;") { // a hyperlink opens or closes
+					linked = !strings.HasPrefix(seq, "\x1b]8;;\x1b") && !strings.HasPrefix(seq, "\x1b]8;;\x07")
+				}
 				continue
 			}
 		}
@@ -261,6 +265,9 @@ func truncate(s string, w int) string {
 		sb.WriteRune(r)
 		n += rw
 		i += size
+	}
+	if linked {
+		sb.WriteString("\x1b]8;;\x1b\\") // a cut link must not run on
 	}
 	sb.WriteString("…")
 	if styled {

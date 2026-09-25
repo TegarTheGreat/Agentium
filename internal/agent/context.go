@@ -287,11 +287,24 @@ func (a *Agent) compact(ctx context.Context) error {
 }
 
 // stripToolMarkup cuts tool-call markup a model wrote as text (seen
-// when the transcript it summarizes shows tool calls).
+// when the transcript it summarizes shows tool calls): from the first line
+// that starts with such markup, outside a code fence.
 func stripToolMarkup(s string) string {
-	for _, m := range []string{"<tool_calls>", "<function_calls>", "<invoke ", "<tool_call>", "<｜tool", "<|tool"} {
-		if i := strings.Index(s, m); i >= 0 {
-			s = s[:i]
+	lines := strings.Split(s, "\n")
+	fence := false
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "```") {
+			fence = !fence
+			continue
+		}
+		if fence {
+			continue
+		}
+		for _, m := range []string{"<tool_calls>", "<function_calls>", "<invoke ", "<tool_call>", "<｜tool", "<|tool"} {
+			if strings.HasPrefix(t, m) {
+				return strings.TrimSpace(strings.Join(lines[:i], "\n"))
+			}
 		}
 	}
 	return strings.TrimSpace(s)

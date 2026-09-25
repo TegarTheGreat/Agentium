@@ -1042,6 +1042,7 @@ func run(args []string) error {
 		}
 		checkpoints := len(sess.Checkpoints)
 		sug.clear()
+		a.Typed = input // kept with the message (/rewind puts it back)
 		spentBefore := a.Spent
 		st, err := a.Run(ctx, send)
 		// What this turn cost, sub-agents on their own model included.
@@ -1299,7 +1300,12 @@ func run(args []string) error {
 		if u.live {
 			ps = u.prompt(gate.GetMode() == policy.Plan)
 		}
-		next, queued, draft := u.takeQueued()
+		next, queued, draft := "", false, ""
+		if ed == nil || len(ed.draft) == 0 {
+			// A /handoff brief or a rewound message waits in the box: it
+			// goes first, queued messages after it.
+			next, queued, draft = u.takeQueued()
+		}
 		if queued {
 			// A message typed while the last turn ran.
 			line = next
@@ -1403,11 +1409,15 @@ func run(args []string) error {
 				old := sess.Label()
 				_ = sess.Save()
 				a.Reset()
+				a.Note = "" // notes about the old conversation (undone turns …)
+				if dirs := gate.Dirs(); len(dirs) > 0 {
+					a.Note = "Working directories besides this one: " + strings.Join(dirs, ", ")
+				}
 				*sess = *session.New(sess.Cwd, sess.Model)
 				ed.draft = []rune(brief)
 				fmt.Fprintln(os.Stderr)
 				for _, l := range strings.Split(brief, "\n") {
-					for _, w := range wordWrap(l, termWidth(os.Stderr)-14) {
+					for _, w := range wordWrap(sanitize(l), termWidth(os.Stderr)-14) {
 						fmt.Fprintln(os.Stderr, u.paint(cDim, "    │ ")+w)
 					}
 				}

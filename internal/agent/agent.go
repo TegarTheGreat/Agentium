@@ -89,6 +89,9 @@ type Agent struct {
 	// ("yes, and …"); whichever agent (lead or sub-agent) runs its next
 	// step gets it, since that is the one that asked.
 	Notes func() []string
+	// Typed, if set, is what the user typed for the next Run (the input
+	// may carry context around it); it is kept with the message.
+	Typed string
 	// Steer, if set, returns messages the user sent while the agent was
 	// working; they are given to the model after the current step.
 	Steer func() []string
@@ -164,6 +167,8 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 	start := time.Now()
 	var st Stats
 	rs := runState{task: input, fileEdits: map[string]int{}, editWarned: map[string]bool{}}
+	typed := firstNonEmptyStr(a.Typed, input)
+	a.Typed = ""
 	if a.Note != "" {
 		input = "[" + a.Note + "]\n\n" + input
 		a.Note = ""
@@ -179,7 +184,7 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 			input += "\n\n" + policy.PlanNote
 		}
 	}
-	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input, Images: a.Attach})
+	a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Text: input, Images: a.Attach, Typed: typed, At: start})
 	a.Attach = nil
 	maxTurns := a.MaxTurns
 	if maxTurns <= 0 {
@@ -642,4 +647,13 @@ func running(ctx context.Context, fallback *Agent) *Agent {
 		return ag
 	}
 	return fallback
+}
+
+func firstNonEmptyStr(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }

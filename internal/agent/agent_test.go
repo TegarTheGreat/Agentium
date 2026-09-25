@@ -834,4 +834,8 @@ func TestStripToolMarkup(t *testing.T) {
 	if got := stripToolMarkup(in); got != "Add mode() to calc.py.\nRun the tests." {
 		t.Fatalf("got %q", got)
 	}
+	keep := "Fixed parser.go to handle `<tool_call>` tags.\n```\n<invoke name=x>\n```\nDone."
+	if got := stripToolMarkup(keep); got != keep {
+		t.Fatalf("cut real text: %q", got)
+	}
 }

@@ -39,8 +39,13 @@ type ToolCall struct {
 // Message is one provider-neutral conversation entry.
 // A tool result is a RoleTool message with ToolCallID set.
 type Message struct {
-	Role       Role       `json:"role"`
-	Text       string     `json:"text,omitempty"`
+	Role Role   `json:"role"`
+	Text string `json:"text,omitempty"`
+	// Typed is what the user typed, for a message that starts a turn
+	// (Text may carry context and notes around it); At is when it was
+	// sent. Neither is sent to the model.
+	Typed      string     `json:"typed,omitempty"`
+	At         time.Time  `json:"at,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	IsError    bool       `json:"is_error,omitempty"`
