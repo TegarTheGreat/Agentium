@@ -22,3 +22,6 @@ func confineAndExec(Config, []string) error {
 
 // CleanupTemp removes the private temp directory; there is none here.
 func CleanupTemp() {}
+
+// datagramFilterSupported: the socket filter is Linux-only.
+func datagramFilterSupported() bool { return false }
