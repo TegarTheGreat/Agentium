@@ -84,7 +84,13 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 		l.untrusted = true
 	}
 	failed := err != nil
-	if name == "bash" {
+	if name == "bash" && strings.TrimSpace(str("cmd")) == "" {
+		// A background job's read, input or kill, or the job list: not a
+		// command that passes or fails.
+		if !failed {
+			return
+		}
+	} else if name == "bash" {
 		exit := 0
 		if m := exitLine.FindStringSubmatch(out); m != nil {
 			fmt.Sscanf(m[1], "%d", &exit)

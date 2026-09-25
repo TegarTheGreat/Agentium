@@ -602,6 +602,16 @@ func TestLessonFromErrorToFix(t *testing.T) {
 	}
 }
 
+func TestJobReadsAreNotLessons(t *testing.T) {
+	var l Ledger
+	for i := 0; i < 3; i++ {
+		l.record("bash", json.RawMessage(`{"job":1}`), "job 1 exited (exit 0)\nok", nil)
+	}
+	if ls := l.Lessons(); len(ls) != 0 {
+		t.Fatalf("lessons from job reads: %v", ls)
+	}
+}
+
 func TestEffortEscalatesOnFailureAndResets(t *testing.T) {
 	fail := calls(tc("x", "bash", `{"cmd":"exit 1"}`))
 	var efforts []string

@@ -420,6 +420,9 @@ func (s *Store) Lessons(ls []string, trusted bool) []string {
 	var out []string
 	for _, l := range ls {
 		l = Redact(l)
+		if strings.HasPrefix(l, "``") {
+			continue // no command: nothing learned (older versions filed these)
+		}
 		if !trusted || suspicious.MatchString(l) || !strings.Contains(past, lessonKey(l)) {
 			continue
 		}
