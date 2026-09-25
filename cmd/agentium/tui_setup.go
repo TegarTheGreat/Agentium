@@ -140,6 +140,7 @@ var keyRows = [][2]string{
 	{"ctrl+k/u/w  ctrl+y", "cut to line end/start, a word · paste it back"},
 	{"ctrl+_  ctrl+s", "undo typing · put the draft aside (again: bring back)"},
 	{"alt+b/f  alt+d", "word left/right · cut the next word"},
+	{"/vim", "vim keys: esc normal mode · hjkl w b e 0 $ · x dd dw cw D C p u · i a A o"},
 	{"@file.png", "attach an image"},
 }
 

@@ -34,7 +34,9 @@ type Config struct {
 	StatusLine string `json:"status_line,omitempty"`
 	// Suggest shows a guess of your next message after each reply (a
 	// small extra call); default on for cheap models or with fast_model.
-	Suggest   *bool  `json:"suggest,omitempty"`
+	Suggest *bool `json:"suggest,omitempty"`
+	// Vim turns on vim keys in the message box (also /vim).
+	Vim       bool   `json:"vim,omitempty"`
 	Mode      string `json:"mode,omitempty"`  // ask | auto | yolo
 	UI        string `json:"ui,omitempty"`    // fullscreen (default) | classic
 	Theme     string `json:"theme,omitempty"` // auto (default) | dark | light

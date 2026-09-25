@@ -99,6 +99,10 @@ type editor struct {
 	// input is empty; tab takes it. It may change while the editor waits.
 	ghost func() string
 
+	vim        bool   // vim mode ("vim": true, /vim)
+	vimNormal  bool   // in vim's normal mode (else insert)
+	vimPending string // an operator waiting for its motion (d, c, y, g, r)
+
 	killed   clip        // the last text cut with ctrl+k/u/w (ctrl+y puts it back)
 	stash    clip        // a draft put aside with ctrl+s
 	undo     []editState // ctrl+_ steps back through these
@@ -244,6 +248,9 @@ func (e *editor) render(width int) {
 		}
 	}
 	prompt := e.prompt
+	if e.vim && e.vimNormal {
+		prompt = "\x1b[2m[N]\x1b[0m " + prompt // vim's normal mode
+	}
 	if e.searching {
 		q := string(e.query)
 		prompt = "\x1b[2m(history search)\x1b[0m " + q + " \x1b[2m›\x1b[0m "
@@ -477,6 +484,7 @@ func (e *editor) readLine() (string, error) {
 	e.buf, e.pos = e.draft, len(e.draft)
 	e.draft, e.pastes, e.sugg, e.dismissed, e.searching = nil, nil, nil, "", false
 	e.undo, e.lastEdit = nil, ""
+	e.vimNormal, e.vimPending = false, "" // each message starts in insert mode
 	hi := len(e.hist.items)
 	var draft []rune
 	width := termWidth(e.out)
@@ -533,6 +541,13 @@ func (e *editor) readLine() (string, error) {
 			e.searchKey(k)
 			e.render(width)
 			continue
+		}
+		if e.vim {
+			if k = e.vimKey(k); k == "" {
+				e.suggest()
+				e.render(width)
+				continue
+			}
 		}
 		if e.hook != nil && e.hook(e, k) {
 			e.pos = min(e.pos, len(e.buf))

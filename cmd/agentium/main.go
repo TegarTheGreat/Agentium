@@ -1153,6 +1153,7 @@ func run(args []string) error {
 				ed.ghost = sug.get
 			}
 		}
+		ed.vim = cfg.Vim
 		ed.complete = (&completer{root: cwd, skills: skills, cmds: userCommands(cwd)}).complete
 		var lastEsc time.Time
 		ed.hook = func(e *editor, k string) bool {
@@ -1298,6 +1299,16 @@ func run(args []string) error {
 		if strings.HasPrefix(line, "/") && !skillCall(skills, line) {
 			if line == "/skills" {
 				printSkills(skills)
+				continue
+			}
+			if line == "/vim" && ed != nil {
+				ed.vim = !ed.vim
+				_ = config.Set("vim", ed.vim)
+				if ed.vim {
+					u.success("Vim keys on · esc normal mode, i insert · /vim turns them off")
+				} else {
+					u.success("Vim keys off (saved)")
+				}
 				continue
 			}
 			if done := slash(line, &slashEnv{a: a, gate: gate, cfg: cfg, sess: sess, store: store, res: &res, u: u, box: box, mem: mem, mcp: mcps, ap: ap}); done {
