@@ -8,6 +8,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 - **`/handoff [goal]`** starts a new conversation with a brief the model writes for that goal: the relevant files, the decisions, the current state and the first steps. It is an alternative to compacting a long session, as in Amp. The brief waits in the message box for you to edit and send, and the old conversation stays resumable.
 
+- **The oracle.** `"oracle_model": "anthropic/claude-opus-5-5"` (or any model) gives the agent an `oracle` tool: a stronger model it consults, with the files it names, to plan a non-trivial change, review a design or get unstuck on a bug, while the everyday work runs on a faster, cheaper model (Amp's Oracle). Its cost counts in the session.
 - **Your own shortcuts.** `"keys": {"ctrl+x": "/diff", "f5": "run the tests"}` in the config sends a command or a message when that key is pressed in an empty message box. Agentium's own keys cannot be remapped, and a key it does not know is reported at startup.
 - **Rewind the conversation too.** `Esc Esc` (or `/rewind`) now asks which of your messages to go back before, then whether to restore the conversation and the files, only the conversation, or only the files, as in Claude Code. Your message comes back into the box to edit and send again, as in Codex.
 - **Clickable file names.** File names on Read and Edit lines are hyperlinks (OSC 8), so a ctrl- or cmd-click opens the file in iTerm2, WezTerm, kitty, Ghostty, VS Code and Windows Terminal. `AGENTIUM_NO_LINKS=1` turns them off.

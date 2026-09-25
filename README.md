@@ -135,13 +135,17 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 
 | | |
 |---|---|
-| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/diff` `/context` `/compact` `/btw` `/theme` `/memory` `/export` `/sessions` `/resume` `/rename` `/fork` `/clear` `/usage` `/skills` `/<skill> [task]` `/init` `/review` `/commit` `/pr` `/permissions` `/doctor` `/mcp` `/tools` `/update` `/exit` |
+| **Commands** | `/help` `/model` `/login` `/logout` `/mode` `/effort` `/config` `/plan` `/go` `/undo` `/rewind` `/copy` `/diff` `/context` `/compact` `/btw` `/theme` `/memory` `/export` `/sessions` `/resume` `/rename` `/fork` `/handoff` `/clear` `/usage` `/skills` `/<skill> [task]` `/init` `/review` `/commit` `/pr` `/permissions` `/doctor` `/mcp` `/tools` `/update` `/exit` |
 | **Typing** | `/` shows commands with what they do · `@` fuzzy-finds project files · big pastes become `[Pasted text #1 +40 lines]` chips · `Ctrl-J`, `Shift-Enter` or a trailing `\` for a new line · `Ctrl-R` searches earlier messages · `Ctrl-G` writes the message in `$EDITOR` · `↑`/`↓` move between lines, then through history · `Ctrl-K`/`Ctrl-U`/`Ctrl-W` cut and `Ctrl-Y` pastes back · `Ctrl-_` undoes · `Ctrl-S` puts a draft aside · `Alt-P`/`Alt-T` switch model and effort |
 | **While it works** | `Enter` steers: your message reaches the agent at its next step · `Tab` queues it for after the turn · `↑` takes a pending message back · `Esc` stops the turn · `Ctrl-O` shows the full output of recent steps; there `t` shows the whole conversation, `/` searches, `[` `]` jump between your messages, `e` opens it in `$EDITOR` |
 | **More commands** | `!command` runs a shell command yourself (the agent sees the output with your next message) · `/diff` shows what changed · `/context` shows what fills the context window · `/compact` summarizes older conversation · `/btw <question>` asks on the side without adding to the conversation · `/theme` switches the palette |
-| **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds file changes to an earlier turn · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
+| **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds to before one of your messages (conversation, files or both) · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
 
 **More folders.** `agentium --add-dir ../lib` (repeatable, or `"dirs"` in the config, or `/add-dir` in a session) lets the agent work in another directory as freely as in the current one (git internals there still ask). `/undo` and `/rewind` cover the main folder only. Your home folder and `/` cannot be added.
+
+**Readable and clickable.** `Ctrl-O` also shows what the model thought before each step. File names on Read and Edit lines are hyperlinks: ctrl- or cmd-click opens them in terminals that support OSC 8.
+
+**Fresh starts.** `/handoff <goal>` opens a new conversation with a brief the model writes for that goal, as an alternative to compacting a long one.
 
 **Work from your editor.** `/watch` watches the project. A comment you end with `AI!` (a change) or `AI?` (a question) is picked up when you save the file.
 
@@ -206,6 +210,7 @@ Subscription logins are offered only where the provider's terms allow third-part
   "theme": "auto",
   "sandbox": { "network": "ask", "write": ["~/data"] },
   "subagent_model": "anthropic/claude-haiku-4-5",
+  "oracle_model": "anthropic/claude-opus-5-5",
   "status_line": "~/bin/agentium-status",
   "suggest": true,
   "keys": { "ctrl+x": "/diff", "f5": "run the tests" },

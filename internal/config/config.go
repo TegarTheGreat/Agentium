@@ -29,6 +29,9 @@ type Config struct {
 	FastModel string `json:"fast_model,omitempty"` // reserved for background work
 	// SubagentModel runs sub-agents (the task tool) on another model.
 	SubagentModel string `json:"subagent_model,omitempty"`
+	// OracleModel is a stronger model the agent may consult (the oracle
+	// tool): planning, reviews, hard bugs.
+	OracleModel string `json:"oracle_model,omitempty"`
 	// StatusLine is a command whose first output line is shown in the
 	// status line (JSON about the session on stdin); default: git branch.
 	StatusLine string `json:"status_line,omitempty"`

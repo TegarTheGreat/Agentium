@@ -82,6 +82,8 @@ type Agent struct {
 	// Sub, if set, is the model sub-agents use (config "subagent_model"),
 	// with its pricing and context size.
 	Sub *SubModel
+	// Oracle, if set, is a stronger model to consult (the oracle tool).
+	Oracle *Oracle
 	// PreTool, if set, runs before each tool call (config hooks.pre_tool);
 	// an error blocks the call and is what the model is told.
 	PreTool func(ctx context.Context, c provider.ToolCall) error

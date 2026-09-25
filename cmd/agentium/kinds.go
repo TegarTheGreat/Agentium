@@ -21,12 +21,13 @@ var kindStyles = map[string]kindStyle{
 	"bash":   {"Run", "#8BC48A", "32"},
 	"fetch":  {"Web", "#C792EA", "35"},
 	"task":   {"Staff", "#F28FAD", "35"},
+	"oracle": {"Oracle", "#E0AF68", "33"},
 	"todo":   {"Plan", "#E8C468", "33"},
 }
 
 var kindStylesLight = map[string]string{
 	"read": "#3558C8", "search": "#1F7A70", "edit": "#C9701F", "bash": "#2F7D3A",
-	"fetch": "#8E44AD", "task": "#B83268", "todo": "#A67C00",
+	"fetch": "#8E44AD", "task": "#B83268", "oracle": "#9A6700", "todo": "#A67C00",
 }
 
 func styleFor(tool string) kindStyle {

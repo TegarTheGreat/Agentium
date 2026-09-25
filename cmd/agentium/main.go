@@ -798,6 +798,21 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, u.dim("· subagent_model ignored: "+firstLine(err.Error())))
 		}
 	}
+	if cfg.OracleModel != "" {
+		if or, err := provider.Resolve(cfg.OracleModel, cfg, auth); err == nil {
+			info, known := or.Info, or.Known
+			a.Oracle = &agent.Oracle{Client: or.Client, Model: or.Model, Reasoning: or.Reasoning("high"), MaxOutput: info.Output,
+				Cost: func(us provider.Usage) float64 {
+					if !known {
+						return 0
+					}
+					return info.Price(us.Input, us.Output, us.CacheRead, us.CacheWrite)
+				}}
+			a.Tools = append(a.Tools, a.OracleTool())
+		} else if !*quiet {
+			fmt.Fprintln(os.Stderr, u.dim("· oracle_model ignored: "+firstLine(err.Error())))
+		}
+	}
 	if cfg.FastModel != "" {
 		if fr, err := provider.Resolve(cfg.FastModel, cfg, auth); err == nil {
 			a.Fast, a.FastModel = fr.Client, fr.Model
