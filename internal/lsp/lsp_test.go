@@ -52,3 +52,24 @@ func TestGoplsDiagnostics(t *testing.T) {
 		t.Fatalf("diagnostics: %q", out)
 	}
 }
+
+func TestReportOnlyNewErrors(t *testing.T) {
+	m := NewManager("/w", nil)
+	d := func(line int, msg string) Diagnostic {
+		var x Diagnostic
+		x.Range.Start.Line, x.Severity, x.Message = line, 1, msg
+		return x
+	}
+	first := m.report("/w/a.py", "pyright", []Diagnostic{d(10, `"batched" is unknown import symbol`)})
+	if !strings.Contains(first, "batched") {
+		t.Fatalf("first check lists standing errors: %q", first)
+	}
+	// Same standing error, moved by an edit: nothing new to say.
+	if got := m.report("/w/a.py", "pyright", []Diagnostic{d(12, `"batched" is unknown import symbol`)}); got != "" {
+		t.Fatalf("repeated a known error: %q", got)
+	}
+	got := m.report("/w/a.py", "pyright", []Diagnostic{d(12, `"batched" is unknown import symbol`), d(40, `"x" is not defined`)})
+	if !strings.Contains(got, `"x" is not defined`) || strings.Contains(got, "batched") || !strings.Contains(got, "+1 error(s) reported earlier") {
+		t.Fatalf("new error: %q", got)
+	}
+}

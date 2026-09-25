@@ -57,6 +57,7 @@ type Manager struct {
 
 	mu      sync.Mutex
 	servers map[string]*server // by spec name; nil entry = unavailable
+	shown   map[string]map[string]int // per file: errors already reported (by message)
 }
 
 // NewManager returns a manager for a workspace.
@@ -94,7 +95,49 @@ func (m *Manager) Check(ctx context.Context, path string, content []byte) string
 	if !ok {
 		return ""
 	}
-	return format(path, m.Root, sp.Name, diags)
+	return m.report(path, sp.Name, diags)
+}
+
+// report formats the errors of path the model has not been told about:
+// the first check of a file lists them all; later ones only what is new
+// (by message, since lines move), so a file with standing errors does
+// not repeat them after every edit.
+func (m *Manager) report(path, server string, diags []Diagnostic) string {
+	errs := errorsOnly(diags)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shown == nil {
+		m.shown = map[string]map[string]int{}
+	}
+	seen, known := m.shown[path]
+	now := map[string]int{}
+	var fresh []Diagnostic
+	for _, d := range errs {
+		k := d.Message
+		now[k]++
+		if !known || now[k] > seen[k] {
+			fresh = append(fresh, d)
+		}
+	}
+	m.shown[path] = now
+	out := format(path, m.Root, server, fresh)
+	if old := len(errs) - len(fresh); known && old > 0 {
+		if out == "" {
+			return ""
+		}
+		out += fmt.Sprintf("\n  (+%d error(s) reported earlier, still there)", old)
+	}
+	return out
+}
+
+func errorsOnly(ds []Diagnostic) []Diagnostic {
+	var errs []Diagnostic
+	for _, d := range ds {
+		if d.Severity == 1 || d.Severity == 0 {
+			errs = append(errs, d)
+		}
+	}
+	return errs
 }
 
 func (m *Manager) spec(path string) (Spec, bool) {
@@ -145,12 +188,7 @@ type Diagnostic struct {
 }
 
 func format(path, root, server string, ds []Diagnostic) string {
-	var errs []Diagnostic
-	for _, d := range ds {
-		if d.Severity == 1 || d.Severity == 0 {
-			errs = append(errs, d)
-		}
-	}
+	errs := errorsOnly(ds)
 	if len(errs) == 0 {
 		return ""
 	}
