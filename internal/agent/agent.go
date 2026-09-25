@@ -82,6 +82,9 @@ type Agent struct {
 	// Sub, if set, is the model sub-agents use (config "subagent_model"),
 	// with its pricing and context size.
 	Sub *SubModel
+	// PreTool, if set, runs before each tool call (config hooks.pre_tool);
+	// an error blocks the call and is what the model is told.
+	PreTool func(ctx context.Context, c provider.ToolCall) error
 	// Steer, if set, returns messages the user sent while the agent was
 	// working; they are given to the model after the current step.
 	Steer func() []string
@@ -477,11 +480,17 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 			var err error
 			var imgs []provider.Image
 			t, ok := byName[c.Name]
+			var blocked error
+			if ok && a.PreTool != nil && (len(c.Args) == 0 || json.Valid(c.Args)) {
+				blocked = a.PreTool(ctx, c)
+			}
 			switch {
 			case !ok:
 				err = fmt.Errorf("unknown tool %q", c.Name)
 			case len(c.Args) > 0 && !json.Valid(c.Args):
 				err = errors.New("arguments are not valid JSON")
+			case blocked != nil:
+				err = fmt.Errorf("blocked by the user's pre_tool hook: %w", blocked)
 			default:
 				tctx, images := tool.WithImageSink(context.WithValue(ctx, agentKey{}, a))
 				if f := a.Events.ToolOutput; f != nil {

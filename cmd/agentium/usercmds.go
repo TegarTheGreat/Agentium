@@ -18,6 +18,10 @@ const initPrompt = `Study this repository and write AGENTS.md at its root: the i
 
 const reviewPrompt = `Review the current changes (git diff HEAD, plus untracked files) as a careful senior reviewer. Look for bugs, missed edge cases, security problems, broken error handling, leftover debug code and missing tests. Report findings as a numbered list, most serious first, each with file:line, what is wrong and a concrete fix; say plainly if you find nothing. Do not change any file.`
 
+const commitPrompt = `Commit the current changes. Look at git status and git diff (staged and not), and git log -5 for this repository's message style. Stage the files that belong to the change (never secrets, .env files, build output or unrelated files; say which you left out and why), then commit with a concise message in the repository's style: a short summary line, and a body only if it helps. Do not push, amend or rewrite history.`
+
+const prPrompt = `Open a pull request for the current branch. Check git status (commit first only if I asked for it; otherwise stop and tell me what is uncommitted), push the branch to its remote, and create the pull request with the gh CLI if it is available: a clear title and a description of what changed and why, with how it was tested. If gh is missing or not logged in, push and give me the URL to open it. Never force-push.`
+
 type userCmd struct {
 	name, desc, path string
 }
@@ -75,7 +79,7 @@ func commandDesc(path string) string {
 // builtinCommand reports whether /name is one of agentium's own.
 func builtinCommand(name string) bool {
 	switch name {
-	case "plan", "go", "skills", "settings", "new", "quit", "q", "?", "init", "review":
+	case "plan", "go", "skills", "settings", "new", "quit", "q", "?", "init", "review", "commit", "pr", "allowed":
 		return true
 	}
 	for _, c := range slashCommands {
@@ -112,6 +116,10 @@ func expandCommand(cwd, line string) (msg string, ok bool) {
 		return withArgs(initPrompt), true
 	case "review":
 		return withArgs(reviewPrompt), true
+	case "commit":
+		return withArgs(commitPrompt), true
+	case "pr":
+		return withArgs(prPrompt), true
 	}
 	for _, c := range userCommands(cwd) {
 		if c.name != strings.ToLower(name) {

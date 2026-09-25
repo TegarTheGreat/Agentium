@@ -204,11 +204,7 @@ func (s *Session) Label() string {
 	}
 	for _, m := range s.Messages {
 		if m.Role == provider.RoleUser && m.Text != "" {
-			t := m.Text
-			if j := strings.Index(t, "</recall>"); j >= 0 {
-				t = strings.TrimSpace(t[j+9:])
-			}
-			return strings.Join(strings.Fields(t), " ")
+			return strings.Join(strings.Fields(provider.UserWords(m.Text)), " ")
 		}
 	}
 	return "(empty)"

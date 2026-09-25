@@ -276,3 +276,23 @@ func (r Reasoning) NextEffort() string {
 	}
 	return ""
 }
+
+// UserWords is what the user typed in a user message: without the
+// context blocks agentium puts before it (<recall>, <hook-context>,
+// <session-start>).
+func UserWords(s string) string {
+	for {
+		t := strings.TrimLeft(s, " \n")
+		found := false
+		for _, tag := range []string{"recall", "hook-context", "session-start"} {
+			if strings.HasPrefix(t, "<"+tag) {
+				if j := strings.Index(t, "</"+tag+">"); j >= 0 {
+					s, found = t[j+len("</"+tag+">"):], true
+				}
+			}
+		}
+		if !found {
+			return strings.TrimSpace(s)
+		}
+	}
+}

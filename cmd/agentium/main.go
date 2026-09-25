@@ -764,10 +764,17 @@ func run(args []string) error {
 		}
 	}
 	var replies, edited []string
-	var stopHooks []string
+	var stopHooks, userPromptHooks []string
+	startContext := ""
 	if cfg.Hooks != nil {
 		a.Env.PostEdit = cfg.Hooks.PostEdit
 		stopHooks = cfg.Hooks.Stop
+		userPromptHooks = cfg.Hooks.UserPrompt
+		hookWarn := func(s string) { u.line("· " + firstLine(s)) }
+		a.PreTool = preToolHook(cfg.Hooks.PreTool, cwd, hookWarn)
+		if len(cfg.Hooks.SessionStart) > 0 {
+			startContext = sessionHooks(cfg.Hooks.SessionStart, cwd, hookWarn)
+		}
 	}
 	store := openCheckpoints(cfg, cwd)
 	var curPrompt string
@@ -900,6 +907,21 @@ func run(args []string) error {
 				send = block + "\n\n" + send
 				u.line(fmt.Sprintf("· recalled %d item%s from memory", n, plural(n)))
 			}
+		}
+		if len(userPromptHooks) > 0 {
+			added, err := promptHooks(userPromptHooks, cwd, input, func(s string) { u.line("· " + firstLine(s)) })
+			if err != nil {
+				u.line("· not sent: " + err.Error())
+				a.Attach = nil
+				return nil
+			}
+			if added != "" {
+				send = "<hook-context>\n" + added + "\n</hook-context>\n\n" + send
+			}
+		}
+		if startContext != "" {
+			send = "<session-start>\n" + startContext + "\n</session-start>\n\n" + send
+			startContext = ""
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		active.Store(&cancel)
@@ -1084,6 +1106,14 @@ func run(args []string) error {
 				return true
 			case k == "?" && len(e.buf) == 0:
 				return submit("/help")
+			case k == "\x1bp" || k == "\x1bt": // Alt-P, Alt-T: model, effort
+				if len(e.buf) > 0 {
+					e.stash = append([]rune(nil), e.buf...) // ctrl+s brings it back
+				}
+				if k == "\x1bp" {
+					return submit("/model")
+				}
+				return submit("/effort")
 			case k == "\x0f": // Ctrl-O: the full output of recent steps
 				u.openViewer()
 				return true
@@ -1403,6 +1433,26 @@ func slash(line string, e *slashEnv) (exit bool) {
 			fmt.Fprintf(os.Stderr, "%s%2d. %s · %d msgs · %s\n", mark, i+1, ss.Updated.Format("2006-01-02 15:04"), len(ss.Messages), oneLine(ss.Label(), 60))
 		}
 		fmt.Fprintln(os.Stderr, "· /resume opens a picker · /resume <n or name> · /rename <name> names this one")
+	case "/fork":
+		// Continue in a copy; the original stays as it was.
+		if len(sess.Messages) == 0 {
+			u.note("nothing to fork yet")
+			return false
+		}
+		orig := sess.Label()
+		_ = sess.Save()
+		fork := *sess
+		fork.ID = session.New(sess.Cwd, sess.Model).ID
+		fork.Messages = append([]provider.Message(nil), sess.Messages...)
+		fork.Checkpoints = append([]session.Checkpoint(nil), sess.Checkpoints...)
+		name := strings.TrimSpace(strings.TrimPrefix(line, "/fork"))
+		if name == "" {
+			name = "fork of " + oneLine(orig, 40)
+		}
+		fork.Title = name
+		*sess = fork
+		_ = sess.Save()
+		u.success("Now in “" + name + "”" + u.paint(cDim, " · the original is kept: /resume "+oneLine(orig, 30)))
 	case "/rename":
 		name := strings.TrimSpace(strings.TrimPrefix(line, "/rename"))
 		if name == "" {

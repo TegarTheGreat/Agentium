@@ -69,7 +69,7 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 		System: a.System, Tools: a.Tools, Env: childEnv,
 		MaxTurns: subMaxTurns, MaxTokens: a.MaxTokens, MaxOutput: a.MaxOutput, ContextTokens: a.ContextTokens, ContextChars: a.ContextChars,
 		Fast: a.Fast, FastModel: a.FastModel, Verify: !explore, Reasoning: a.Reasoning, FastMode: a.FastMode,
-		Cost: a.Cost, depth: a.depth + 1,
+		Cost: a.Cost, depth: a.depth + 1, PreTool: a.PreTool,
 		Events: Events{Notice: a.Events.Notice, Retry: a.Events.Retry, ToolStart: func(c provider.ToolCall) {
 			if a.Events.SubToolStart != nil {
 				a.Events.SubToolStart(c)

@@ -22,11 +22,11 @@ type slashCmd struct {
 }
 
 var slashCommands = []slashCmd{
-	{"/model", "choose a model", false},
+	{"/model", "choose a model (alt+p)", false},
 	{"/login", "add or change a provider's API key", false},
 	{"/logout", "remove a provider's stored key", true},
 	{"/mode", "approvals: ask · auto · yolo · plan (also shift+tab)", false},
-	{"/effort", "reasoning effort", false},
+	{"/effort", "reasoning effort (alt+t)", false},
 	{"/plan", "investigate read-only, then propose a plan", false},
 	{"/go", "carry out the plan", false},
 	{"/undo", "revert the last turn's file changes", false},
@@ -53,6 +53,9 @@ var slashCommands = []slashCmd{
 	{"/permissions", "what runs without asking; revoke approvals", false},
 	{"/init", "study the repo and write AGENTS.md", false},
 	{"/review", "review the current changes for bugs", false},
+	{"/commit", "commit the changes with a message in the repo's style", false},
+	{"/pr", "push the branch and open a pull request", false},
+	{"/fork", "continue in a copy of this conversation", false},
 	{"/help", "commands and keys (also ?)", false},
 	{"/exit", "quit (also ctrl+d)", false},
 }

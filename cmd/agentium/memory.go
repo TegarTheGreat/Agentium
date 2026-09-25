@@ -77,9 +77,7 @@ func (m *memCtl) build() {
 			}
 			text := msg.Text
 			// Strip injected recall blocks so old recalls don't echo forever.
-			if i := strings.Index(text, "</recall>"); i >= 0 {
-				text = strings.TrimSpace(text[i+len("</recall>"):])
-			}
+			text = provider.UserWords(text)
 			for len(text) > 0 {
 				chunk := text
 				if len(chunk) > 800 {

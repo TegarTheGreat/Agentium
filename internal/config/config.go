@@ -70,6 +70,22 @@ type Hooks struct {
 	PostEdit []string `json:"post_edit,omitempty"`
 	// Stop runs after each finished turn (e.g. a desktop notification).
 	Stop []string `json:"stop,omitempty"`
+	// PreTool runs before each matching tool call with the call as JSON
+	// on stdin; exit code 2 blocks it, and stderr says why.
+	PreTool []ToolHook `json:"pre_tool,omitempty"`
+	// UserPrompt runs before each message is sent, with the message on
+	// stdin; what it prints is added as context (exit 2 stops the send).
+	UserPrompt []string `json:"user_prompt,omitempty"`
+	// SessionStart runs once at startup; what it prints is added as
+	// context to the first message.
+	SessionStart []string `json:"session_start,omitempty"`
+}
+
+// ToolHook is a pre_tool hook: Match is a regular expression on the tool
+// name (empty: every tool).
+type ToolHook struct {
+	Match   string `json:"match,omitempty"`
+	Command string `json:"command"`
 }
 
 // MCPServer is an MCP server: a local command (stdio) or a remote URL
