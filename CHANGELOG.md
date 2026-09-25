@@ -6,7 +6,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Added
 
-- A custom command's `model:` (front matter, as in Claude Code) runs that command's turn on that model. The session's model comes back afterwards.
+- A custom command's `model:` (front matter, as in Claude Code) runs that command's turn on that model. The session's model comes back afterwards. A repository's command asks before it switches, and a conversation too long for the other model's window stays on the session's model.
 - `Shift-Enter` and `Ctrl-Enter` start a new line in more terminals. Full-screen mode asks the terminal to report modified keys (xterm's modifyOtherKeys), and keys reported that way are read back in their usual form, so `Ctrl-C` stays `Ctrl-C`.
 - `/hooks` lists the hooks in your settings and when each one runs.
 

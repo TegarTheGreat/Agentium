@@ -224,7 +224,7 @@ func (f *fullscreen) leave() {
 	if f.restore != nil {
 		f.restore()
 	}
-	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[>4;0m\x1b[0m\x1b[?25h\x1b[?1049l")
+	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[>4m\x1b[0m\x1b[?25h\x1b[?1049l")
 	// The conversation, for the scrollback.
 	f.mu.Lock()
 	var sb strings.Builder
@@ -384,7 +384,7 @@ func padTo(s string, w int) string {
 func (f *fullscreen) suspend() {
 	f.mu.Lock()
 	f.suspended = true
-	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[>4;0m\x1b[0m\x1b[?25h\x1b[?1049l")
+	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[>4m\x1b[0m\x1b[?25h\x1b[?1049l")
 	f.mu.Unlock()
 }
 

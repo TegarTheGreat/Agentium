@@ -173,12 +173,12 @@ func showHooks(u *ui, h config.Hooks) {
 		if m == "" {
 			m = "every tool"
 		}
-		pre = append(pre, sanitize(t.Command)+u.paint(cDim, "  ("+sanitize(m)+")"))
+		pre = append(pre, sanitize(oneLine(t.Command, 300))+u.paint(cDim, "  ("+sanitize(m)+")"))
 	}
 	clean := func(cmds []string) []string {
 		out := make([]string, len(cmds))
 		for i, c := range cmds {
-			out[i] = sanitize(c)
+			out[i] = sanitize(oneLine(c, 300))
 		}
 		return out
 	}

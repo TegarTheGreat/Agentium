@@ -1109,7 +1109,9 @@ func run(args []string) error {
 		u.endLine()
 		u.mu.Unlock()
 		if err == nil && interactive && suggestOn && u.live && len(replies) > 0 {
-			sug.guess(a, input, replies[len(replies)-1])
+			if !modelSwapped.Load() {
+				sug.guess(a, input, replies[len(replies)-1])
+			}
 		}
 		if !*quiet && u.live {
 			fmt.Fprintln(os.Stderr, u.turnSummary(st, err, cost))
@@ -1474,7 +1476,9 @@ func run(args []string) error {
 		}
 		cmdModel := ""
 		if !skillCall(skills, line) {
-			cmdModel = commandModel(cwd, line)
+			if c, ok := commandModel(cwd, line); ok && allowCommandModel(u, c) {
+				cmdModel = c.model
+			}
 		}
 		if skillCall(skills, line) {
 			// a skill: sent as it is, below

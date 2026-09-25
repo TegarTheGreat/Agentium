@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -108,18 +110,32 @@ func hasFormatChars(s string) bool {
 	return false
 }
 
-// commandModel is the "model:" of the custom command line runs, if any.
-func commandModel(cwd, line string) string {
+// commandModel is the custom command line runs, when it names a model.
+func commandModel(cwd, line string) (userCmd, bool) {
 	if !strings.HasPrefix(line, "/") {
-		return ""
+		return userCmd{}, false
 	}
 	name, _, _ := strings.Cut(strings.TrimPrefix(line, "/"), " ")
 	for _, c := range userCommands(cwd) {
-		if c.name == strings.ToLower(name) {
-			return c.model
+		if c.name == strings.ToLower(name) && c.model != "" {
+			return c, true
 		}
 	}
-	return ""
+	return userCmd{}, false
+}
+
+// allowCommandModel asks before a repository's command moves the turn to
+// another model (it may cost more, or send the conversation to another
+// provider); yours are trusted.
+func allowCommandModel(u *ui, c userCmd) bool {
+	if c.personal {
+		return true
+	}
+	pick, err := u.choose("/"+sanitize(c.name)+" (from this repository) wants to run on "+c.model, []menuItem{
+		{value: "yes", label: "Use " + c.model + " for this turn"},
+		{value: "no", label: "Use the session's model"},
+	}, "", false)
+	return err == nil && pick == "yes"
 }
 
 // useModelOnce points the agent at ref for one turn; the returned func
@@ -139,15 +155,30 @@ func useModelOnce(ref string, cfg config.Config, res *provider.Resolved, a *agen
 	if maxCost > 0 && !nr.Known {
 		return nil, errors.New("no known price, and --max-cost could not count it")
 	}
+	// The conversation keeps the session model's context budget (a
+	// smaller window must not compact it for good); it has to fit.
+	if window := firstPositive(nr.Info.Context, provider.ContextWindow(nr.Model)); window > 0 {
+		if used, _ := a.ContextUsed(); used > window*3/4 {
+			return nil, fmt.Errorf("the conversation (%s tokens) is too long for its %s window", fmtK(used), fmtK(window))
+		}
+	}
 	old := *res
-	oc, om, ov, or, octx, oout := a.Client, a.Model, a.Env.Vision, a.Reasoning, a.ContextTokens, a.MaxOutput
+	oc, om, ov, or, oout := a.Client, a.Model, a.Env.Vision, a.Reasoning, a.MaxOutput
+	oldName, _ := curModel.Load().(string)
 	*res = nr
 	a.Client, a.Model, a.Env.Vision = nr.Client, nr.Model, nr.Vision()
 	a.Reasoning = nr.Reasoning(or.Effort)
-	a.ContextTokens = firstPositive(cfg.ContextTokens, nr.Info.Context, provider.ContextWindow(nr.Model))
 	a.MaxOutput = nr.Info.Output
+	curModel.Store(nr.Provider + "/" + nr.Model)
+	modelSwapped.Store(true)
 	return func() {
 		*res = old
-		a.Client, a.Model, a.Env.Vision, a.Reasoning, a.ContextTokens, a.MaxOutput = oc, om, ov, or, octx, oout
+		a.Client, a.Model, a.Env.Vision, a.Reasoning, a.MaxOutput = oc, om, ov, or, oout
+		curModel.Store(oldName)
+		modelSwapped.Store(false)
 	}, nil
 }
+
+// modelSwapped is set while a command's model runs a turn (no next-
+// message guess then: it would run and be priced on the wrong model).
+var modelSwapped atomic.Bool

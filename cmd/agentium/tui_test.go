@@ -583,11 +583,11 @@ func TestCommandModel(t *testing.T) {
 	cwd := t.TempDir()
 	os.MkdirAll(filepath.Join(cwd, ".agentium", "commands"), 0o755)
 	os.WriteFile(filepath.Join(cwd, ".agentium", "commands", "fastq.md"), []byte("---\nmodel: \"deepseek/deepseek-v4-flash\"\n---\nx"), 0o644)
-	if m := commandModel(cwd, "/fastq hi"); m != "deepseek/deepseek-v4-flash" {
-		t.Fatalf("%q", m)
+	if c, ok := commandModel(cwd, "/fastq hi"); !ok || c.model != "deepseek/deepseek-v4-flash" || c.personal {
+		t.Fatalf("%+v", c)
 	}
-	if m := commandModel(cwd, "fastq hi"); m != "" {
-		t.Fatalf("no slash: %q", m)
+	if _, ok := commandModel(cwd, "fastq hi"); ok {
+		t.Fatal("no slash")
 	}
 }
 
@@ -596,6 +596,9 @@ func TestPlainKey(t *testing.T) {
 		"\x1b[27;5;99~": "\x03", "\x1b[99;5u": "\x03", "\x1b[27;2;13~": "\x1b[13;2u", "\x1b[27;5;13~": "\x1b[13;2u",
 		"\x1b[27;2;65~": "A", "\x1b[27;3;120~": "\x1bx", "\x1b[5~": "\x1b[5~", "\x1b[200~": "\x1b[200~", "\x1b[A": "\x1b[A",
 		"\x1b[13;2u": "\x1b[13;2u", "\x1b[57414u": "\x1b[57414u",
+		"\x1b[27u": "\x1b", "\x1b[27;5;47~": "\x1f", "\x1b[27;3;13~": "\x1b\r", "\x1b[27;3;127~": "\x1b\x7f",
+		"\x1b[27;4;60~": "\x1b<", "\x1b[27;6;120~": "\x18", "\x1b[9;2u": "\x1b[Z", "\x1b[127u": "\x7f", "\x1b[13u": "\r",
+		"\x1b[27;5;9~": "\t", "\x1b[27;7;120~": "\x1b\x18",
 	} {
 		if got := plainKey(in); got != want {
 			t.Errorf("%q: got %q, want %q", in, got, want)

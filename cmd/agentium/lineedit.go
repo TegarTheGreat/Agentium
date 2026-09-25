@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -235,39 +236,72 @@ func (e *editor) key() (string, error) {
 }
 
 // plainKey turns a modified key reported the xterm way (modifyOtherKeys:
-// ESC [27;mod;code~, or ESC [code;modu) back into its usual form when it
-// has one, so Ctrl-C stays Ctrl-C in every terminal; Shift-Enter and
-// Ctrl-Enter keep theirs (a new line).
+// ESC [27;mod;code~, or CSI u: ESC [code;modu and ESC [codeu) back into
+// its usual form when it has one, so Ctrl-C stays Ctrl-C and Esc stays
+// Esc in every terminal; Shift-Enter and Ctrl-Enter give a new line.
 func plainKey(k string) string {
-	var mod, code int
+	mod, code := 1, 0
 	switch {
 	case strings.HasPrefix(k, "\x1b[27;") && strings.HasSuffix(k, "~"):
 		if _, err := fmt.Sscanf(k, "\x1b[27;%d;%d~", &mod, &code); err != nil {
 			return k
 		}
 	case strings.HasPrefix(k, "\x1b[") && strings.HasSuffix(k, "u"):
-		if _, err := fmt.Sscanf(k, "\x1b[%d;%du", &code, &mod); err != nil {
+		body := strings.TrimSuffix(strings.TrimPrefix(k, "\x1b["), "u")
+		c, m, hasMod := strings.Cut(body, ";")
+		var err error
+		if code, err = strconv.Atoi(c); err != nil {
 			return k
+		}
+		if hasMod {
+			if mod, err = strconv.Atoi(m); err != nil {
+				return k
+			}
 		}
 	default:
 		return k
 	}
-	if code == 13 && (mod == 2 || mod == 5) {
+	bits := mod - 1 // 1 shift, 2 alt, 4 ctrl
+	shift, alt, ctrl := bits&1 != 0, bits&2 != 0, bits&4 != 0
+	if code == 13 && (shift || ctrl) && !alt {
 		return "\x1b[13;2u" // a new line
 	}
+	var base string
 	switch {
-	case mod == 5 && code >= 'a' && code <= 'z': // Ctrl+letter
-		return string(rune(code - 'a' + 1))
-	case mod == 5 && code >= 'A' && code <= 'Z':
-		return string(rune(code - 'A' + 1))
-	case mod == 2 && code >= 0x20 && code < 0x7f: // Shift+character
-		return string(rune(code))
-	case mod == 1 && code >= 0x20 && code < 0x7f:
-		return string(rune(code))
-	case mod == 3 && code >= 0x20 && code < 0x7f: // Alt+character
-		return "\x1b" + string(rune(code))
+	case ctrl && code >= 'a' && code <= 'z':
+		base = string(rune(code - 'a' + 1))
+	case ctrl && code >= 'A' && code <= 'Z':
+		base = string(rune(code - 'A' + 1))
+	case ctrl && (code == ' ' || code == '@' || code == '2'):
+		base = "\x00"
+	case ctrl && (code == '[' || code == '3'):
+		base = "\x1b"
+	case ctrl && (code == '\\' || code == '4'):
+		base = "\x1c"
+	case ctrl && (code == ']' || code == '5'):
+		base = "\x1d"
+	case ctrl && (code == '^' || code == '6'):
+		base = "\x1e"
+	case ctrl && (code == '/' || code == '-' || code == '_' || code == '7'):
+		base = "\x1f"
+	case ctrl && (code == '8' || code == 127):
+		base = "\x08"
+	case code == 27 || code == 13 || code == 9 || code == 127:
+		base = string(rune(code))
+		if code == 9 && shift {
+			return "\x1b[Z" // Shift-Tab
+		}
+	case ctrl:
+		return k // no usual form
+	case code >= 0x20 && code < 0x7f: // the character itself (shift is in it)
+		base = string(rune(code))
+	default:
+		return k
 	}
-	return k
+	if alt {
+		return "\x1b" + base
+	}
+	return base
 }
 
 func (e *editor) render(width int) {

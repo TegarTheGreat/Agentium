@@ -51,11 +51,11 @@ type Env struct {
 	locks    map[string]*sync.Mutex
 	mutOnce  *sync.Once
 	seen     map[string]stamp
-	shown    map[string]stamp // read results still in the conversation
-	gitg     *gitGuard        // git config snapshot after the last command
-	jobs     *jobTable        // background jobs
-	detachCh map[chan struct{}]bool
-	parent   *Env // a sub-agent's: Ctrl-B reaches its commands through the root // set while a foreground command can be sent to the background
+	shown    map[string]stamp       // read results still in the conversation
+	gitg     *gitGuard              // git config snapshot after the last command
+	jobs     *jobTable              // background jobs
+	detachCh map[chan struct{}]bool // running foreground commands Ctrl-B can send to the background
+	parent   *Env                   // a sub-agent's: Ctrl-B reaches its commands through the root
 	cix      *codemap.Index
 	cixMu    sync.Mutex // serializes index updates
 }
