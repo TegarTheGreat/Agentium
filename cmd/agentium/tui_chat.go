@@ -29,13 +29,20 @@ func (u *ui) userMessage(line string) string {
 func (u *ui) welcome(model, mode, box, cwd string) {
 	var sb strings.Builder
 	sb.WriteString("\n  " + u.paint(cAccent, "◆") + " " + u.paint(cBold, "Agentium") + " " + u.paint(cGray, version) + "\n")
-	sb.WriteString(u.paint(cGray, "    "+shortPath(cwd)+" · "+model+" · "+mode+" mode · "+box) + "\n\n")
-	sb.WriteString(u.paint(cDim, "    Try: "+strings.Join(welcomeTips(cwd), " · ")) + "\n")
-	keys := "    / commands · @ mention a file · ! shell · ? shortcuts"
+	width := termWidth(os.Stderr) - 6
+	para := func(color, text string) {
+		for _, l := range wordWrap(text, width) {
+			sb.WriteString(u.paint(color, "    "+l) + "\n")
+		}
+	}
+	para(cGray, shortPath(cwd)+" · "+model+" · "+mode+" mode · "+box)
+	sb.WriteString("\n")
+	para(cDim, "Try: "+strings.Join(welcomeTips(cwd), " · "))
+	keys := "/ commands · @ mention a file · ! shell · ? shortcuts"
 	if termWidth(realTTY()) >= sideMinW {
 		keys += " · ctrl+t panel"
 	}
-	sb.WriteString(u.paint(cDim, keys) + "\n")
+	para(cDim, keys)
 	os.Stderr.WriteString(sb.String())
 }
 
