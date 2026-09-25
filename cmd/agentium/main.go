@@ -202,6 +202,7 @@ func clipText(s string, n int) string {
 
 // ui renders agent events tersely.
 type ui struct {
+	detach  func() bool // Ctrl-B during a turn: the running command to the background
 	mu      sync.Mutex
 	quiet   bool
 	color   bool
@@ -784,6 +785,7 @@ func run(args []string) error {
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
+	u.detach = a.Env.DetachForeground
 	agentFiles := loadAgents(cwd)
 	for _, f := range agentFiles {
 		def := f.def

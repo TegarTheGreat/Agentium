@@ -132,7 +132,7 @@ var bashTool = Tool{
 		if guarded {
 			guard = snapGit(env.roots()...)
 		}
-		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box, env.PassEnv)
+		out, err := runShell(env.withDetach(ctx, a.Cmd), env.Root, a.Cmd, time.Duration(t)*time.Second, box, env.PassEnv)
 		out += late + guard.check()
 		if guarded {
 			env.mu.Lock()
@@ -239,8 +239,10 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	if lw := liveFrom(ctx); lw != nil {
 		w = io.MultiWriter(&out, lw)
 	}
-	cmd.Stdout = w
-	cmd.Stderr = w
+	sw := &switchWriter{w: w} // a detached command's output goes to its job
+	cmd.Stdout = sw
+	cmd.Stderr = sw
+	dt := detachFrom(ctx)
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
@@ -249,8 +251,17 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	go func() { done <- cmd.Wait() }()
 	var err error
 	timedOut := false
+	var detach <-chan struct{}
+	if dt != nil {
+		detach = dt.arm()
+		defer dt.disarm()
+	}
 	select {
 	case err = <-done:
+	case <-detach:
+		// The user sent it to the background (Ctrl-B): it becomes a job
+		// and keeps running; the turn goes on.
+		return dt.adopt(cmd, sw, out.String(), done), nil
 	case <-ctx.Done():
 		killProcessGroup(cmd)
 		select {

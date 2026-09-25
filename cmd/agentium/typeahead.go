@@ -101,6 +101,12 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 				u.mu.Unlock()
 				u.openViewer()
 				continue
+			case k == "\x02": // Ctrl-B: the running command to the background
+				u.mu.Unlock()
+				if u.detach != nil && u.detach() {
+					u.line(u.paint(cDim, "moved to the background; the agent can read or stop it"))
+				}
+				continue
 			case k == "\x03" || k == "\x1b": // Ctrl-C or Esc
 				if len(u.typing) > 0 {
 					u.typing = nil

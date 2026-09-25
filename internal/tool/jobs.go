@@ -292,6 +292,9 @@ func (e *Env) jobAction(ctx context.Context, id int, stdin string, kill bool, wa
 		if !j.running() {
 			return "", fmt.Errorf("job %d has exited (%s); cannot send input", id, j.status())
 		}
+		if j.stdin == nil {
+			return "", fmt.Errorf("job %d was moved to the background while running and takes no input", id)
+		}
 		if _, err := io.WriteString(j.stdin, stdin); err != nil {
 			return "", fmt.Errorf("writing to job %d: %v", id, err)
 		}
