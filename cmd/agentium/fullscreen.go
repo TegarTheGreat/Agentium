@@ -74,6 +74,7 @@ type fullscreen struct {
 
 	// The composer while a turn runs.
 	busy    bool
+	asking  bool   // a question (approval) waits for a key: the composer says so
 	strip   string // what is happening, in the top border
 	typing  string
 	queued  []string
@@ -312,6 +313,16 @@ func (f *fullscreen) setBusy(busy bool, strip, typing string, queued []string) {
 	f.dirty = true
 }
 
+// setAsking marks a question waiting for a key press: keys go to it, not
+// to the composer, and the composer says so.
+func (f *fullscreen) setAsking(on bool) {
+	f.mu.Lock()
+	if f.asking != on {
+		f.asking, f.dirty = on, true
+	}
+	f.mu.Unlock()
+}
+
 // setPopup shows the editor's suggestions above the composer.
 func (f *fullscreen) setPopup(items []suggestion, sel int) {
 	f.mu.Lock()
@@ -533,6 +544,8 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 	}
 	var line string
 	switch {
+	case f.asking:
+		line = sgr(cYellow) + "▲\x1b[0m " + sgr(cInk) + "Answer the question above with one key\x1b[0m" + sgr(cGray) + " · typing here is paused\x1b[0m"
 	case f.input:
 		line, _ = f.vt.renderW(inputRow, inner)
 	case f.busy && f.typing != "":
@@ -546,7 +559,9 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 	}
 	rows = append(rows, border+"│\x1b[0m "+padTo(line, inner)+" "+border+"│\x1b[0m")
 	hint := "enter send · ctrl+j new line · / commands · pgup scroll"
-	if f.busy {
+	if f.asking {
+		hint = "y yes · n no · esc no · pgup scroll to read"
+	} else if f.busy {
 		hint = "enter steer · tab queue · ↑ take back · esc stop"
 	}
 	if f.cols >= sideMinW {

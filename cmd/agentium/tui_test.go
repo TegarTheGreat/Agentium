@@ -17,12 +17,16 @@ func TestApprovalTitle(t *testing.T) {
 		{"bash: rm -rf x", "ask mode", "Run this command?", "rm -rf x"},
 		{"write: /a/b.go", "ask mode", "Change this file?", "/a/b.go"},
 		{"network: npm i", "needs network access", "Allow network access for this command?", "npm i"},
-		{"bash: sudo ls", "privilege escalation", "Run this command?  privilege escalation", "sudo ls"},
+		{"bash: sudo ls", "privilege escalation", "Run this command?", "sudo ls"},
 	} {
 		title, what := approvalTitle(c.action, c.reason)
 		if title != c.title || what != c.what {
 			t.Errorf("%q: got %q / %q", c.action, title, what)
 		}
+	}
+	// Why it asks is shown beside the title, except for plain ask mode.
+	if reasonNote("privilege escalation", "Run this command?") != "  · privilege escalation" || reasonNote("ask mode", "Run this command?") != "" {
+		t.Error("reason note")
 	}
 }
 

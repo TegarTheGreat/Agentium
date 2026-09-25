@@ -143,3 +143,84 @@ func showPermissions(u *ui, ap *approver) {
 	}
 	u.success("Revoked: " + describeApproval(pick))
 }
+
+// cmdStep is one part of a command line as shown for approval, with the
+// operator that joins it to the next ("" for the last).
+type cmdStep struct{ text, op string }
+
+// commandSteps splits a shell command at its top-level ;, &&, || and |
+// (outside quotes, $( ), backticks and braces) so a chain is shown one
+// step per line. Anything else, heredocs and multi-line scripts included,
+// is shown as written.
+func commandSteps(action, what string) []cmdStep {
+	if !strings.HasPrefix(action, "bash: ") || strings.Contains(what, "\n") || strings.Contains(what, "<<") {
+		return []cmdStep{{text: what}}
+	}
+	var steps []cmdStep
+	var cur strings.Builder
+	var quote rune
+	depth := 0
+	rs := []rune(what)
+	flush := func(op string) {
+		if t := strings.TrimSpace(cur.String()); t != "" {
+			steps = append(steps, cmdStep{t, op})
+		} else if op != "" && len(steps) > 0 {
+			steps[len(steps)-1].op += " " + op
+		}
+		cur.Reset()
+	}
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case quote != 0:
+			if r == '\\' && quote == '"' && i+1 < len(rs) {
+				cur.WriteRune(r)
+				i++
+				r = rs[i]
+			} else if r == quote {
+				quote = 0
+			}
+		case r == '\\' && i+1 < len(rs):
+			cur.WriteRune(r)
+			i++
+			r = rs[i]
+		case r == '\'' || r == '"' || r == '`':
+			quote = r
+		case r == '(' || r == '{':
+			depth++
+		case r == ')' || r == '}':
+			depth = max(depth-1, 0)
+		case depth == 0 && (r == ';' || r == '|' || r == '&'):
+			prev := rune(0)
+			if i > 0 {
+				prev = rs[i-1]
+			}
+			next := rune(0)
+			if i+1 < len(rs) {
+				next = rs[i+1]
+			}
+			switch {
+			case r == ';':
+				flush(";")
+				continue
+			case r == '|' && next == '|':
+				flush("||")
+				i++
+				continue
+			case r == '&' && next == '&':
+				flush("&&")
+				i++
+				continue
+			case r == '|' && prev != '>' && next != '&':
+				flush("|")
+				continue
+			}
+		}
+		cur.WriteRune(r)
+	}
+	flush("")
+	if len(steps) == 0 {
+		return []cmdStep{{text: what}}
+	}
+	return steps
+}

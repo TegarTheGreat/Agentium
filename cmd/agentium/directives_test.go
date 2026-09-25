@@ -27,3 +27,27 @@ func TestDirectiveFilter(t *testing.T) {
 		t.Fatalf("held: %q", got.String())
 	}
 }
+
+func TestCommandSteps(t *testing.T) {
+	join := func(ss []cmdStep) string {
+		var b []string
+		for _, s := range ss {
+			b = append(b, s.text+"⟨"+s.op+"⟩")
+		}
+		return strings.Join(b, " ")
+	}
+	for in, want := range map[string]string{
+		"sed -n 1,40p README.md; echo ===; ls joss":          "sed -n 1,40p README.md⟨;⟩ echo ===⟨;⟩ ls joss⟨⟩",
+		"go test ./... 2>&1 | tail -20 && echo ok || echo x": "go test ./... 2>&1⟨|⟩ tail -20⟨&&⟩ echo ok⟨||⟩ echo x⟨⟩",
+		`echo "a; b" && grep 'x|y' f`:                        `echo "a; b"⟨&&⟩ grep 'x|y' f⟨⟩`,
+		"(cd sub; make) && echo $(date; true)":               "(cd sub; make)⟨&&⟩ echo $(date; true)⟨⟩",
+		"ls":                                                 "ls⟨⟩",
+	} {
+		if got := join(commandSteps("bash: x", in)); got != want {
+			t.Errorf("%q:\n got %s\nwant %s", in, got, want)
+		}
+	}
+	if got := commandSteps("bash: x", "cat <<EOF; a\nEOF"); len(got) != 1 {
+		t.Error("heredoc split")
+	}
+}

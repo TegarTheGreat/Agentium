@@ -4,6 +4,10 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- The approval prompt is easier to read: a chained command (`a; b && c | d`) is shown one step per line, the answers are laid out as a key grid (y yes, n no, a always, p always in this project, c yes with a note, t no with a reason) instead of one dense line, and why it asks sits next to the title. While it waits, the input box says to answer with one key instead of "type to steer", and a key lost in fast typing is explained in plain words.
+
 ## [0.25.0] - 2026-09-25
 
 ### Fixed

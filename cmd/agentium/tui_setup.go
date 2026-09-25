@@ -671,10 +671,55 @@ func approvalTitle(action, reason string) (title, what string) {
 	default:
 		title = "Allow " + kind + "?"
 	}
-	if reason != "" && reason != "ask mode" && !strings.HasPrefix(title, "Allow network") {
-		title += "  " + reason
-	}
 	return title, what
+}
+
+// reasonNote is why agentium asks, shown after the title ("" when it is
+// just ask mode).
+func reasonNote(reason, title string) string {
+	if reason == "" || reason == "ask mode" || strings.HasPrefix(title, "Allow network") {
+		return ""
+	}
+	return "  · " + reason
+}
+
+// approvalKeys lays the answers out as a key grid: the key, then what it
+// does, two columns when the terminal is wide enough.
+func (u *ui) approvalKeys(scope string, keep bool, width int) string {
+	type opt struct{ key, label string }
+	left := []opt{{"y", "yes"}, {"n", "no"}, {"c", "yes, and add a note"}}
+	right := []opt{{"a", "always allow " + scope}, {"t", "no, and tell the agent why"}}
+	if keep {
+		right = append(right[:1], append([]opt{{"p", "always allow in this project"}}, right[1:]...)...)
+	}
+	cell := func(o opt) string {
+		c := cGreen
+		if o.key == "n" || o.key == "t" {
+			c = cRed
+		}
+		return u.paint(c, o.key) + "  " + o.label
+	}
+	colW := 26
+	var b strings.Builder
+	if width >= 2+colW+2+4+len("always allow "+scope)+4 {
+		for i := 0; i < max(len(left), len(right)); i++ {
+			b.WriteString("  ")
+			if i < len(left) {
+				b.WriteString(cell(left[i]) + strings.Repeat(" ", max(colW-3-len(left[i].label), 1)))
+			} else {
+				b.WriteString(strings.Repeat(" ", colW))
+			}
+			if i < len(right) {
+				b.WriteString(cell(right[i]))
+			}
+			b.WriteString("\n")
+		}
+	} else {
+		for _, o := range append(left, right...) {
+			b.WriteString("  " + cell(o) + "\n")
+		}
+	}
+	return b.String()
 }
 
 // approve asks for permission with a single key press.
@@ -690,12 +735,30 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 	// The whole command is shown (wrapped), never cut: what is approved
 	// must be what is seen. Very long ones show their first rows and say so.
 	var body strings.Builder
-	for i, row := range wrapRows(sanitize(what), termWidth(os.Stderr)-4) {
-		if i == 12 {
-			body.WriteString("  " + u.paint(cYellow, "… (command continues; press n and ask the agent to split it)") + "\n")
-			break
+	width := termWidth(os.Stderr)
+	shown := 0
+	for _, step := range commandSteps(action, sanitize(what)) {
+		// One step per line (a chain like "a; b && c" reads as a list),
+		// wrapped rows indented under their step; the joining operator
+		// is dimmed at the end.
+		for j, row := range wrapRows(step.text, width-8) {
+			if shown == 16 {
+				break
+			}
+			shown++
+			lead := u.paint(cDim, "  │ ")
+			if j > 0 {
+				lead = u.paint(cDim, "  │   ")
+			}
+			body.WriteString(lead + u.paint(cCyan, row))
+			if j == len(wrapRows(step.text, width-8))-1 && step.op != "" {
+				body.WriteString(" " + u.paint(cDim, step.op))
+			}
+			body.WriteString("\n")
 		}
-		body.WriteString("  " + u.paint(cCyan, row) + "\n")
+	}
+	if shown == 16 {
+		body.WriteString("  " + u.paint(cYellow, "… (command continues; press n and ask the agent to split it)") + "\n")
 	}
 	// A file change shows what would change.
 	if kind, path, _ := strings.Cut(action, ": "); kind == "write" {
@@ -726,17 +789,15 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 			body.WriteString("  " + u.paint(cYellow, fmt.Sprintf("%d changes to this file are pending; each is asked for separately", len(match))) + "\n")
 		}
 	}
-	keepOpt := " · p always here"
-	if !keep {
-		keepOpt = ""
-	}
-	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",
-		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
-		u.paint(cDim, "y yes · a always "+scope+keepOpt+" · c yes + note · n no · t no + why ›"))
+	fmt.Fprintf(os.Stderr, "\n%s %s%s\n%s\n%s%s ",
+		u.paint(cYellow, "▲"), u.paint(cBold, title), u.paint(cDim, reasonNote(reason, title)), body.String(),
+		u.approvalKeys(scope, keep, width), "  "+u.paint(cDim, "press a key")+" "+u.paint(cYellow, "›"))
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
-		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · n no"+u.paint(cDim, " · more choices above"), "", nil)
+		f.setBusy(true, u.paint(cYellow, "▲")+" Needs your answer", "", nil)
+		f.setAsking(true)
+		defer f.setAsking(false)
 	}
 	u.setTitle("needs you")
 	u.notify("Agentium needs your answer: " + title)
@@ -813,7 +874,9 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 		}
 		if !hinted {
 			hinted = true
-			fmt.Fprint(os.Stderr, u.paint(cDim, "(pause, then press y, a or n) "))
+			// Keys typed in a quick run (a message typed ahead) never
+			// answer: "add tests" must not mean "always".
+			fmt.Fprint(os.Stderr, "\n  "+u.paint(cDim, "that looked like typing, so it was ignored: press one key (y or n) on its own")+" "+u.paint(cYellow, "›")+" ")
 		}
 	}
 }
