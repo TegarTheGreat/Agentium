@@ -107,8 +107,19 @@ func (g *Gate) ruleFor(kind, subject string) (deny string, allowed bool) {
 		}
 		subjects = append(subjects, filepath.ToSlash(subject))
 	}
+	denySubjects := subjects
+	var norm []normCmd
+	if kind == "bash" {
+		// A deny holds however the program is spelled: /bin/rm, \rm,
+		// "rm", env rm, eval rm ... all count as rm.
+		norm = normalizeCommands(subject)
+		denySubjects = append([]string(nil), subjects...)
+		for _, c := range norm {
+			denySubjects = append(denySubjects, c.String())
+		}
+	}
 	for _, r := range denies {
-		for _, s := range subjects {
+		for _, s := range denySubjects {
 			if r.matches(kind, s) {
 				return r.text, false
 			}
@@ -118,6 +129,11 @@ func (g *Gate) ruleFor(kind, subject string) (deny string, allowed bool) {
 		// Every part must be allowed, and nothing may hide a command.
 		if strings.Contains(subject, "$(") || strings.Contains(subject, "`") || len(subjects) == 0 {
 			return "", false
+		}
+		for _, c := range norm {
+			if c.dynName {
+				return "", false // eval, or a program named by a variable
+			}
 		}
 		for _, s := range subjects {
 			ok := false

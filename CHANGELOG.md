@@ -10,6 +10,12 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - A key pressed right after a question appears is taken as the answer; it is ignored as typing only when other keys came just before or just after it (a message typed ahead). It used to be ignored whenever it came within 0.4 s of the question.
 - Network approvals read "Run this command with internet access?" and show a chained command one step per line like other commands.
 
+### Security
+
+- The `read` tool asked before credential files only by a short pattern, so Agentium's own `mcp-auth.json` (MCP tokens), `config.json`, other projects' saved sessions, and `auth.json` under a custom `AGENTIUM_HOME` could be read without asking, although commands could not read them. It now uses the sandbox's list of secret paths.
+- Auto mode checked risky commands against the raw text only: `rm "-rf" x`, `F=-rf; rm $F x`, `rm $(printf -- -rf) x`, `\rm`, `/bin/rm`, `env … rm` or `eval "rm -rf x"` ran without asking. Commands are now also checked as the shell will run them (quotes removed, wrappers and paths peeled off, `$(…)` and `sh -c` contents checked), and a destructive program (`rm`, `dd`, `chmod`, `git push/reset/clean` …) whose arguments are only known at run time asks first, as does `eval` or a program named by a variable.
+- A `--deny` rule such as `bash(touch*)` did not match `/usr/bin/touch`, `\touch`, `env touch`, `eval touch` or `xargs touch`; it does now.
+
 ### Fixed
 
 - A malformed page (thousands of unclosed `<main>` tags) took `fetch` 9 s to convert; it takes under 0.1 s now.

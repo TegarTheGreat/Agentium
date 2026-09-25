@@ -320,3 +320,59 @@ func TestCheckModeRejectsTypos(t *testing.T) {
 		t.Error("a typo became a mode")
 	}
 }
+
+// The read tool asks before handing over what the sandbox hides from
+// commands: Agentium's own tokens, config and other projects' sessions.
+func TestReadGuardsAgentiumHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ah := filepath.Join(t.TempDir(), "agh") // not named .agentium
+	t.Setenv("AGENTIUM_HOME", ah)
+	g := &Gate{Mode: Auto, Root: t.TempDir()}
+	for _, p := range []string{
+		filepath.Join(ah, "auth.json"), filepath.Join(ah, "mcp-auth.json"), filepath.Join(ah, "config.json"),
+		filepath.Join(ah, "sessions", "20260101-000000.000.json"), filepath.Join(home, ".aws", "credentials"),
+	} {
+		if ok, _ := g.Read(p); ok {
+			t.Errorf("%s read without asking", p)
+		}
+	}
+	if ok, _ := g.Read(filepath.Join(g.Root, "main.go")); !ok {
+		t.Error("an ordinary file needs no approval")
+	}
+}
+
+func TestRiskyCommandNotDisguised(t *testing.T) {
+	for _, c := range []string{
+		`F=-rf; rm $F victim`, `rm "-rf" victim`, `X=rf; rm -${X} victim`, `rm $(printf -- -rf) victim`,
+		`\rm -rf victim`, `/bin/rm -rf victim`, `env FOO=1 rm -rf victim`, `eval "rm -rf victim"`,
+		`bash -c "rm -rf victim"`, `git push "--force" origin main`, `CMD=rm; $CMD -rf x`,
+		`echo ok && sudo -u root rm -rf /x`, "ls `rm -rf victim`",
+	} {
+		if RiskyCommand(c) == "" {
+			t.Errorf("not caught: %s", c)
+		}
+	}
+	for _, c := range []string{
+		`go test ./...`, `npm run build`, `git status`, `git commit -m "$(date)"`, `cd "$HOME" && ls`,
+		`echo $PATH`, `for f in *.go; do gofmt -l "$f"; done`, `python3 -c "print(1)"`, `rm tmp.txt`,
+		`GOFLAGS=-mod=mod go build ./cmd/x`, `ls $(go env GOROOT)`,
+	} {
+		if why := RiskyCommand(c); why != "" {
+			t.Errorf("false alarm on %s: %s", c, why)
+		}
+	}
+}
+
+func TestDenyRuleSpellings(t *testing.T) {
+	g := &Gate{Mode: Yolo, Root: t.TempDir()}
+	g.SetRules(Rules{Deny: []string{"bash(touch*)"}})
+	for _, c := range []string{`touch a`, `/usr/bin/touch a`, `\touch a`, `"touch" a`, `env touch a`, `eval touch a`, `command touch a`, `echo x | xargs touch`} {
+		if ok, _ := g.Bash(c); ok {
+			t.Errorf("deny rule bypassed: %s", c)
+		}
+	}
+	if ok, _ := g.Bash(`ls touchstone`); !ok {
+		t.Error("a deny for touch must not block ls touchstone")
+	}
+}

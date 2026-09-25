@@ -4,6 +4,7 @@ package policy
 
 import (
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/sandbox"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -95,6 +96,21 @@ func RiskyCommand(cmd string) string {
 	for _, r := range risky {
 		if r.re.MatchString(cmd) {
 			return r.reason
+		}
+	}
+	// The same checks on the command as the shell will see it: quoting
+	// (rm "-rf"), wrappers (env, eval, sudo) and program paths (/bin/rm)
+	// cannot disguise it, and a destructive program whose arguments are
+	// only known at run time (rm $F) is not waved through.
+	for _, c := range normalizeCommands(cmd) {
+		n := c.String()
+		for _, r := range risky {
+			if r.re.MatchString(n) {
+				return r.reason
+			}
+		}
+		if why := hiddenRisk(c); why != "" {
+			return why
 		}
 	}
 	return ""
@@ -524,10 +540,28 @@ func (g *Gate) Read(path string) (bool, string) {
 	if deny, _ := g.ruleFor("read", path); deny != "" {
 		return false, "blocked by your permission rule " + deny
 	}
-	if g.GetMode() == Yolo || !secretPath.MatchString(filepath.ToSlash(path)) && !dotEnv(path) {
+	if g.GetMode() == Yolo || !secretPath.MatchString(filepath.ToSlash(path)) && !dotEnv(path) && !sandboxSecret(path) {
 		return true, ""
 	}
 	return g.askWhy("read: "+path, "credential file")
+}
+
+// sandboxSecret reports whether path is one of the credential paths the
+// sandbox hides from commands (Agentium's own keys, config, sessions and
+// checkpoints included, wherever AGENTIUM_HOME puts them): the read tool
+// must not hand over what bash cannot read.
+func sandboxSecret(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	p := filepath.Clean(path)
+	for _, s := range sandbox.SecretPaths(home) {
+		if p == s || strings.HasPrefix(p, strings.TrimSuffix(s, string(filepath.Separator))+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // External reports whether an external (MCP) tool may run. Ask mode gates
