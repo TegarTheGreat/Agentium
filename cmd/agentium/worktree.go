@@ -90,6 +90,12 @@ func gitCommonDir(root string) string {
 	if err != nil || common == "" {
 		return ""
 	}
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	if r, err := filepath.EvalSymlinks(common); err == nil {
+		common = r
+	}
 	if rel, err := filepath.Rel(root, common); err == nil && !strings.HasPrefix(rel, "..") {
 		return "" // inside the workspace already
 	}
