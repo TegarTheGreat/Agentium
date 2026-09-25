@@ -1455,17 +1455,22 @@ func run(args []string) error {
 		}
 		// Skills added, changed or removed since the last message count
 		// now, without a restart.
-		if fresh := skill.Discover(config.Home(), cwd); skill.Prompt(fresh) != skill.Prompt(skills) {
+		if fresh := skill.Discover(config.Home(), cwd); skillKey(fresh) != skillKey(skills) {
 			added, removed := skillDiff(skills, fresh)
+			index := skill.Prompt(skills) != skill.Prompt(fresh)
 			skills = fresh
 			skillBox.Store(fresh)
-			baseSystem = sysHead + skill.Prompt(skills) + sysTail
-			a.System = baseSystem + stylePrompt(cfg.Style)
-			for i := range a.Messages {
-				a.Messages[i].Raw = nil // signed thinking belongs to the old system prompt
+			if len(added)+len(removed) > 0 {
+				u.note(skillChangeNote(added, removed))
 			}
-			sess.SystemHash = hashString(a.System)
-			u.note(skillChangeNote(added, removed))
+			if index { // (the prompt's list is capped: it may not change)
+				baseSystem = sysHead + skill.Prompt(skills) + sysTail
+				a.System = baseSystem + stylePrompt(cfg.Style)
+				for i := range a.Messages {
+					a.Messages[i].Raw = nil // signed thinking belongs to the old system prompt
+				}
+				sess.SystemHash = hashString(a.System)
+			}
 		}
 		if skillCall(skills, line) {
 			// a skill: sent as it is, below

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -85,7 +86,7 @@ func (e *Env) DetachForeground() bool {
 }
 
 // adopt turns the running command into a job.
-func (d *detacher) adopt(cmd *exec.Cmd, sw *switchWriter, sofar string, done <-chan error) string {
+func (d *detacher) adopt(cmd *exec.Cmd, sw *switchWriter, out *lockedBuffer, done <-chan error) string {
 	t := d.env.jobTable()
 	t.mu.Lock()
 	t.next++
@@ -95,8 +96,13 @@ func (d *detacher) adopt(cmd *exec.Cmd, sw *switchWriter, sofar string, done <-c
 	closed := t.closed
 	t.mu.Unlock()
 	sw.set(j) // from now on its output is the job's
+	sofar := out.String()
 	go func() {
-		j.err = <-done
+		err := <-done
+		if errors.Is(err, exec.ErrWaitDelay) {
+			err = nil // the shell is done; what it left running was stopped
+		}
+		j.err = err
 		close(j.done)
 	}()
 	if closed {

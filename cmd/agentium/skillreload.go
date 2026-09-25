@@ -40,3 +40,12 @@ func skillChangeNote(added, removed []string) string {
 	}
 	return sanitize("skills updated: " + strings.Join(parts, " · "))
 }
+
+// skillKey identifies the skill set: names, descriptions and places.
+func skillKey(ss []skill.Skill) string {
+	var sb strings.Builder
+	for _, s := range ss {
+		sb.WriteString(s.Name + "\x00" + s.Description + "\x00" + s.Path + "\x01")
+	}
+	return sb.String()
+}

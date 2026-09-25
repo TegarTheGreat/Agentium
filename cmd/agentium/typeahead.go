@@ -101,7 +101,7 @@ func (u *ui) startTyping(interrupt func()) (stop func()) {
 				u.mu.Unlock()
 				u.openViewer()
 				continue
-			case k == "\x02": // Ctrl-B: the running command to the background
+			case k == "\x02" && !pasting: // Ctrl-B: the running command to the background
 				u.mu.Unlock()
 				if u.detach != nil && u.detach() {
 					u.line(u.paint(cDim, "moved to the background; the agent can read or stop it"))

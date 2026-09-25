@@ -260,8 +260,13 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 	case err = <-done:
 	case <-detach:
 		// The user sent it to the background (Ctrl-B): it becomes a job
-		// and keeps running; the turn goes on.
-		return dt.adopt(cmd, sw, out.String(), done), nil
+		// and keeps running; the turn goes on. (If it has just finished,
+		// it is reported as usual.)
+		select {
+		case err = <-done:
+		default:
+			return dt.adopt(cmd, sw, &out, done), nil
+		}
 	case <-ctx.Done():
 		killProcessGroup(cmd)
 		select {
