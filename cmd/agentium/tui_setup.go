@@ -134,7 +134,7 @@ var keyRows = [][2]string{
 	{"alt+p  alt+t", "switch model · reasoning effort"},
 	{"ctrl+r", "search your earlier messages"},
 	{"ctrl+g", "write the message in $EDITOR"},
-	{"ctrl+o", "full output of recent steps"},
+	{"ctrl+o", "step outputs · t the whole conversation · / search · [ ] your messages"},
 	{"↑ ↓", "line above/below, else history"},
 	{"ctrl+k/u/w  ctrl+y", "cut to line end/start, a word · paste it back"},
 	{"ctrl+_  ctrl+s", "undo typing · put the draft aside (again: bring back)"},

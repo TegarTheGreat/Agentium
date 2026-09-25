@@ -86,4 +86,3 @@ func TestWordWrap(t *testing.T) {
 	}
 }
 
-func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }

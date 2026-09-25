@@ -698,8 +698,15 @@ func scrollKey(k string) bool {
 		if f.pager.key(k) {
 			f.pager = nil
 		}
+		edit := ""
+		if f.pager != nil {
+			edit, f.pager.edit = f.pager.edit, ""
+		}
 		f.dirty = true
 		f.mu.Unlock()
+		if edit != "" {
+			_, _ = externalEdit(edit) // to read, search or copy from
+		}
 		return true
 	}
 	f.mu.Unlock()
