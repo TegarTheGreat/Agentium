@@ -605,3 +605,20 @@ func TestPlainKey(t *testing.T) {
 		}
 	}
 }
+
+func TestDroppedImages(t *testing.T) {
+	dir := t.TempDir()
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
+	a := filepath.Join(dir, "Screen Shot.png")
+	b := filepath.Join(dir, "b.png")
+	os.WriteFile(a, png, 0o644)
+	os.WriteFile(b, png, 0o644)
+	in := "what is this '" + a + "' and " + strings.ReplaceAll(a, " ", `\ `) + " and " + b + " and /nope/x.png"
+	imgs, notes := mentionedImages(in, dir, true)
+	if len(imgs) != 2 {
+		t.Fatalf("%d images: %v", len(imgs), notes)
+	}
+	if imgs, _ := mentionedImages("see "+b, dir, false); len(imgs) != 0 {
+		t.Fatal("no vision: nothing attached")
+	}
+}

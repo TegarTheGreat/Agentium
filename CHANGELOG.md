@@ -6,6 +6,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Added
 
+- Drag an image file into the terminal to attach it, as in Claude Code: a full path to an image in your message (quoted, or with `\ ` before spaces) is attached like `@path`.
 - `/usage` shows the session's cost as well, and `/cost` is another name for it.
 
 ### Fixed

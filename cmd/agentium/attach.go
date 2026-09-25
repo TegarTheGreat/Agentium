@@ -12,14 +12,29 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
+var droppedImage = regexp.MustCompile(`(?i)(?:^|\s)('(?:/|~/)[^']+\.(?:png|jpe?g|gif|webp)'|"(?:/|~/)[^"]+\.(?:png|jpe?g|gif|webp)"|(?:/|~/)(?:\\ |\S)+?\.(?:png|jpe?g|gif|webp))(?:\s|$)`)
+
 var imageMention = regexp.MustCompile(`(?i)(?:^|\s)@("[^"]+\.(?:png|jpe?g|gif|webp)"|\S+\.(?:png|jpe?g|gif|webp))`)
 
 // mentionedImages loads the image files named with @path in a prompt.
 // Mentions that are not existing files are left alone (they may be
 // memory directives or plain text). notes are for the user.
 func mentionedImages(input, cwd string, vision bool) (imgs []provider.Image, notes []string) {
+	var paths []string
 	for _, m := range imageMention.FindAllStringSubmatch(input, 8) {
-		p := strings.Trim(m[1], `"`)
+		paths = append(paths, strings.Trim(m[1], `"`))
+	}
+	// A file dragged into the terminal arrives as its full path, quoted or
+	// with escaped spaces: an image there is attached too.
+	for _, m := range droppedImage.FindAllStringSubmatch(input, 8) {
+		p := strings.Trim(m[1], `"'`)
+		if !strings.HasPrefix(m[1], "'") && !strings.HasPrefix(m[1], `"`) {
+			p = strings.ReplaceAll(p, `\ `, " ")
+		}
+		paths = append(paths, p)
+	}
+	seen := map[string]bool{}
+	for _, p := range paths {
 		if strings.HasPrefix(p, "~/") {
 			if h, err := os.UserHomeDir(); err == nil {
 				p = filepath.Join(h, p[2:])
@@ -28,9 +43,10 @@ func mentionedImages(input, cwd string, vision bool) (imgs []provider.Image, not
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(cwd, p)
 		}
-		if _, err := os.Stat(p); err != nil {
+		if _, err := os.Stat(p); err != nil || seen[p] {
 			continue
 		}
+		seen[p] = true
 		if !vision {
 			notes = append(notes, fmt.Sprintf("%s not attached: this model cannot view images", filepath.Base(p)))
 			continue
