@@ -382,6 +382,10 @@ func setupSandbox(env *tool.Env, cfg config.Config, root string, disabled bool) 
 		return st
 	}
 	sc := sandbox.Config{Write: sandbox.DefaultWrite(root)}
+	if common := gitCommonDir(root); common != "" {
+		// A linked worktree commits into the main repository's .git.
+		sc.Write = append(sc.Write, common)
+	}
 	if cfg.Sandbox != nil {
 		for _, p := range cfg.Sandbox.Write {
 			if strings.HasPrefix(p, "~/") {

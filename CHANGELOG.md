@@ -25,6 +25,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
   - `Ctrl-S` puts a draft aside and brings it back.
   - `↑`/`↓` move between the lines of a long message before going through history.
   - `Alt-P` and `Alt-T` open the model and effort pickers.
+- **`--worktree NAME`** runs the session in its own git worktree on branch `agentium/NAME`, so several sessions can work on one repository at once. The worktree lives in Agentium's data folder. On exit it is removed if nothing changed, or kept with the commands to merge or remove it.
 - **`subagent_model`** runs sub-agents on another (usually cheaper) model, with its own price, context size and your reasoning effort.
 
 ### Changed
@@ -39,6 +40,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - A hook that leaves a child process running no longer blocks the turn past its timeout.
 - Branch names and `status_line` output cannot send control sequences to the terminal.
 - The status line's git check never takes `.git/index.lock` from your own git commands.
+- In a linked git worktree, the sandbox lets commands commit (the repository's shared `.git` is outside the worktree).
 
 ## [0.16.1] - 2026-09-25
 

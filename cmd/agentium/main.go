@@ -71,6 +71,7 @@ Flags:
   -q                  quiet: no tool lines or stats
   --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
   --max-cost USD      stop once the session has cost this much (needs a known price)
+  --worktree NAME     work in a separate git worktree (branch agentium/NAME) so sessions don't collide
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
 
@@ -536,6 +537,7 @@ func run(args []string) error {
 	check := fs.String("check", "", "")
 	fast := fs.Bool("fast", false, "")
 	classic := fs.Bool("classic", false, "")
+	worktree := fs.String("worktree", "", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -607,6 +609,22 @@ func run(args []string) error {
 	}
 	if r, err := filepath.EvalSymlinks(cwd); err == nil {
 		cwd = r
+	}
+	if *worktree != "" {
+		dir, done, err := enterWorktree(cwd, *worktree)
+		if err != nil {
+			return err
+		}
+		if err := os.Chdir(dir); err != nil {
+			return err
+		}
+		cwd = dir
+		fmt.Fprintln(os.Stderr, "· working in worktree "+dir)
+		defer func() {
+			if msg := done(); msg != "" {
+				fmt.Fprintln(os.Stderr, "· "+msg)
+			}
+		}()
 	}
 
 	m := policy.ParseMode(firstNonEmpty(*mode, cfg.Mode))
