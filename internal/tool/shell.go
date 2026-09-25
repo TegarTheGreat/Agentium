@@ -145,9 +145,9 @@ var bashTool = Tool{
 		}
 		if box != nil && err == nil && sandboxHint.MatchString(out) {
 			if box.Network || box.NetworkUnenforced {
-				out += "\n[sandbox: writes outside the workspace are blocked]"
+				out += "\n[sandbox: writes outside the workspace are blocked; temporary files go in $TMPDIR]"
 			} else {
-				out += "\n[sandbox: writes outside the workspace and network are blocked; retry with net=true if network is needed]"
+				out += "\n[sandbox: writes outside the workspace (temporary files: $TMPDIR) and network are blocked; retry with net=true if network is needed]"
 			}
 		}
 		return out, err

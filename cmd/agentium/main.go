@@ -553,6 +553,7 @@ var wrapperCommands = map[string]bool{"cd": true, "sudo": true, "doas": true, "s
 	"node": true, "perl": true, "ruby": true, "busybox": true, "setsid": true, "stdbuf": true, "chroot": true}
 
 func run(args []string) error {
+	defer sandbox.CleanupTemp()
 	fs := flag.NewFlagSet("agentium", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	modelRef := fs.String("m", "", "")

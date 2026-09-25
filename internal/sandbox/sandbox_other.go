@@ -19,3 +19,6 @@ func command(shell, cmdline string, _ Config) (*exec.Cmd, bool, error) {
 func confineAndExec(Config, []string) error {
 	return errors.New("sandbox not supported on this OS")
 }
+
+// CleanupTemp removes the private temp directory; there is none here.
+func CleanupTemp() {}

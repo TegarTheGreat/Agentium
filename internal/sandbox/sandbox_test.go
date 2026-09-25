@@ -265,3 +265,27 @@ func TestUnixSocketsDenied(t *testing.T) {
 		t.Fatalf("with network allowed, unix sockets work: %v %q", err, out)
 	}
 }
+
+// With Agentium's home under the temp dir (CI), commands still get a
+// writable temp dir.
+func TestTempWritableWithSecretBelowIt(t *testing.T) {
+	if !Probe().Available || runtime.GOOS != "linux" {
+		t.Skip("needs Landlock")
+	}
+	home, err := os.MkdirTemp(os.TempDir(), "agentium-home-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+	t.Setenv("AGENTIUM_HOME", home)
+	os.WriteFile(filepath.Join(home, "auth.json"), []byte("secret"), 0o600)
+	work, _ := filepath.EvalSymlinks(t.TempDir())
+	out, err := run(t, work, `f=$(mktemp) && echo ok > "$f" && cat "$f" && rm "$f"`, Config{Write: DefaultWrite(work)})
+	if err != nil || !strings.Contains(out, "ok") {
+		t.Fatalf("temp file: %v %q", err, out)
+	}
+	if out, err := run(t, work, "cat "+filepath.Join(home, "auth.json"), Config{Write: DefaultWrite(work)}); err == nil {
+		t.Fatalf("the secret became readable: %q", out)
+	}
+	CleanupTemp()
+}

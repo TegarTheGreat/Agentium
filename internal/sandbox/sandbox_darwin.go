@@ -63,3 +63,6 @@ func command(shell, cmdline string, cfg Config) (*exec.Cmd, bool, error) {
 func confineAndExec(Config, []string) error {
 	return errors.New("helper not used on macOS")
 }
+
+// CleanupTemp removes the private temp directory; there is none here.
+func CleanupTemp() {}

@@ -107,6 +107,9 @@ func command(shell, cmdline string, cfg Config) (*exec.Cmd, bool, error) {
 	}
 	cmd := exec.Command(self, helperArg, shell, "-c", cmdline)
 	cmd.Env = append(os.Environ(), envKey+"="+string(b))
+	if dir := privateTemp(cfg); dir != "" {
+		cmd.Env = append(cmd.Env, "TMPDIR="+dir, "TMP="+dir, "TEMP="+dir)
+	}
 	return cmd, true, nil
 }
 
@@ -238,4 +241,35 @@ func addRule(rulesetFD int, path string, access uint64) error {
 		return e
 	}
 	return nil
+}
+
+var (
+	tempOnce sync.Once
+	tempDir  string
+)
+
+// privateTemp returns a temp directory commands can write to when the
+// shared one cannot be granted: a secret below it (AGENTIUM_HOME under
+// /tmp, common in CI) leaves /tmp itself creatable-in by nobody, since
+// Landlock cannot grant a tree minus a path. Entries that exist when a
+// command starts are granted, so a directory made now works. "" when
+// the temp dir is fine.
+func privateTemp(cfg Config) string {
+	t := filepath.Clean(os.TempDir())
+	if !holdsDenied(t, cfg.ReadDeny) {
+		return ""
+	}
+	tempOnce.Do(func() {
+		if d, err := os.MkdirTemp(t, "agentium-tmp-"); err == nil {
+			tempDir = d
+		}
+	})
+	return tempDir
+}
+
+// CleanupTemp removes the private temp directory, if one was made.
+func CleanupTemp() {
+	if tempDir != "" {
+		os.RemoveAll(tempDir)
+	}
 }
