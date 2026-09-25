@@ -77,3 +77,21 @@ func Lock(lockPath string, timeout time.Duration) func() {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TryLock takes the lock on lockPath if no other process holds it; ok is
+// false otherwise. The lock lasts until release (or the process ends).
+func TryLock(lockPath string) (release func(), ok bool) {
+	_ = os.MkdirAll(filepath.Dir(lockPath), 0o700)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return func() {}, true // no lock file possible: carry on unlocked
+	}
+	if !tryLock(f) {
+		f.Close()
+		return func() {}, false
+	}
+	return func() {
+		unlock(f)
+		f.Close()
+	}, true
+}

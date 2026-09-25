@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -51,4 +52,24 @@ func TestPruneKeepsNamedSessions(t *testing.T) {
 	if len(ids) != 3 || len(list) != 2 || list[1].Title != "keep me" {
 		t.Fatalf("after prune: %q", got)
 	}
+}
+
+func TestCorruptReportedAndOwn(t *testing.T) {
+	t.Setenv("AGENTIUM_HOME", t.TempDir())
+	s := New("/proj", "m")
+	s.Messages = []provider.Message{{Role: provider.RoleUser, Text: "hi"}}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(dir(), "99999999-bad.json")
+	os.WriteFile(bad, []byte(`{"id":"x","cwd":"/proj","messages":[{"role`), 0o600)
+	got, _ := Latest("/proj")
+	if got == nil || got.ID != s.ID || len(TakeCorrupt()) != 1 {
+		t.Fatal("the damaged newest file must be reported, the valid one found")
+	}
+	release, ok := s.Own()
+	if !ok {
+		t.Fatal("first owner")
+	}
+	defer release()
 }

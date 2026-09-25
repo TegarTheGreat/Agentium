@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/config"
+	"github.com/tegarthegreat/agentium/internal/fsx"
 	"github.com/tegarthegreat/agentium/internal/provider"
 )
 
@@ -91,12 +93,30 @@ func (s *Session) Save() error {
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(dir(), s.ID+".json")
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
+	// A unique temporary file: two processes never write the same one.
+	return fsx.WriteFile(filepath.Join(dir(), s.ID+".json"), b, 0o600)
+}
+
+// Own marks this process as the one writing the session; ok is false when
+// another running agentium already has it open (then continue in a copy,
+// or one of the two would overwrite the other's turns).
+func (s *Session) Own() (release func(), ok bool) {
+	return fsx.TryLock(filepath.Join(dir(), s.ID+".lock"))
+}
+
+var (
+	corruptMu sync.Mutex
+	corrupt   []string
+)
+
+// TakeCorrupt returns (once) the session files for the folder that could
+// not be read in the last listing.
+func TakeCorrupt() []string {
+	corruptMu.Lock()
+	defer corruptMu.Unlock()
+	c := corrupt
+	corrupt = nil
+	return c
 }
 
 // Latest returns the most recent session for cwd, or nil.
@@ -148,7 +168,15 @@ func ForCwd(cwd string, max int) ([]*Session, error) {
 		}
 		b := append(head[:k], rest...)
 		var s Session
-		if json.Unmarshal(b, &s) == nil && s.Cwd == cwd {
+		if err := json.Unmarshal(b, &s); err != nil {
+			// A damaged file (a crash while writing, a full disk): say so
+			// rather than quietly continue an older conversation.
+			corruptMu.Lock()
+			corrupt = append(corrupt, filepath.Join(dir(), n)+": "+err.Error())
+			corruptMu.Unlock()
+			continue
+		}
+		if s.Cwd == cwd {
 			out = append(out, &s)
 			if len(out) >= max {
 				break

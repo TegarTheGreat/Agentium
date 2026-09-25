@@ -871,6 +871,27 @@ func run(args []string) error {
 			}
 			sess.SystemHash = hashString(system)
 		}
+		for _, c := range session.TakeCorrupt() {
+			fmt.Fprintln(os.Stderr, u.paint(cYellow, "· a saved conversation could not be read and was skipped: "+sanitize(oneLine(c, 160))))
+		}
+	}
+	// One process writes a conversation at a time: one already open in
+	// another agentium continues here in a copy (the two would overwrite
+	// each other's turns).
+	if release, ok := sess.Own(); ok {
+		defer release()
+	} else {
+		fork := *sess
+		fork.ID = session.New(sess.Cwd, sess.Model).ID
+		fork.Messages = append([]provider.Message(nil), sess.Messages...)
+		fork.Checkpoints = append([]session.Checkpoint(nil), sess.Checkpoints...)
+		*sess = fork
+		if release, ok := sess.Own(); ok {
+			defer release()
+		}
+		if !*quiet {
+			fmt.Fprintln(os.Stderr, u.paint(cYellow, "· that conversation is open in another agentium: continuing in a copy"))
+		}
 	}
 	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
 	gate.Unconfined = a.Env.Sandbox == nil // then auto mode asks before commands that change things
@@ -1988,6 +2009,12 @@ func slash(line string, e *slashEnv) (exit bool) {
 		}
 		hash := sess.SystemHash
 		*sess = *chosen
+		if _, ok := sess.Own(); !ok {
+			// Open in another agentium: continue in a copy.
+			sess.ID = session.New(sess.Cwd, sess.Model).ID
+			sess.Own()
+			u.note("that conversation is open in another agentium: continuing in a copy")
+		}
 		a.Messages = provider.CloseToolCalls(chosen.Messages)
 		a.Env.ForgetReads()
 		if chosen.SystemHash != hash {
