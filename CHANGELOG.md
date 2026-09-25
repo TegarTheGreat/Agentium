@@ -7,6 +7,12 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 ### Added
 
 - `/bug` opens a GitHub issue form already filled in with the version, system, terminal and model. Nothing is sent until you submit it.
+- `/security-review` looks for vulnerabilities an attacker could exploit in the current changes: injection, path traversal, broken access checks, secrets, SSRF, XSS and unsafe deserialization. Each finding has a severity, the place, how it would be exploited and a fix.
+- Custom commands take `$1` … `$9` for single arguments, as in Claude Code. `"quoted words"` count as one.
+
+### Changed
+
+- `/review` and `/security-review` look at the branch's commits when nothing is uncommitted.
 
 ## [0.20.0] - 2026-09-25
 

@@ -59,6 +59,7 @@ var slashCommands = []slashCmd{
 	{"/add-dir", "work in another directory too", true},
 	{"/init", "study the repo and write AGENTS.md", false},
 	{"/review", "review the current changes for bugs", false},
+	{"/security-review", "look for exploitable vulnerabilities in the changes", false},
 	{"/commit", "commit the changes with a message in the repo's style", false},
 	{"/pr", "push the branch and open a pull request", false},
 	{"/fork", "continue in a copy of this conversation", false},

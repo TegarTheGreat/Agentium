@@ -192,6 +192,12 @@ func TestCustomCommands(t *testing.T) {
 	if msg, ok := expandCommand(cwd, "/review"); !ok || !strings.Contains(msg, "git diff") {
 		t.Fatalf("review: %q", msg)
 	}
+	if msg, ok := expandCommand(cwd, "/security-review"); !ok || !strings.Contains(msg, "exploit") {
+		t.Fatalf("security-review: %q", msg)
+	}
+	if got := expandArgs("Move $1 to $2 ($ARGUMENTS) $3.", `"a b" c`); got != `Move a b to c ("a b" c) .` {
+		t.Fatalf("expandArgs: %q", got)
+	}
 	if _, ok := expandCommand(cwd, "/model"); ok {
 		t.Fatal("built-in commands are not prompt commands")
 	}

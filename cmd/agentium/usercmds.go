@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -16,7 +17,9 @@ import (
 
 const initPrompt = `Study this repository and write AGENTS.md at its root: the instructions a new engineer (or coding agent) needs. Cover, briefly and concretely: what the project is; how to build, run, test and lint (exact commands, verified by running them where cheap); the layout (main directories and entry points); conventions you can see in the code (style, naming, error handling, testing patterns); and pitfalls. If AGENTS.md or CLAUDE.md exists, improve it instead of starting over. Keep it under about 100 lines.`
 
-const reviewPrompt = `Review the current changes (git diff HEAD, plus untracked files) as a careful senior reviewer. Look for bugs, missed edge cases, security problems, broken error handling, leftover debug code and missing tests. Report findings as a numbered list, most serious first, each with file:line, what is wrong and a concrete fix; say plainly if you find nothing. Do not change any file.`
+const reviewPrompt = `Review the current changes (git diff HEAD, plus untracked files; if there are none, the commits on this branch that are not on the default branch) as a careful senior reviewer. Look for bugs, missed edge cases, security problems, broken error handling, leftover debug code and missing tests. Report findings as a numbered list, most serious first, each with file:line, what is wrong and a concrete fix; say plainly if you find nothing. Do not change any file.`
+
+const securityPrompt = `Do a security review of the current changes (git diff HEAD, plus untracked files; if there are none, the commits on this branch that are not on the default branch). Read the surrounding code to see how data flows in. Look for vulnerabilities an attacker could actually exploit: injection (SQL, shell, template, path traversal), broken authentication or authorization, secrets or keys in code or logs, unsafe deserialization, SSRF, XSS and unsafe HTML, weak or misused cryptography, insecure defaults, missing validation at trust boundaries, and dependencies added with known problems. Leave out theoretical issues, denial of service, rate limiting and style. For each finding give severity (high, medium, low), file:line, how it would be exploited, and a concrete fix, most serious first; report only what you are confident about, and say plainly if you find nothing. Do not change any file.`
 
 const commitPrompt = `Commit the current changes. Look at git status and git diff (staged and not), and git log -5 for this repository's message style. Stage the files that belong to the change (never secrets, .env files, build output or unrelated files; say which you left out and why), then commit with a concise message in the repository's style: a short summary line, and a body only if it helps. Do not push, amend or rewrite history.`
 
@@ -79,7 +82,7 @@ func commandDesc(path string) string {
 // builtinCommand reports whether /name is one of agentium's own.
 func builtinCommand(name string) bool {
 	switch name {
-	case "plan", "go", "skills", "settings", "new", "quit", "q", "?", "init", "review", "commit", "pr", "allowed", "vim", "add-dir", "watch", "handoff", "agents", "style", "bug":
+	case "plan", "go", "skills", "settings", "new", "quit", "q", "?", "init", "review", "security-review", "commit", "pr", "allowed", "vim", "add-dir", "watch", "handoff", "agents", "style", "bug":
 		return true
 	}
 	for _, c := range slashCommands {
@@ -116,6 +119,8 @@ func expandCommand(cwd, line string) (msg string, ok bool) {
 		return withArgs(initPrompt), true
 	case "review":
 		return withArgs(reviewPrompt), true
+	case "security-review":
+		return withArgs(securityPrompt), true
 	case "commit":
 		return withArgs(commitPrompt), true
 	case "pr":
@@ -131,10 +136,54 @@ func expandCommand(cwd, line string) (msg string, ok bool) {
 		}
 		_, body := splitFront(string(b))
 		msg := withArgs(strings.TrimSpace(body))
-		if strings.Contains(body, "$ARGUMENTS") {
-			msg = strings.TrimSpace(strings.ReplaceAll(body, "$ARGUMENTS", args))
+		if strings.Contains(body, "$ARGUMENTS") || positional.MatchString(body) {
+			msg = strings.TrimSpace(expandArgs(body, args))
 		}
 		return msg, true // "" for an empty file: the caller says so
 	}
 	return "", false
+}
+
+// positional matches $1 … $9 in a command file.
+var positional = regexp.MustCompile(`\$[1-9]`)
+
+// expandArgs fills $ARGUMENTS with all the arguments and $1 … $9 with
+// each one; "quoted words" count as one.
+func expandArgs(body, args string) string {
+	words := splitArgs(args)
+	body = positional.ReplaceAllStringFunc(body, func(m string) string {
+		if i := int(m[1] - '1'); i < len(words) {
+			return words[i]
+		}
+		return ""
+	})
+	return strings.ReplaceAll(body, "$ARGUMENTS", args)
+}
+
+// splitArgs splits at spaces, keeping "double" or 'single' quoted words.
+func splitArgs(s string) []string {
+	var out []string
+	var cur strings.Builder
+	quote, in := rune(0), false
+	for _, r := range s {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote == 0 && (r == '"' || r == '\''):
+			quote, in = r, true
+		case quote == 0 && (r == ' ' || r == '\t'):
+			if in {
+				out = append(out, cur.String())
+				cur.Reset()
+				in = false
+			}
+		default:
+			cur.WriteRune(r)
+			in = true
+		}
+	}
+	if in {
+		out = append(out, cur.String())
+	}
+	return out
 }

@@ -103,6 +103,7 @@ var helpRows = [][2]string{
 	{"/undo  /rewind", "revert the last turn · go back before a message: conversation, files or both (esc esc)"},
 	{"/diff  /copy", "what changed · copy the last reply"},
 	{"/review  /commit  /pr", "review the changes · commit them · open a pull request"},
+	{"/security-review", "look for exploitable vulnerabilities in the changes"},
 	{"/init", "write AGENTS.md for this repository"},
 	{"/btw <question>", "a side question, not added to the conversation"},
 	{"/watch", "act on comments you end with AI! (a change) or AI? (a question)"},
