@@ -33,25 +33,31 @@ var agentTools = map[string]string{
 }
 
 type agentFile struct {
-	def   agent.AgentDef
-	model string
-	path  string
+	def     agent.AgentDef
+	model   string
+	path    string
+	project bool // from the repository, not your own folders
 }
 
 // loadAgents finds the specialists; agentium's folders win over .claude's
 // and the project's over yours.
 func loadAgents(cwd string) []agentFile {
-	var dirs []string
-	if h, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(h, ".claude", "agents"))
+	type src struct {
+		dir     string
+		project bool
 	}
-	dirs = append(dirs, filepath.Join(config.Home(), "agents"))
+	var dirs []src
+	if h, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, src{filepath.Join(h, ".claude", "agents"), false})
+	}
+	dirs = append(dirs, src{filepath.Join(config.Home(), "agents"), false})
 	root := config.ProjectRoot(cwd)
 	for _, d := range []string{root, cwd} {
-		dirs = append(dirs, filepath.Join(d, ".claude", "agents"), filepath.Join(d, ".agentium", "agents"))
+		dirs = append(dirs, src{filepath.Join(d, ".claude", "agents"), true}, src{filepath.Join(d, ".agentium", "agents"), true})
 	}
 	byName := map[string]agentFile{}
-	for _, dir := range dirs {
+	for _, sd := range dirs {
+		dir := sd.dir
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
 			if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".md") {
@@ -63,14 +69,47 @@ func loadAgents(cwd string) []agentFile {
 				continue
 			}
 			front, body := splitFront(string(b))
-			f := agentFile{path: p}
+			f := agentFile{path: p, project: sd.project}
 			f.def.Prompt = strings.TrimSpace(body)
+			hasTools := false
+			var denied []string
+			addTools := func(v string, deny bool) {
+				for _, t := range strings.FieldsFunc(strings.Trim(v, "[]"), func(r rune) bool { return r == ',' || r == ' ' }) {
+					t = strings.Trim(t, `"'-`)
+					if i := strings.IndexByte(t, '('); i > 0 {
+						t = t[:i] // Bash(git diff:*): the tool, without its scope
+					}
+					n := agentTools[strings.ToLower(t)]
+					switch {
+					case n == "":
+					case deny:
+						denied = append(denied, n)
+					default:
+						f.def.Tools = append(f.def.Tools, n)
+					}
+				}
+			}
+			listKey := ""
 			for _, l := range strings.Split(front, "\n") {
+				if t := strings.TrimSpace(l); strings.HasPrefix(t, "- ") && listKey != "" {
+					addTools(t[2:], listKey == "disallowedtools") // YAML list form
+					continue
+				}
 				k, v, ok := strings.Cut(l, ":")
 				if !ok {
 					continue
 				}
 				v = strings.Trim(strings.TrimSpace(v), `"'`)
+				listKey = ""
+				switch key := strings.ToLower(strings.TrimSpace(k)); key {
+				case "tools", "disallowedtools":
+					if key == "tools" {
+						hasTools = true
+					}
+					listKey = key
+					addTools(v, key == "disallowedtools")
+					continue
+				}
 				switch strings.ToLower(strings.TrimSpace(k)) {
 				case "name":
 					f.def.Name = v
@@ -80,14 +119,20 @@ func loadAgents(cwd string) []agentFile {
 					if v != "inherit" {
 						f.model = v
 					}
-				case "tools":
-					seen := map[string]bool{}
-					for _, t := range strings.FieldsFunc(strings.Trim(v, "[]"), func(r rune) bool { return r == ',' || r == ' ' }) {
-						if n := agentTools[strings.ToLower(strings.Trim(t, `"'`))]; n != "" && !seen[n] {
-							seen[n] = true
-							f.def.Tools = append(f.def.Tools, n)
-						}
-					}
+				}
+			}
+			// A tools list that names nothing agentium has, or a project
+			// agent without one, fails closed: read and search only.
+			if hasTools && len(f.def.Tools) == 0 || !hasTools && f.project {
+				f.def.Tools = []string{"read", "search"}
+			}
+			if !hasTools && !f.project && len(denied) > 0 {
+				f.def.Tools = []string{"read", "edit", "bash", "search", "fetch", "todo", "oracle"}
+			}
+			if len(f.def.Tools) > 0 { // else: your own agent, every tool
+				f.def.Tools = without(uniq(f.def.Tools), denied)
+				if len(f.def.Tools) == 0 {
+					f.def.Tools = []string{"read", "search"}
 				}
 			}
 			if f.def.Name == "" {
@@ -102,6 +147,12 @@ func loadAgents(cwd string) []agentFile {
 				if t == "edit" || t == "bash" {
 					f.def.ReadOnly = false
 				}
+			}
+			if old, ok := byName[strings.ToLower(f.def.Name)]; ok && !old.project && f.project {
+				continue // a repository cannot replace your own agent
+			}
+			if f.project {
+				f.def.Description = "(project) " + f.def.Description
 			}
 			byName[strings.ToLower(f.def.Name)] = f
 		}
@@ -143,4 +194,30 @@ func showAgents(u *ui, list []agentFile) {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", u.paint(cAccent, f.def.Name), u.paint(cDim, oneLine(f.def.Description, 70)))
 		u.note("    " + tools + model + " · " + shortPath(f.path))
 	}
+}
+
+func uniq(xs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range xs {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func without(xs, drop []string) []string {
+	var out []string
+	for _, x := range xs {
+		keep := true
+		for _, d := range drop {
+			keep = keep && x != d
+		}
+		if keep {
+			out = append(out, x)
+		}
+	}
+	return out
 }

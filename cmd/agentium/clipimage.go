@@ -1,10 +1,13 @@
 package main
 
 import (
+	"strings"
+
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/config"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,21 +39,23 @@ func clipboardImage() ([]byte, error) {
 			return b, nil
 		}
 		// Without pngpaste: AppleScript writes the clipboard's PNG to a file.
-		tmp := filepath.Join(os.TempDir(), fmt.Sprintf("agentium-clip-%d.png", time.Now().UnixNano()))
+		tmp := filepath.Join(imageDir(), fmt.Sprintf("clip-%d.png", time.Now().UnixNano()))
 		script := fmt.Sprintf(`set f to open for access POSIX file %q with write permission
 write (the clipboard as «class PNGf») to f
 close access f`, tmp)
-		if exec.CommandContext(ctx, "osascript", "-e", script).Run() == nil {
-			b, err := os.ReadFile(tmp)
-			os.Remove(tmp)
-			if err == nil && bytes.HasPrefix(b, []byte("\x89PNG")) {
-				return b, nil
-			}
+		err := exec.CommandContext(ctx, "osascript", "-e", script).Run()
+		b, rerr := os.ReadFile(tmp)
+		os.Remove(tmp) // also when there was no image
+		if err == nil && rerr == nil && bytes.HasPrefix(b, []byte("\x89PNG")) {
+			return b, nil
 		}
 	case "windows":
-		tmp := filepath.Join(os.TempDir(), fmt.Sprintf("agentium-clip-%d.png", time.Now().UnixNano()))
-		ps := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; $i=[Windows.Forms.Clipboard]::GetImage(); if ($i) { $i.Save('%s', [Drawing.Imaging.ImageFormat]::Png) }`, tmp)
-		if exec.CommandContext(ctx, "powershell", "-NoProfile", "-STA", "-Command", ps).Run() == nil {
+		tmp := filepath.Join(imageDir(), fmt.Sprintf("clip-%d.png", time.Now().UnixNano()))
+		// The path goes in through the environment: no quoting to get wrong.
+		ps := `Add-Type -AssemblyName System.Windows.Forms; $i=[Windows.Forms.Clipboard]::GetImage(); if ($i) { $i.Save($env:AGENTIUM_CLIP, [Drawing.Imaging.ImageFormat]::Png) }`
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-STA", "-Command", ps)
+		cmd.Env = append(os.Environ(), "AGENTIUM_CLIP="+tmp)
+		if cmd.Run() == nil {
 			b, err := os.ReadFile(tmp)
 			os.Remove(tmp)
 			if err == nil && bytes.HasPrefix(b, []byte("\x89PNG")) {
@@ -72,19 +77,39 @@ close access f`, tmp)
 	return nil, errors.New("no image on the clipboard (over SSH the clipboard is on your own computer: save the image and use @path)")
 }
 
+// imageDir is where pasted images are kept: agentium's own folder, not a
+// shared temporary one another user could prepare.
+func imageDir() string {
+	d := filepath.Join(config.Home(), "images")
+	_ = os.MkdirAll(d, 0o700)
+	return d
+}
+
 // pasteImage saves the clipboard image and returns an @mention for it.
 func pasteImage() (string, error) {
 	b, err := clipboardImage()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(os.TempDir(), "agentium-images")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	f, err := os.CreateTemp(imageDir(), time.Now().Format("20060102-150405")+"-*.png")
+	if err != nil {
 		return "", err
 	}
-	p := filepath.Join(dir, time.Now().Format("20060102-150405")+".png")
-	if err := os.WriteFile(p, b, 0o600); err != nil {
+	defer f.Close()
+	if _, err := f.Write(b); err != nil {
 		return "", err
+	}
+	p := f.Name()
+	// Old pastes go after a week.
+	if ents, err := os.ReadDir(imageDir()); err == nil {
+		for _, e := range ents {
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 7*24*time.Hour {
+				os.Remove(filepath.Join(imageDir(), e.Name()))
+			}
+		}
+	}
+	if strings.ContainsAny(p, " \t") {
+		return "@\"" + p + "\" ", nil
 	}
 	return "@" + p + " ", nil
 }

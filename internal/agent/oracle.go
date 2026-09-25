@@ -59,6 +59,9 @@ func (a *Agent) OracleTool() tool.Tool {
 				if !filepath.IsAbs(p) && env != nil {
 					p = filepath.Join(env.Root, p)
 				}
+				if r, err := filepath.EvalSymlinks(p); err == nil {
+					p = r // the check is on the file that is really read
+				}
 				if env != nil && env.Gate != nil {
 					if ok, _ := env.Gate.Read(p); !ok {
 						skipped = append(skipped, f+" (not allowed)")

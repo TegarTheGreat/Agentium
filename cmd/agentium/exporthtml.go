@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/memory"
 	"html"
 	"strings"
 
@@ -43,7 +44,7 @@ footer{color:var(--dim);font-size:12px;margin-top:40px}
 		}
 	}
 	output := func(t string) {
-		if t = strings.TrimSpace(t); t == "" {
+		if t = strings.TrimSpace(memory.Redact(t)); t == "" { // keys and tokens are masked
 			return
 		}
 		if len(t) > 20000 {
@@ -52,6 +53,9 @@ footer{color:var(--dim);font-size:12px;margin-top:40px}
 		fmt.Fprintf(&b, "<details><summary>output · %d lines</summary><pre>%s</pre></details>\n", strings.Count(t, "\n")+1, esc(t))
 	}
 	rel := func(s string) string {
+		if len(sess.Cwd) < 2 {
+			return s
+		}
 		return strings.ReplaceAll(s, strings.TrimSuffix(sess.Cwd, "/")+"/", "")
 	}
 	for _, m := range msgs {

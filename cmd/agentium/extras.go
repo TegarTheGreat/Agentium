@@ -231,11 +231,12 @@ func exportSession(u *ui, a *agent.Agent, sess *session.Session, arg string) {
 		path = filepath.Join(sess.Cwd, path)
 	}
 	if strings.HasSuffix(strings.ToLower(path), ".html") {
-		if err := os.WriteFile(path, []byte(exportHTML(a.Messages, sess)), 0o644); err != nil {
+		// 0600: step outputs can hold things only you should see.
+		if err := os.WriteFile(path, []byte(exportHTML(a.Messages, sess)), 0o600); err != nil {
 			u.failure("export: " + err.Error())
 			return
 		}
-		u.success("Saved the conversation as a page: " + shortPath(path) + u.paint(cDim, " · open it in a browser, or send it"))
+		u.success("Saved the conversation as a page: " + shortPath(path) + u.paint(cDim, " · open it in a browser; check the step outputs before you share it"))
 		return
 	}
 	var sb strings.Builder

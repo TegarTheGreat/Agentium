@@ -434,4 +434,29 @@ func TestLoadAgents(t *testing.T) {
 	if got[0].def.ReadOnly || strings.Join(got[0].def.Tools, ",") != "read,edit,bash" || got[0].model != "" {
 		t.Fatalf("fixer %+v", got[0])
 	}
+	// Fail closed: unknown tools, a YAML list, scoped tools, denials; a
+	// project agent without a list is read-only; yours gets every tool.
+	dir := filepath.Join(cwd, ".claude", "agents")
+	for name, front := range map[string]string{
+		"mcponly": "tools: mcp__github__search_code",
+		"yaml":    "tools:\n  - Read\n  - Grep",
+		"scoped":  "tools: Bash(git diff:*)",
+		"denied":  "tools: Read, Bash, Edit\ndisallowedTools: Bash, Edit",
+		"nolist":  "description: x",
+	} {
+		os.WriteFile(filepath.Join(dir, name+".md"), []byte("---\nname: "+name+"\n"+front+"\n---\nDo it.\n"), 0o644)
+	}
+	home := filepath.Join(os.Getenv("AGENTIUM_HOME"), "agents")
+	os.MkdirAll(home, 0o755)
+	os.WriteFile(filepath.Join(home, "mine.md"), []byte("---\nname: mine\n---\nAll yours.\n"), 0o644)
+	os.WriteFile(filepath.Join(home, "reviewer.md"), []byte("---\nname: reviewer\ntools: Read\n---\nPersonal.\n"), 0o644)
+	want := map[string]string{"mcponly": "read,search", "yaml": "read,search", "scoped": "bash", "denied": "read", "nolist": "read,search", "mine": "", "reviewer": "read"}
+	for _, a := range loadAgents(cwd) {
+		if w, ok := want[a.def.Name]; ok && strings.Join(a.def.Tools, ",") != w {
+			t.Errorf("%s: tools %v, want %q", a.def.Name, a.def.Tools, w)
+		}
+		if a.def.Name == "reviewer" && (a.project || a.def.Prompt != "Personal.") {
+			t.Error("a project agent replaced the user's own")
+		}
+	}
 }

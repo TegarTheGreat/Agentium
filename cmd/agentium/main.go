@@ -785,10 +785,13 @@ func run(args []string) error {
 		if f.model != "" {
 			c := cfg
 			c.SubagentModel = f.model
-			m, _, err := subModel(c, auth, firstNonEmpty(*effort, cfg.Effort))
-			if err != nil {
+			m, known, err := subModel(c, auth, firstNonEmpty(*effort, cfg.Effort))
+			switch {
+			case err != nil:
 				fmt.Fprintln(os.Stderr, u.dim("· agent "+def.Name+": model ignored: "+firstLine(err.Error())))
-			} else {
+			case *maxCost > 0 && !known:
+				fmt.Fprintln(os.Stderr, u.dim("· agent "+def.Name+": model "+f.model+" has no known price; --max-cost could not count it, so it uses the main model"))
+			default:
 				def.Model = m
 			}
 		}

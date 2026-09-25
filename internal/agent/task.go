@@ -30,10 +30,14 @@ func (a *Agent) TaskTool() tool.Tool {
 	schema := `{"type":"object","required":["prompt"],"properties":{"title":{"type":"string"},"prompt":{"type":"string"},"explore":{"type":"boolean"}}}`
 	if len(a.Agents) > 0 {
 		var names []string
-		for _, d := range a.Agents {
-			names = append(names, d.Name+" ("+oneLine(d.Description, 120)+")")
+		for i, d := range a.Agents {
+			if i == 12 {
+				names = append(names, fmt.Sprintf("and %d more", len(a.Agents)-12))
+				break
+			}
+			names = append(names, d.Name+" ("+oneLine(d.Description, 60)+")")
 		}
-		desc += " agent: hand it to one of the user's specialists when it fits: " + strings.Join(names, "; ") + "."
+		desc += " agent: hand it to one of these specialists when it fits (\"project\" ones come from the repository): " + strings.Join(names, "; ") + "."
 		schema = `{"type":"object","required":["prompt"],"properties":{"title":{"type":"string"},"prompt":{"type":"string"},"explore":{"type":"boolean"},"agent":{"type":"string"}}}`
 	}
 	return tool.Tool{
