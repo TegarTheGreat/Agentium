@@ -89,6 +89,12 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 		}
 		before = b
 	}
+	// Edits work on the text as the model read it (UTF-8); the file keeps
+	// its own encoding. Binary content is matched byte for byte.
+	text, enc, ok := decodeText(before)
+	if !ok {
+		text, enc = string(before), encUTF8
+	}
 	var after, how string
 	n := 1
 	if a.Old == "" {
@@ -98,12 +104,12 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 			return "", fmt.Errorf("%s does not exist; to create it, omit old", a.Path)
 		}
 		var err error
-		after, n, how, err = replace(string(before), a.Old, a.New, a.All)
+		after, n, how, err = replace(text, a.Old, a.New, a.All)
 		if err != nil {
 			return "", err
 		}
 	}
-	if exists && after == string(before) {
+	if exists && after == text {
 		return "", errors.New("no change: new text equals the current content")
 	}
 
@@ -113,7 +119,7 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	if r := lint.Check(p, []byte(after)); r.Checked && !r.OK {
 		prior := lint.Result{OK: true}
 		if exists {
-			prior = lint.Check(p, before)
+			prior = lint.Check(p, []byte(text))
 		}
 		if prior.OK {
 			return "", fmt.Errorf("edit rejected, it would introduce a syntax error (file unchanged):\n%s", r.Msg)
@@ -131,7 +137,11 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	if env.BeforeWrite != nil {
 		env.BeforeWrite(p)
 	}
-	if err := writeIfUnchanged(p, before, exists, []byte(after), perm); err != nil {
+	data, err := encodeText(after, enc)
+	if err != nil {
+		return "", err
+	}
+	if err := writeIfUnchanged(p, before, exists, data, perm); err != nil {
 		return "", err
 	}
 	env.markSeen(p)
@@ -144,7 +154,7 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 		}
 	}
 
-	add, del := diffStat(string(before), after)
+	add, del := diffStat(text, after)
 	switch {
 	case !exists:
 		return fmt.Sprintf("created %s (%d lines)%s", a.Path, lineCount(after), warn), nil

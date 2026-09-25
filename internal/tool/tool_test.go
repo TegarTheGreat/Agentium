@@ -1103,3 +1103,39 @@ func TestEditRefusesReadOnlyFile(t *testing.T) {
 		t.Fatalf("read-only file changed: %q", b)
 	}
 }
+
+func TestEditKeepsFileEncoding(t *testing.T) {
+	e := env(t)
+	// UTF-16LE with BOM, as Windows tools write it.
+	u16 := []byte{0xFF, 0xFE}
+	for _, r := range "x=1\r\ncafé=2\r\n" {
+		u16 = append(u16, byte(r), byte(r>>8))
+	}
+	os.WriteFile(filepath.Join(e.Root, "w.txt"), u16, 0o644)
+	out, err := call(t, readTool, e, `{"path":"w.txt"}`)
+	if err != nil || !strings.Contains(out, "café=2") || !strings.Contains(out, "UTF-16LE") {
+		t.Fatalf("read: %v %q", err, out)
+	}
+	if _, err := call(t, editTool, e, `{"path":"w.txt","old":"café=2","new":"café=3"}`); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(e.Root, "w.txt"))
+	if text, enc, _ := decodeText(b); enc != encUTF16LE || text != "x=1\r\ncafé=3\r\n" {
+		t.Fatalf("utf-16 edit: %s %q", enc, text)
+	}
+	// Latin-1: é is the single byte 0xE9.
+	os.WriteFile(filepath.Join(e.Root, "l.txt"), []byte("name = caf\xe9\n"), 0o644)
+	out, _ = call(t, readTool, e, `{"path":"l.txt"}`)
+	if !strings.Contains(out, "café") || !strings.Contains(out, "Latin-1") {
+		t.Fatalf("latin-1 read: %q", out)
+	}
+	if _, err := call(t, editTool, e, `{"path":"l.txt","old":"name = café","new":"name = crème"}`); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.Root, "l.txt")); string(b) != "name = cr\xe8me\n" {
+		t.Fatalf("latin-1 edit wrote %q", b)
+	}
+	if _, err := call(t, editTool, e, `{"path":"l.txt","old":"crème","new":"crème 🍰"}`); err == nil || !strings.Contains(err.Error(), "Latin-1") {
+		t.Fatalf("unrepresentable character: %v", err)
+	}
+}
