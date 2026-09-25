@@ -10,7 +10,7 @@ import (
 	"unsafe"
 )
 
-// denyDatagrams installs a seccomp filter that refuses UDP and raw
+// denyDatagrams installs a seccomp filter that refuses UDP, raw and unix
 // sockets (EACCES) and io_uring (ENOSYS, it could bypass the checks), for
 // this process and everything it starts. no_new_privs must already be
 // set. Other architectures run without it.
@@ -29,6 +29,7 @@ func denyDatagrams() error {
 	}
 	const (
 		sysIoUringSetup = 425
+		afUnix          = 1
 		afInet          = 2
 		afInet6         = 10
 		afPacket        = 17
@@ -62,6 +63,10 @@ func denyDatagrams() error {
 	}
 	p.label("socket")
 	p.ld(16) // args[0]: domain
+	// Unix sockets reach daemons outside the sandbox (docker, the user's
+	// D-Bus and systemd, ssh-agent). socketpair() stays allowed: pipes
+	// between a program's own processes.
+	p.jeq(afUnix, "deny", "")
 	p.jeq(afPacket, "deny", "")
 	p.jeq(afInet, "inet", "")
 	p.jeq(afInet6, "inet", "allow")

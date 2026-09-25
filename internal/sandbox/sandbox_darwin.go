@@ -5,6 +5,7 @@ package sandbox
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -37,7 +38,13 @@ func profile(cfg Config) string {
 		sb.WriteString("(deny network*)\n(allow network* (remote unix-socket))\n" +
 			"(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n" +
 			// DNS lookups go through mDNSResponder and could carry data out.
-			"(deny network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n")
+			"(deny network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n" +
+			// Daemons that act outside the sandbox: docker, ssh-agent.
+			"(deny network-outbound (remote unix-socket (path-regex #\"docker\\.sock$\")))\n" +
+			"(deny network-outbound (remote unix-socket (path-regex #\"^/private/tmp/com\\.apple\\.launchd\\.[^/]+/Listeners$\")))\n")
+		if s := os.Getenv("SSH_AUTH_SOCK"); s != "" {
+			fmt.Fprintf(&sb, "(deny network-outbound (remote unix-socket (path-literal %s)))\n", quote(s))
+		}
 	}
 	// Credentials stay unreadable.
 	for _, p := range secretPaths() {

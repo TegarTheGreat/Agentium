@@ -3,6 +3,7 @@ package sandbox
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -224,5 +225,43 @@ except OSError as e:
 	case s := <-got:
 		t.Fatalf("data left the sandbox: %q", s)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestUnixSocketsDenied(t *testing.T) {
+	if !Probe().Network || runtime.GOOS != "linux" || !datagramFilterSupported() {
+		t.Skip("needs the Linux socket filter")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 needed")
+	}
+	sock := filepath.Join(t.TempDir(), "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skip(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Write([]byte("daemon\n"))
+			c.Close()
+		}
+	}()
+	work, _ := filepath.EvalSymlinks(t.TempDir())
+	box := Config{Write: []string{work, "/dev"}}
+	connect := `python3 -c "import socket; s=socket.socket(socket.AF_UNIX); s.connect('` + sock + `'); print(s.recv(10).decode())"`
+	if out, err := run(t, work, connect, box); err == nil {
+		t.Fatalf("a daemon's unix socket was reachable: %q", out)
+	}
+	pair := `python3 -c "import socket; a,b=socket.socketpair(); a.send(b'ok'); print(b.recv(2).decode())"`
+	if out, err := run(t, work, pair, box); err != nil || !strings.Contains(out, "ok") {
+		t.Fatalf("socketpair must keep working: %v %q", err, out)
+	}
+	if out, err := run(t, work, connect, Config{Write: box.Write, Network: true}); err != nil || !strings.Contains(out, "daemon") {
+		t.Fatalf("with network allowed, unix sockets work: %v %q", err, out)
 	}
 }
