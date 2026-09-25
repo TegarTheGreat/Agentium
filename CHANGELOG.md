@@ -8,6 +8,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 - **Permission rules**, as in Claude Code: `"permissions": {"allow": [...], "deny": [...]}` in the config, or `--allow` / `--deny` on the command line, with rules like `bash(go test*)`, `edit(src/**)`, `read(secrets/**)` and `mcp(github__*)`. A deny wins in every mode, yolo included. Every part of a command line must be allowed, and a command hiding another in `$(…)` is never auto-allowed.
 - `agentium update` tests the new binary before it replaces the old one and keeps the old one: `agentium update --rollback` goes back.
+- `--session ID` continues a given conversation (the id `--json` reports), so scripts and CI need not rely on `-c` picking the newest.
 - A crash writes its details to `~/.agentium/crash/` and points to `/bug`.
 
 ### Reliability

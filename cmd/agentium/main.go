@@ -73,6 +73,7 @@ Flags:
   -q                  quiet: no tool lines or stats
   --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
   --max-cost USD      stop once the session has cost this much (needs a known price)
+  --session ID        continue that conversation (the id --json reports; or a title)
   --add-dir PATH      another working directory the agent may change (repeatable; config "dirs")
   --allow RULE        run this without asking, e.g. "bash(go test*)", "edit(src/**)" (repeatable)
   --deny RULE         never allow this, in any mode, e.g. "bash(rm -rf*)" (repeatable; config "permissions")
@@ -558,6 +559,7 @@ func run(args []string) error {
 	prompt := fs.String("p", "", "")
 	cont := fs.Bool("c", false, "")
 	resumePick := fs.Bool("resume", false, "")
+	sessionArg := fs.String("session", "", "")
 	fs.BoolVar(resumePick, "r", false, "")
 	mode := fs.String("mode", "", "")
 	yolo := fs.Bool("yolo", false, "")
@@ -874,8 +876,27 @@ func run(args []string) error {
 		}
 	}
 	sess.SystemHash = hashString(system)
-	if *cont {
-		if prev, err := session.Latest(cwd); err == nil && prev != nil {
+	if *cont || *sessionArg != "" {
+		var prev *session.Session
+		var err error
+		if *sessionArg != "" {
+			// A given conversation (the id --json reports), for scripts and CI.
+			list, _ := session.ForCwd(cwd, 500)
+			for _, ss := range list {
+				if ss.ID == *sessionArg {
+					prev = ss
+				}
+			}
+			if prev == nil {
+				prev = findSession(list, *sessionArg)
+			}
+			if prev == nil {
+				return fmt.Errorf("no saved conversation %q in this folder (agentium sessions lists them)", *sessionArg)
+			}
+		} else {
+			prev, err = session.Latest(cwd)
+		}
+		if err == nil && prev != nil {
 			sess = prev
 			a.Messages = provider.CloseToolCalls(prev.Messages)
 			a.Note, sess.Note = prev.Note, ""
