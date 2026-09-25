@@ -212,9 +212,13 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 	lastIdx, maxIdx := 0, 0
 	var streamErr error
 	done := false
-	err = readSSE(resp.Body, func(_, data string) bool {
+	err = readSSE(resp.Body, func(event, data string) bool {
 		if data == "[DONE]" {
 			done = true
+			return false
+		}
+		if event == "error" {
+			streamErr = fmt.Errorf("the provider reported an error: %s", errorMessage(data))
 			return false
 		}
 		var ch oaChunk

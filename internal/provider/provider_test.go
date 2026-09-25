@@ -667,3 +667,19 @@ func TestCloseToolCalls(t *testing.T) {
 		t.Fatal("a closed history changes")
 	}
 }
+
+func TestErrorBodyWith200(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"message":"You exceeded your current quota"}}`,
+		"event: error\ndata: {\"message\":\"You exceeded your current quota\"}\n\n",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, body)
+		}))
+		_, err := (&OpenAI{BaseURL: srv.URL}).Stream(context.Background(), Request{Model: "m"}, nil)
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), "exceeded your current quota") || Retryable(err) {
+			t.Fatalf("%q: %v (retryable %v)", body, err, Retryable(err))
+		}
+	}
+}

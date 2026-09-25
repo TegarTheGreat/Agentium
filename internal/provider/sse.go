@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -172,11 +174,14 @@ func readSSE(r io.Reader, fn func(event, data string) bool) error {
 	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	var event string
 	var data strings.Builder
+	var stray strings.Builder // lines that are not SSE: an error body sent with 200
+	events := 0
 	flush := func() bool {
 		if data.Len() == 0 {
 			event = ""
 			return true
 		}
+		events++
 		if ib != nil && event != "ping" && !strings.Contains(data.String(), `"type":"ping"`) {
 			ib.sawEvent()
 		}
@@ -200,11 +205,46 @@ func readSSE(r io.Reader, fn func(event, data string) bool) error {
 				data.WriteByte('\n')
 			}
 			data.WriteString(strings.TrimPrefix(line[5:], " "))
+		default:
+			if stray.Len() < 4096 {
+				stray.WriteString(line + "\n")
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("the provider sent a single event over 16 MB: %w", ErrIncomplete)
+		}
 		return err
 	}
 	flush()
+	if events == 0 && strings.TrimSpace(stray.String()) != "" {
+		return &HTTPError{Status: 200, Body: errorMessage(stray.String())}
+	}
 	return nil
+}
+
+// errorMessage pulls the message out of a JSON error body, or returns the
+// body as it is.
+func errorMessage(body string) string {
+	var e struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(body)), &e) == nil {
+		var inner struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(e.Error, &inner) == nil && inner.Message != "" {
+			return inner.Message
+		}
+		var s string
+		if json.Unmarshal(e.Error, &s) == nil && s != "" {
+			return s
+		}
+		if e.Message != "" {
+			return e.Message
+		}
+	}
+	return strings.TrimSpace(body)
 }

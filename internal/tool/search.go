@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tegarthegreat/agentium/internal/policy"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -91,44 +92,83 @@ func runRipgrep(ctx context.Context, rg, root, dir, pattern, glob string, icase 
 	if pattern != "" {
 		args = append(args, "-e", pattern)
 	}
-	args = append(args, dir)
+	args = append(args, "--max-count", "200", dir) // one huge file cannot fill the results
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, rg, args...)
 	cmd.Dir = root
-	out, err := cmd.Output()
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 1 {
-		return "(no matches)", nil
-	}
-	if err != nil && len(out) == 0 {
-		if ee != nil && len(ee.Stderr) > 0 {
-			return "", fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
-		}
+	var stderr lockedBuffer
+	cmd.Stderr = &stderr
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
 		return "", err
 	}
-	return capLines(relativize(dropDotEnv(string(out)), root), searchMaxLines), nil
-}
-
-// dropDotEnv removes results from .env files: their values are secrets,
-// and reading them needs approval.
-func dropDotEnv(out string) string {
-	lines := strings.Split(out, "\n")
-	kept := lines[:0]
-	for _, l := range lines {
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	// Read as it comes and stop early: a pattern that matches millions of
+	// lines must not be held in memory.
+	var kept []string
+	more, capped := 0, false
+	perFile := map[string]int{}
+	sc := bufio.NewScanner(pipe)
+	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	prefix := strings.TrimRight(root, string(filepath.Separator)) + string(filepath.Separator)
+	for sc.Scan() {
+		l := sc.Text()
 		path := l
 		if i := strings.IndexByte(l, ':'); i > 0 {
 			path = l[:i]
 		}
-		if !policy.DotEnv(path) {
-			kept = append(kept, l)
+		if policy.DotEnv(path) {
+			continue
+		}
+		perFile[path]++
+		if len(kept) < searchMaxLines {
+			kept = append(kept, strings.ReplaceAll(l, prefix, ""))
+			continue
+		}
+		if more++; more >= searchCountMax {
+			capped = true
+			cancel()
+			break
 		}
 	}
-	return strings.Join(kept, "\n")
+	_, _ = io.Copy(io.Discard, pipe)
+	err = cmd.Wait()
+	var ee *exec.ExitError
+	switch {
+	case capped:
+	case errors.As(err, &ee) && ee.ExitCode() == 1 && len(kept) == 0:
+		return "(no matches)", nil
+	case err != nil && len(kept) == 0:
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			return "", fmt.Errorf("%s", s)
+		}
+		return "", err
+	}
+	if len(kept) == 0 {
+		return "(no matches)", nil
+	}
+	out := strings.Join(kept, "\n")
+	for f, n := range perFile {
+		if n >= 200 && pattern != "" {
+			out += "\n[" + strings.ReplaceAll(f, prefix, "") + " has more than 200 matches; narrow the search or read it]"
+			break
+		}
+	}
+	switch {
+	case capped:
+		out += fmt.Sprintf("\n[... over %d more; narrow the search]", searchCountMax)
+	case more > 0:
+		out += fmt.Sprintf("\n[... %d more; narrow the search]", more)
+	}
+	return out, nil
 }
 
-func relativize(s, root string) string {
-	prefix := strings.TrimRight(root, string(filepath.Separator)) + string(filepath.Separator)
-	return strings.ReplaceAll(s, prefix, "")
-}
+// searchCountMax is how many results past the shown ones are counted
+// before the search stops.
+const searchCountMax = 20000
 
 func capLines(s string, n int) string {
 	s = strings.TrimRight(s, "\n")
