@@ -15,6 +15,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 Found by fault-injection tests (a scripted fake provider), a gap analysis and long real tasks:
 
+- Long runs no longer summarize on every step when the context window is small: the part kept after a summary was sized without the model's reasoning (so it came out twice its budget), old reasoning was never trimmed, and trimming waited for a new user message. A 60k-token run that compacted 40 times in 64 calls and never edited now trims instead (0 summaries in the same test), and a summary always leaves room for the next steps.
+- Summaries add at most 3 facts to long-term memory, never ones repeated this session or ones that restate the task (one run had written its own constraint to MEMORY.md six times).
 - Checkpoints skip files over 20 MB: a 1 GB dataset in the project made the first edit wait 33 s and was copied again on every change (now 2 s for a 30k-file project).
 - `@` file completion finds every file in large repositories (it stopped at 20,000), refreshes the list in the background instead of pausing typing, and ranks 200k files in about 25 ms per key (was 110 ms).
 - Claude prompt caching keeps working through rounds of many parallel tool calls: a second cache breakpoint sits where the previous request ended (a hit is only looked for 20 blocks back).

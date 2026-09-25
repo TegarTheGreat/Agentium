@@ -72,6 +72,7 @@ type Agent struct {
 	Spent   float64
 	// OnRemember receives durable facts surfaced during compaction.
 	OnRemember func(fact string)
+	remembered map[string]bool // facts already passed to OnRemember
 	Events     Events
 
 	Messages []provider.Message

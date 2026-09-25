@@ -42,16 +42,7 @@ func (a *Agent) budgets() (int, int) {
 func (a *Agent) size() int {
 	n := len(a.System)
 	for _, m := range a.Messages {
-		n += len(m.Text) + len(m.Images)*imageChars + len(m.Reasoning)
-		if len(m.Raw) > 0 {
-			// Replayed provider blocks (thinking, full tool inputs) are what
-			// is really sent; they overlap Text and ToolCalls.
-			n += len(m.Raw)
-			continue
-		}
-		for _, c := range m.ToolCalls {
-			n += len(c.Args) + len(c.Name)
-		}
+		n += msgSize(m)
 	}
 	for _, t := range a.Tools {
 		n += len(t.Def.Description) + len(t.Def.Schema)
@@ -59,14 +50,29 @@ func (a *Agent) size() int {
 	return n
 }
 
+// msgSize estimates what one message costs in the request, in characters.
+func msgSize(m provider.Message) int {
+	n := len(m.Text) + len(m.Images)*imageChars + len(m.Reasoning)
+	if len(m.Raw) > 0 {
+		// Replayed provider blocks (thinking, full tool inputs) are what
+		// is really sent; they overlap Text and ToolCalls.
+		return n + len(m.Raw)
+	}
+	for _, c := range m.ToolCalls {
+		n += len(c.Args) + len(c.Name)
+	}
+	return n
+}
+
 // manageContext keeps the conversation within the model's window:
-// first elide old tool output and old edit payloads (no LLM call, done
-// in one batch with headroom so it rarely re-runs and the cached prefix
-// stays stable), then, if still too big, summarize the older part.
-// Routine elision runs only at turn boundaries.
+// first elide old tool output, old edit payloads and old reasoning (no
+// LLM call, done in one batch with headroom so it rarely re-runs and the
+// cached prefix stays stable), then, if still too big, summarize the
+// older part. Routine elision runs at turn boundaries; inside one long
+// run it runs only when the window is nearly full, before summarizing.
 func (a *Agent) manageContext(ctx context.Context, boundary bool) {
 	elideAt, compactAt := a.budgets()
-	if boundary && elideAt > 0 && a.size() > elideAt {
+	if elideAt > 0 && a.size() > elideAt && (boundary || compactAt > 0 && a.size() > compactAt) {
 		a.elide(keepRecentTools)
 		if a.size() > elideAt*80/100 {
 			a.elide(2) // leave headroom so the next turns don't re-elide
@@ -75,6 +81,10 @@ func (a *Agent) manageContext(ctx context.Context, boundary bool) {
 	if compactAt > 0 && a.size() > compactAt {
 		if err := a.compact(ctx); err != nil {
 			a.notice("compaction failed (" + err.Error() + "); eliding harder")
+			a.elide(2)
+		} else if a.size() > compactAt*70/100 {
+			// The summary left too little room: without more cut, the
+			// next step would summarize again (and again).
 			a.elide(2)
 		}
 	}
@@ -114,6 +124,12 @@ func (a *Agent) elide(keep int) {
 		case provider.RoleAssistant:
 			if seen <= keep {
 				continue
+			}
+			// Old steps' reasoning is not needed again (providers accept
+			// history without it) and is often the largest part.
+			if m.Reasoning != "" {
+				m.Reasoning = ""
+				first = i
 			}
 			shortened := false
 			for j := range m.ToolCalls {
@@ -191,7 +207,63 @@ func elideArgs(raw json.RawMessage) json.RawMessage {
 const compactPrompt = `Summarize this coding-agent conversation so the work can continue without it.
 Include: the user's goals and constraints, decisions made and why, files created or changed, the current state (what works, what is failing), and the next steps.
 Be specific: exact paths, names, commands, error messages. No preamble.
-After the summary, list durable facts worth remembering beyond this session (project conventions, user preferences, lessons) as lines starting with "@remember ". Omit if none.`
+After the summary, list at most 3 durable facts worth remembering beyond this session (project conventions, user preferences, lessons learned the hard way) as lines starting with "@remember ". Not the task itself, its constraints or its progress: those belong to this conversation only. Omit if none.`
+
+// maxFactsPerCompaction bounds what one summary adds to long-term memory.
+const maxFactsPerCompaction = 3
+
+// rememberFacts passes on the durable facts a summary surfaced, minus
+// ones already passed this session and ones that only restate what the
+// user asked (a long run compacting often would otherwise fill memory
+// with copies of its own task).
+func (a *Agent) rememberFacts(facts []string) {
+	if a.OnRemember == nil {
+		return
+	}
+	var said strings.Builder
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleUser {
+			said.WriteString(strings.ToLower(m.Text) + " ")
+		}
+	}
+	saidWords := wordSet(said.String())
+	n := 0
+	for _, f := range facts {
+		key := strings.ToLower(f)
+		if n == maxFactsPerCompaction || a.remembered[key] {
+			continue
+		}
+		fw := wordSet(key)
+		common := 0
+		for w := range fw {
+			if saidWords[w] {
+				common++
+			}
+		}
+		if len(fw) > 0 && common*100/len(fw) >= 70 {
+			continue // mostly the user's own words: the task, not a lesson
+		}
+		if a.remembered == nil {
+			a.remembered = map[string]bool{}
+		}
+		a.remembered[key] = true
+		a.OnRemember(f)
+		n++
+	}
+}
+
+// wordSet is the set of words of 3+ letters or digits in s.
+func wordSet(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.FieldsFunc(s, func(r rune) bool {
+		return !(r == '_' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r > 127)
+	}) {
+		if len(w) >= 3 {
+			out[w] = true
+		}
+	}
+	return out
+}
 
 // compact replaces the older part of the conversation with a summary.
 func (a *Agent) compact(ctx context.Context) error {
@@ -205,10 +277,7 @@ func (a *Agent) compact(ctx context.Context) error {
 	split, kept := -1, 0
 	for i := len(a.Messages) - 1; i > 0; i-- {
 		m := a.Messages[i]
-		kept += len(m.Text)
-		for _, c := range m.ToolCalls {
-			kept += len(c.Args)
-		}
+		kept += msgSize(m) // with reasoning: sized like the budget is
 		if m.Role == provider.RoleUser || m.Role == provider.RoleAssistant {
 			if i == len(a.Messages)-1 {
 				continue // keep at least one full exchange in the tail
@@ -248,16 +317,17 @@ func (a *Agent) compact(ctx context.Context) error {
 	if summary == "" {
 		return fmt.Errorf("empty summary")
 	}
-	var kept2 []string
+	var kept2, facts []string
 	for _, line := range strings.Split(summary, "\n") {
 		if f, ok := strings.CutPrefix(strings.TrimSpace(line), "@remember "); ok {
-			if a.OnRemember != nil && strings.TrimSpace(f) != "" {
-				a.OnRemember(strings.TrimSpace(f))
+			if f = strings.TrimSpace(f); f != "" {
+				facts = append(facts, f)
 			}
 			continue
 		}
 		kept2 = append(kept2, line)
 	}
+	a.rememberFacts(facts)
 	summary = strings.TrimSpace(strings.Join(kept2, "\n"))
 	tail := append([]provider.Message(nil), a.Messages[split:]...)
 	text := "[Summary of the earlier conversation]\n" + summary
