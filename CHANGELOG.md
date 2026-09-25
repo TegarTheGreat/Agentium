@@ -13,9 +13,9 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Reliability
 
-- Checkpoints skip files over 20 MB: a 1 GB dataset in the project made the first edit wait 33 s and was copied again on every change (now 2 s for a 30k-file project).
 Found by fault-injection tests (a scripted fake provider), a gap analysis and long real tasks:
 
+- Checkpoints skip files over 20 MB: a 1 GB dataset in the project made the first edit wait 33 s and was copied again on every change (now 2 s for a 30k-file project).
 - A tool call with broken JSON arguments, a repeated id or no name no longer makes the conversation impossible to save. Save errors are shown.
 - The conversation is saved after every tool round, so a crash keeps the finished steps. Closing the terminal (SIGHUP/SIGTERM) stops the running command, saves, then exits. A history with unanswered calls is repaired on resume.
 - Two agentium processes can no longer overwrite the same conversation: the second continues in a copy. A damaged session file is reported instead of `-c` quietly continuing an older conversation.
