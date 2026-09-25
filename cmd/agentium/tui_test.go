@@ -590,3 +590,15 @@ func TestCommandModel(t *testing.T) {
 		t.Fatalf("no slash: %q", m)
 	}
 }
+
+func TestPlainKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"\x1b[27;5;99~": "\x03", "\x1b[99;5u": "\x03", "\x1b[27;2;13~": "\x1b[13;2u", "\x1b[27;5;13~": "\x1b[13;2u",
+		"\x1b[27;2;65~": "A", "\x1b[27;3;120~": "\x1bx", "\x1b[5~": "\x1b[5~", "\x1b[200~": "\x1b[200~", "\x1b[A": "\x1b[A",
+		"\x1b[13;2u": "\x1b[13;2u", "\x1b[57414u": "\x1b[57414u",
+	} {
+		if got := plainKey(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}

@@ -231,7 +231,43 @@ func (e *editor) key() (string, error) {
 			break
 		}
 	}
-	return string(seq), nil
+	return plainKey(string(seq)), nil
+}
+
+// plainKey turns a modified key reported the xterm way (modifyOtherKeys:
+// ESC [27;mod;code~, or ESC [code;modu) back into its usual form when it
+// has one, so Ctrl-C stays Ctrl-C in every terminal; Shift-Enter and
+// Ctrl-Enter keep theirs (a new line).
+func plainKey(k string) string {
+	var mod, code int
+	switch {
+	case strings.HasPrefix(k, "\x1b[27;") && strings.HasSuffix(k, "~"):
+		if _, err := fmt.Sscanf(k, "\x1b[27;%d;%d~", &mod, &code); err != nil {
+			return k
+		}
+	case strings.HasPrefix(k, "\x1b[") && strings.HasSuffix(k, "u"):
+		if _, err := fmt.Sscanf(k, "\x1b[%d;%du", &code, &mod); err != nil {
+			return k
+		}
+	default:
+		return k
+	}
+	if code == 13 && (mod == 2 || mod == 5) {
+		return "\x1b[13;2u" // a new line
+	}
+	switch {
+	case mod == 5 && code >= 'a' && code <= 'z': // Ctrl+letter
+		return string(rune(code - 'a' + 1))
+	case mod == 5 && code >= 'A' && code <= 'Z':
+		return string(rune(code - 'A' + 1))
+	case mod == 2 && code >= 0x20 && code < 0x7f: // Shift+character
+		return string(rune(code))
+	case mod == 1 && code >= 0x20 && code < 0x7f:
+		return string(rune(code))
+	case mod == 3 && code >= 0x20 && code < 0x7f: // Alt+character
+		return "\x1b" + string(rune(code))
+	}
+	return k
 }
 
 func (e *editor) render(width int) {

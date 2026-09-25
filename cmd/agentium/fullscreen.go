@@ -140,7 +140,7 @@ func enterFullscreen(mouse bool) (*fullscreen, error) {
 	f.mouse = mouse
 	// Bracketed paste stays on: the editor's own mode switches go into
 	// the pipe, which the vterm ignores.
-	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?2004h" + f.mouseOn() + "\x1b[H\x1b[2J")
+	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[>4;1m" + f.mouseOn() + "\x1b[H\x1b[2J")
 	os.Stdout, os.Stderr = pw, pw
 	fsMu.Lock()
 	fs = f
@@ -224,7 +224,7 @@ func (f *fullscreen) leave() {
 	if f.restore != nil {
 		f.restore()
 	}
-	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l")
+	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[>4;0m\x1b[0m\x1b[?25h\x1b[?1049l")
 	// The conversation, for the scrollback.
 	f.mu.Lock()
 	var sb strings.Builder
@@ -384,7 +384,7 @@ func padTo(s string, w int) string {
 func (f *fullscreen) suspend() {
 	f.mu.Lock()
 	f.suspended = true
-	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l")
+	f.tty.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[>4;0m\x1b[0m\x1b[?25h\x1b[?1049l")
 	f.mu.Unlock()
 }
 
@@ -394,7 +394,7 @@ func (f *fullscreen) resume() {
 	// stopped job).
 	f.rows, f.cols = termRows(f.tty), termWidth(f.tty)
 	f.vt.width = f.transcriptWidth()
-	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?2004h" + f.mouseOn() + "\x1b[H\x1b[2J")
+	f.tty.WriteString("\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[>4;1m" + f.mouseOn() + "\x1b[H\x1b[2J")
 	f.suspended, f.prev, f.dirty = false, nil, true
 	f.mu.Unlock()
 }
