@@ -120,6 +120,7 @@ var helpRows = [][2]string{
 	{"/update", "install the latest release"},
 	{"/doctor  /mcp  /tools", "health check · MCP servers · available tools"},
 	{"/permissions", "what runs without asking; revoke approvals"},
+	{"/add-dir <path>", "work in another directory too (also --add-dir, \"dirs\")"},
 	{"/exit", "quit (also ctrl+d)"},
 }
 

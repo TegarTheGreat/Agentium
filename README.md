@@ -140,6 +140,10 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 | **More commands** | `!command` runs a shell command yourself (the agent sees the output with your next message) · `/diff` shows what changed · `/context` shows what fills the context window · `/compact` summarizes older conversation · `/btw <question>` asks on the side without adding to the conversation · `/theme` switches the palette |
 | **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds file changes to an earlier turn · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
 
+**More folders.** `agentium --add-dir ../lib` (repeatable, or `"dirs"` in the config, or `/add-dir` in a session) lets the agent work in another directory as freely as in the current one.
+
+**Vim keys.** `/vim` (or `"vim": true`) gives the message box normal and insert modes.
+
 **Parallel sessions.** `agentium --worktree NAME` works in a separate git worktree on branch `agentium/NAME`, so two sessions never edit the same files. When you leave, the worktree is removed if nothing changed; otherwise Agentium prints how to merge or remove it.
 
 ### Subcommands

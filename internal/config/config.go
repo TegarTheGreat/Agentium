@@ -36,13 +36,15 @@ type Config struct {
 	// small extra call); default on for cheap models or with fast_model.
 	Suggest *bool `json:"suggest,omitempty"`
 	// Vim turns on vim keys in the message box (also /vim).
-	Vim       bool   `json:"vim,omitempty"`
-	Mode      string `json:"mode,omitempty"`  // ask | auto | yolo
-	UI        string `json:"ui,omitempty"`    // fullscreen (default) | classic
-	Theme     string `json:"theme,omitempty"` // auto (default) | dark | light
-	Mouse     *bool  `json:"mouse,omitempty"` // full screen: wheel scrolling (default); false keeps native selection
-	MaxTokens int    `json:"max_tokens,omitempty"`
-	MaxTurns  int    `json:"max_turns,omitempty"`
+	Vim bool `json:"vim,omitempty"`
+	// Dirs are more working directories (like --add-dir).
+	Dirs      []string `json:"dirs,omitempty"`
+	Mode      string   `json:"mode,omitempty"`  // ask | auto | yolo
+	UI        string   `json:"ui,omitempty"`    // fullscreen (default) | classic
+	Theme     string   `json:"theme,omitempty"` // auto (default) | dark | light
+	Mouse     *bool    `json:"mouse,omitempty"` // full screen: wheel scrolling (default); false keeps native selection
+	MaxTokens int      `json:"max_tokens,omitempty"`
+	MaxTurns  int      `json:"max_turns,omitempty"`
 	// FetchPrivate lets the fetch tool reach localhost/private networks.
 	FetchPrivate bool `json:"fetch_private,omitempty"`
 	// Checkpoints snapshot the workspace before each changing turn so it

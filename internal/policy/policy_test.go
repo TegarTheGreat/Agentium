@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -234,5 +235,20 @@ func TestDeclineReason(t *testing.T) {
 	g.Approve = nil // not interactive: the reason says why approval was needed
 	if ok, why := g.Bash("ls"); ok || why != "ask mode" {
 		t.Fatalf("no approver: %v %q", ok, why)
+	}
+}
+
+func TestAddedDirsAreWorkspace(t *testing.T) {
+	root, extra := t.TempDir(), t.TempDir()
+	g := &Gate{Mode: Auto, Root: root}
+	if ok, _ := g.Write(filepath.Join(extra, "a.go")); ok {
+		t.Fatal("outside the workspace needs approval")
+	}
+	g.AddDir(extra)
+	if ok, why := g.Write(filepath.Join(extra, "a.go")); !ok {
+		t.Fatalf("an added directory is workspace: %s", why)
+	}
+	if ok, _ := g.Write(filepath.Join(extra, ".git", "config")); ok {
+		t.Fatal("git internals still need approval")
 	}
 }

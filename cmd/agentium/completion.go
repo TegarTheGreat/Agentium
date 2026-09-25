@@ -52,6 +52,7 @@ var slashCommands = []slashCmd{
 	{"/mcp", "MCP servers: status, tools, logs", false},
 	{"/tools", "the tools I can use", false},
 	{"/permissions", "what runs without asking; revoke approvals", false},
+	{"/add-dir", "work in another directory too", true},
 	{"/init", "study the repo and write AGENTS.md", false},
 	{"/review", "review the current changes for bugs", false},
 	{"/commit", "commit the changes with a message in the repo's style", false},

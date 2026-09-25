@@ -304,8 +304,33 @@ type Gate struct {
 	// core.hooksPath such as .husky, included config files); writing them
 	// needs approval like .git itself.
 	Protected []string
+	// Extra are more directories the user added as workspaces
+	// (--add-dir): writing inside them is like writing inside Root.
+	Extra []string
 
 	mu sync.RWMutex
+}
+
+// AddDir adds a workspace directory.
+func (g *Gate) AddDir(dir string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Extra = append(g.Extra, dir)
+}
+
+// outside reports whether path is outside Root and every added directory.
+func (g *Gate) outside(path string) bool {
+	if !Outside(g.Root, path) {
+		return false
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for _, d := range g.Extra {
+		if !Outside(d, path) {
+			return false
+		}
+	}
+	return true
 }
 
 // GetMode returns the current mode.
@@ -386,7 +411,7 @@ func (g *Gate) Write(path string) (bool, string) {
 		return false, planReason
 	}
 	reason := ""
-	if Outside(g.Root, path) {
+	if g.outside(path) {
 		reason = "outside workspace"
 	} else if inGitDir(path) || g.protected(path) {
 		// .git/config and hooks hold programs git runs later, outside the

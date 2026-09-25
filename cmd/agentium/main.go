@@ -71,6 +71,7 @@ Flags:
   -q                  quiet: no tool lines or stats
   --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
   --max-cost USD      stop once the session has cost this much (needs a known price)
+  --add-dir PATH      another working directory the agent may change (repeatable; config "dirs")
   --worktree NAME     work in a separate git worktree (branch agentium/NAME) so sessions don't collide
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model turns (default 100)
@@ -538,6 +539,8 @@ func run(args []string) error {
 	fast := fs.Bool("fast", false, "")
 	classic := fs.Bool("classic", false, "")
 	worktree := fs.String("worktree", "", "")
+	var addDirs dirList
+	fs.Var(&addDirs, "add-dir", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -667,6 +670,13 @@ func run(args []string) error {
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
+	extraDirs, err := resolveDirs(append(append([]string(nil), cfg.Dirs...), addDirs...), cwd)
+	if err != nil {
+		return err
+	}
+	for _, d := range extraDirs {
+		gate.AddDir(d)
+	}
 	gate.Protected = gitProtected(cwd)
 	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON, saved: loadApprovals(cwd)}
 	if ap.enable {
@@ -720,7 +730,7 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, u.dim("· "+sh))
 		}
 	}
-	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + selfPrompt(cwd) + skill.Prompt(skills)
+	system := agent.SystemPrompt(cwd, mem != nil, snapshot) + selfPrompt(cwd) + skill.Prompt(skills) + dirsPrompt(extraDirs)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
 		Reasoning: res.Reasoning(firstNonEmpty(*effort, cfg.Effort)), FastMode: *fast || cfg.Fast,
@@ -776,6 +786,9 @@ func run(args []string) error {
 		}
 	}
 	boxStatus := setupSandbox(a.Env, cfg, cwd, *noSandbox)
+	if a.Env.Sandbox != nil {
+		a.Env.Sandbox.Write = append(a.Env.Sandbox.Write, extraDirs...)
+	}
 	if !*quiet && !*noSandbox && sandboxWanted(cfg) && (!boxStatus.Available || !boxStatus.Network) {
 		// Say plainly what is not enforced (e.g. network on kernels < 6.7).
 		fmt.Fprintln(os.Stderr, u.dim("· "+boxStatus.Detail))
@@ -1665,6 +1678,23 @@ func slash(line string, e *slashEnv) (exit bool) {
 		_ = sess.Save()
 	case "/permissions", "/allowed":
 		showPermissions(u, e.ap)
+	case "/add-dir":
+		arg := strings.TrimSpace(strings.TrimPrefix(line, "/add-dir"))
+		if arg == "" {
+			u.note("usage: /add-dir <path> · workspaces: " + strings.Join(append([]string{gate.Root}, gate.Extra...), ", "))
+			return false
+		}
+		dirs, err := resolveDirs([]string{arg}, gate.Root)
+		if err != nil {
+			u.failure(err.Error())
+			return false
+		}
+		gate.AddDir(dirs[0])
+		if a.Env.Sandbox != nil {
+			a.Env.Sandbox.Write = append(a.Env.Sandbox.Write, dirs[0])
+		}
+		a.Note = strings.TrimSpace(a.Note + "\n" + "[agentium] The user added " + dirs[0] + " as a working directory: you may read and change files there too.")
+		u.success("Added " + dirs[0] + u.paint(cDim, " · this session; --add-dir or \"dirs\" in the config for every time"))
 	case "/mcp":
 		showMCP(u, cfg, e.mcp)
 	case "/tools":
