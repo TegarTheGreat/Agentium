@@ -27,6 +27,7 @@ func TestMarkdownStream(t *testing.T) {
 		{[]string{"> note\n---\n"}, "</><d>│ note</>\n<d>" + strings.Repeat("─", 40) + "</>\n"},
 		{[]string{"a * b and snake_case_name"}, "a * b and snake_case_name\n"},
 		{[]string{"-", "-", "flag is fine"}, "--flag is fine\n"},
+		{[]string{"_ ", "_ ", "_\n", "_x_ y\n"}, "<d>" + strings.Repeat("─", 40) + "</>\n_x_ y\n"},
 		{[]string{"* ", "* ", "*\n", "- a\n"}, "<d>" + strings.Repeat("─", 40) + "</>\n• a\n"},
 		{[]string{"- [", "x] done\n", "- [ ] todo\n", "- [link](x)\n", "- [", "\n"}, "\033[32m☑\033[39m done\n☐ todo\n• [link](x)\n• [\n"},
 		{[]string{"**unclosed bold\nnext"}, "</><b>unclosed bold</>\nnext\n"},

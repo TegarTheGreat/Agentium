@@ -2,6 +2,12 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A rule written as `_ _ _` is drawn as a rule while a reply streams.
+
 ## [0.23.0] - 2026-09-25
 
 ### Added

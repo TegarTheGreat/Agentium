@@ -129,6 +129,9 @@ func (m *mdStream) decidable() bool {
 			return false
 		}
 	}
+	if t[0] == '_' && !strings.HasSuffix(t, "\n") && strings.Trim(t, "_ \t") == "" {
+		return false // maybe a rule ("_ _ _"): wait for the line to end
+	}
 	return strings.ContainsAny(t, " \t") || utf8.RuneCountInString(t) >= 8
 }
 
