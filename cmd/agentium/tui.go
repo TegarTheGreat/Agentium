@@ -274,6 +274,7 @@ func truncate(s string, w int) string {
 func (u *ui) permanent(s string) {
 	if u.paused {
 		u.held = append(u.held, s)
+		u.lastPerm = ""
 		return
 	}
 	u.clearLive()
@@ -338,7 +339,8 @@ func (u *ui) subAgentTool(task string, c provider.ToolCall) {
 	u.lastKey = ""
 	label := u.kindColor(c.Name, styleFor(c.Name).label)
 	line := "    " + mark + who + label + " " + u.paint(cDim, truncate(u.detail(c), termWidth(os.Stderr)-30))
-	if line == u.lastPerm && !u.paused && c.Name != "bash" {
+	// Only a one-row line can be rewritten in place.
+	if line == u.lastPerm && !u.paused && c.Name != "bash" && strWidth(line)+6 < termWidth(os.Stderr) {
 		// The same step again (a staff member reading one file in parts):
 		// counted on its line.
 		n := u.subCount + 1

@@ -152,10 +152,17 @@ func (u *ui) help() {
 			keyW = max(keyW, strWidth(r[0])+2)
 		}
 	}
-	keyW = min(keyW, max(width/3, 16))
+	narrow := keyW > width/3 // then each description goes under its key
 	row := func(k, v string) {
 		if v == "" { // a group
 			sb.WriteString("\n  " + u.paint(cBold, k) + "\n")
+			return
+		}
+		if narrow {
+			sb.WriteString("    " + u.paint(cAccent, k) + "\n")
+			for _, l := range wordWrap(v, max(width-8, 20)) {
+				sb.WriteString("      " + u.paint(cDim, l) + "\n")
+			}
 			return
 		}
 		lines := wordWrap(v, max(width-keyW-4, 20))
@@ -607,21 +614,21 @@ func (u *ui) showConfig(model, mode, effort, box string) {
 
 // approvalTitle turns a gate action ("bash: cmd") into a question.
 // readReply reads one line typed after an approval prompt (Enter ends
-// it, Esc gives up).
-func (u *ui) readReply() string {
+// it; Esc gives up, reported as not ok).
+func (u *ui) readReply() (string, bool) {
 	var r []rune
 	for {
 		k, err := u.nextKey()
 		if err != nil {
-			return string(r)
+			return string(r), false
 		}
 		switch {
 		case k == "\r" || k == "\n":
 			fmt.Fprintln(os.Stderr)
-			return string(r)
+			return string(r), true
 		case k == "\x1b" || k == "\x03":
 			fmt.Fprintln(os.Stderr)
-			return ""
+			return "", false
 		case k == "\x7f" || k == "\x08":
 			if len(r) > 0 {
 				r = r[:len(r)-1]
@@ -667,6 +674,7 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 	what = u.relative(what)
 	u.mu.Lock()
 	u.paused = true
+	u.lastPerm = "" // the prompt and answer come between: no rewriting above them
 	u.clearLive()
 	u.endLine()
 	u.afterTool = false
@@ -774,10 +782,16 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 					return "p", nil
 				case "t":
 					fmt.Fprint(os.Stderr, u.paint(cRed, "no")+"\n  "+u.paint(cInk, "tell Agentium:")+" ")
-					return "t:" + u.readReply(), nil
+					reply, _ := u.readReply()
+					return "t:" + reply, nil
 				case "c":
 					fmt.Fprint(os.Stderr, u.paint(cGreen, "yes")+"\n  "+u.paint(cInk, "and tell Agentium:")+" ")
-					return "c:" + u.readReply(), nil
+					reply, ok := u.readReply()
+					if !ok { // Esc or Ctrl-C: no after all
+						fmt.Fprintln(os.Stderr, u.paint(cRed, "  cancelled: no"))
+						return "n", nil
+					}
+					return "c:" + reply, nil
 				default:
 					fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
 					return "n", nil

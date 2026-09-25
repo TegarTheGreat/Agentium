@@ -85,6 +85,10 @@ type Agent struct {
 	// PreTool, if set, runs before each tool call (config hooks.pre_tool);
 	// an error blocks the call and is what the model is told.
 	PreTool func(ctx context.Context, c provider.ToolCall) error
+	// Notes, if set, returns what the user said when approving a step
+	// ("yes, and …"); whichever agent (lead or sub-agent) runs its next
+	// step gets it, since that is the one that asked.
+	Notes func() []string
 	// Steer, if set, returns messages the user sent while the agent was
 	// working; they are given to the model after the current step.
 	Steer func() []string
@@ -274,6 +278,13 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 			if stuck {
 				a.notice("stopped: repeating the same action")
 				return done(ErrStuck)
+			}
+			if a.Notes != nil {
+				// Said while approving one of this agent's steps.
+				if notes := a.Notes(); len(notes) > 0 {
+					a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser,
+						Text: "[The user approved your last action and added:]\n" + strings.Join(notes, "\n\n")})
+				}
 			}
 			if a.Steer != nil && a.depth == 0 {
 				if msgs := a.Steer(); len(msgs) > 0 {

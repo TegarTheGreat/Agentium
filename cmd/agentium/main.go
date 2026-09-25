@@ -381,8 +381,18 @@ type approver struct {
 	enable bool
 	always map[string]bool // scopes approved with "always"
 	saved  map[string]bool // scopes approved for this project, kept on disk
+	notes  []string        // said while approving ("c"), for the next step
 	// feedback is what the user said when declining, by action.
 	feedback map[string]string
+}
+
+// takeNotes returns what was said while approving, once.
+func (a *approver) takeNotes() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := a.notes
+	a.notes = nil
+	return n
 }
 
 // takeFeedback returns the user's reason for refusing action, once.
@@ -429,12 +439,10 @@ func (a *approver) ask(action, reason string) bool {
 				keep()
 			}
 			if note, ok := strings.CutPrefix(k, "c:"); ok {
-				// Approved with a note: it reaches the model at its next
-				// step, like a message sent mid-turn.
+				// Approved with a note: it reaches the agent that asked,
+				// at its next step.
 				if note = strings.TrimSpace(note); note != "" {
-					a.ui.mu.Lock()
-					a.ui.steer = append(a.ui.steer, note)
-					a.ui.mu.Unlock()
+					a.notes = append(a.notes, note)
 				}
 				return true
 			}
@@ -768,6 +776,7 @@ func run(args []string) error {
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
 	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
+	a.Notes = ap.takeNotes
 	defer a.Env.KillJobs() // background servers do not outlive the session
 	if cfg.LSP == nil || *cfg.LSP {
 		a.Env.LSP = lsp.NewManager(cwd, policy.ScrubEnv(os.Environ(), nil))
@@ -995,7 +1004,14 @@ func run(args []string) error {
 				u.line(fmt.Sprintf("· recalled %d item%s from memory", n, plural(n)))
 			}
 		}
-		if block, names := mentionedFiles(input, cwd, func(p string) bool { ok, _ := gate.Read(p); return ok }); block != "" {
+		if strings.HasPrefix(input, "[/watch]") {
+			// Comments from files: their @words are not the user's mentions.
+		} else if block, names := mentionedFiles(input, cwd, func(p string) bool {
+			// Workspace files only (a pasted "@~/.bash_history" is not
+			// sent), and credential files still ask.
+			ok, _ := gate.Read(p)
+			return ok && gate.Inside(p)
+		}); block != "" {
 			send = block + "\n" + send
 			u.line("· included " + strings.Join(names, ", "))
 		}

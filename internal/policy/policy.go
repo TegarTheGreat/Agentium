@@ -325,6 +325,9 @@ func (g *Gate) Dirs() []string {
 	return append([]string(nil), g.Extra...)
 }
 
+// Inside reports whether path is in the workspace or an added directory.
+func (g *Gate) Inside(path string) bool { return !g.outside(path) }
+
 // outside reports whether path is outside Root and every added directory.
 func (g *Gate) outside(path string) bool {
 	if !Outside(g.Root, path) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -83,6 +84,9 @@ func mentionedFiles(input, cwd string, allow func(string) bool) (block string, n
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(cwd, p)
 		}
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r // the gate judges the file that is really read
+		}
 		st, err := os.Stat(p)
 		if err != nil || (allow != nil && !allow(p)) {
 			continue
@@ -104,16 +108,16 @@ func mentionedFiles(input, cwd string, allow func(string) bool) (block string, n
 				}
 				list = append(list, n)
 			}
-			fmt.Fprintf(&sb, "<mentioned-dir path=%q>\n%s\n</mentioned-dir>\n", rel, strings.Join(list, "\n"))
+			fmt.Fprintf(&sb, "<mentioned-dir path=%q>\n%s\n</mentioned-dir>\n", rel, strings.ReplaceAll(strings.Join(list, "\n"), "</mentioned-", "<\\/mentioned-"))
 			names = append(names, rel)
 			continue
 		}
 		if !st.Mode().IsRegular() || st.Size() > mentionMaxBytes || sb.Len()+int(st.Size()) > mentionMaxTotal {
 			continue
 		}
-		b, err := os.ReadFile(p)
+		b, err := readCapped(p, mentionMaxBytes)
 		if err != nil || strings.ContainsRune(string(b[:min(len(b), 8000)]), 0) {
-			continue // binary
+			continue // binary, or not a plain file any more
 		}
 		lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 		from, to := 1, len(lines)
@@ -132,7 +136,10 @@ func mentionedFiles(input, cwd string, allow func(string) bool) (block string, n
 		for i := from; i <= to; i++ {
 			fmt.Fprintf(&body, "%d\t%s\n", i, lines[i-1])
 		}
-		fmt.Fprintf(&sb, "<mentioned-file path=%q lines=\"%d-%d\">\n%s</mentioned-file>\n", rel, from, to, body.String())
+		// The file's text cannot close the block early (and pass as the
+		// user's own words).
+		text := strings.ReplaceAll(body.String(), "</mentioned-", "<\\/mentioned-")
+		fmt.Fprintf(&sb, "<mentioned-file path=%q lines=\"%d-%d\">\n%s</mentioned-file>\n", rel, from, to, text)
 		label := rel
 		if m[2] != "" {
 			label += fmt.Sprintf(":%d-%d", from, to)
@@ -148,4 +155,18 @@ func imageExt(p string) bool {
 		return true
 	}
 	return false
+}
+
+// readCapped reads at most n bytes of a regular file, without blocking
+// on a FIFO or device swapped in after the check.
+func readCapped(p string, n int) ([]byte, error) {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscallNonblock, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file")
+	}
+	return io.ReadAll(io.LimitReader(f, int64(n)))
 }
