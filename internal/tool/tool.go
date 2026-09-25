@@ -51,10 +51,11 @@ type Env struct {
 	locks    map[string]*sync.Mutex
 	mutOnce  *sync.Once
 	seen     map[string]stamp
-	shown    map[string]stamp       // read results still in the conversation
-	gitg     *gitGuard              // git config snapshot after the last command
-	jobs     *jobTable              // background jobs
-	detachCh map[chan struct{}]bool // set while a foreground command can be sent to the background
+	shown    map[string]stamp // read results still in the conversation
+	gitg     *gitGuard        // git config snapshot after the last command
+	jobs     *jobTable        // background jobs
+	detachCh map[chan struct{}]bool
+	parent   *Env // a sub-agent's: Ctrl-B reaches its commands through the root // set while a foreground command can be sent to the background
 	cix      *codemap.Index
 	cixMu    sync.Mutex // serializes index updates
 }
@@ -123,7 +124,7 @@ func (e *Env) roots() []string {
 func (e *Env) Child(gate *policy.Gate) *Env {
 	return &Env{Root: e.Root, Gate: gate, Vision: e.Vision, AllowPrivateNet: e.AllowPrivateNet, Sandbox: e.Sandbox,
 		Net: e.Net, PassEnv: e.PassEnv, PostEdit: e.PostEdit, CodeCache: e.CodeCache, Recall: e.Recall, LSP: e.LSP,
-		BeforeMutate: e.mutate}
+		BeforeMutate: e.mutate, parent: e}
 }
 
 // ForgetReads tells the tools that earlier read results are no longer

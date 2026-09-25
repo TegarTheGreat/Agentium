@@ -55,20 +55,30 @@ func detachFrom(ctx context.Context) *detacher {
 // Tool calls may run side by side: each running command has its own
 // channel, and Ctrl-B sends all of them to the background.
 func (d *detacher) arm() <-chan struct{} {
-	d.env.mu.Lock()
-	defer d.env.mu.Unlock()
-	if d.env.detachCh == nil {
-		d.env.detachCh = map[chan struct{}]bool{}
+	r := d.env.root()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.detachCh == nil {
+		r.detachCh = map[chan struct{}]bool{}
 	}
 	d.ch = make(chan struct{}, 1)
-	d.env.detachCh[d.ch] = true
+	r.detachCh[d.ch] = true
 	return d.ch
 }
 
 func (d *detacher) disarm() {
-	d.env.mu.Lock()
-	delete(d.env.detachCh, d.ch)
-	d.env.mu.Unlock()
+	r := d.env.root()
+	r.mu.Lock()
+	delete(r.detachCh, d.ch)
+	r.mu.Unlock()
+}
+
+// root is the session's Env (a sub-agent's has a parent).
+func (e *Env) root() *Env {
+	for e.parent != nil {
+		e = e.parent
+	}
+	return e
 }
 
 // DetachForeground sends the running foreground command to the
@@ -108,7 +118,11 @@ func (d *detacher) adopt(cmd *exec.Cmd, sw *switchWriter, out *lockedBuffer, don
 	if closed {
 		j.kill()
 	}
-	return fmt.Sprintf("%s\n[the user moved this command to the background: it is job %d and keeps running. "+
+	until := "keeps running"
+	if d.env.parent != nil {
+		until = "runs until this sub-task ends"
+	}
+	return fmt.Sprintf("%s\n[the user moved this command to the background: it is job %d and %s. "+
 		"Read new output with {job:%d} and stop it with {job:%d, kill:true}; do not start it again.]",
-		clipOrSpill(sofar), id, id, id)
+		clipOrSpill(sofar), id, until, id, id)
 }

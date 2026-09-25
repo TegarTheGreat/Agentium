@@ -50,3 +50,20 @@ func TestDetachLeftoverChild(t *testing.T) {
 		t.Fatalf("a shell that left a child behind is not an error: %q", got)
 	}
 }
+
+func TestDetachSubAgent(t *testing.T) {
+	root := &Env{Root: t.TempDir()}
+	child := root.Child(nil)
+	defer child.KillJobs()
+	go func() {
+		for i := 0; i < 50 && !root.DetachForeground(); i++ {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	args, _ := json.Marshal(map[string]any{"cmd": "sleep 3"})
+	start := time.Now()
+	out, err := bashTool.Run(context.Background(), child, args)
+	if err != nil || time.Since(start) > 2*time.Second || !strings.Contains(out, "until this sub-task ends") {
+		t.Fatalf("%v %q", err, out)
+	}
+}
