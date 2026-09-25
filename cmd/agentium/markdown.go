@@ -119,6 +119,12 @@ func (m *mdStream) decidable() bool {
 	if !strings.ContainsRune("#-*+>_", rune(t[0])) {
 		return true
 	}
+	if len(t) >= 2 && strings.ContainsRune("-*+", rune(t[0])) && t[1] == ' ' && !strings.HasSuffix(t, "\n") {
+		// Maybe a task: wait to see "[ ] " or "[x] " after the marker.
+		if rest := t[2:]; len(rest) < 4 && (strings.HasPrefix("[ ] ", rest) || strings.HasPrefix("[x] ", strings.ToLower(rest))) {
+			return false
+		}
+	}
 	return strings.ContainsAny(t, " \t") || utf8.RuneCountInString(t) >= 8
 }
 
@@ -166,8 +172,17 @@ func (m *mdStream) block(out *strings.Builder) {
 		out.WriteString(indent)
 		m.style(out)
 	case strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "+ "):
-		out.WriteString(indent + "• ")
 		rest = t[2:]
+		switch {
+		case strings.HasPrefix(rest, "[ ] "):
+			out.WriteString(indent + "☐ ")
+			rest = rest[4:]
+		case strings.HasPrefix(rest, "[x] ") || strings.HasPrefix(rest, "[X] "):
+			out.WriteString(indent + "\033[32m☑\033[39m ")
+			rest = rest[4:]
+		default:
+			out.WriteString(indent + "• ")
+		}
 	case strings.HasPrefix(t, "> ") || t == ">\n":
 		m.quote = true
 		rest = strings.TrimPrefix(strings.TrimPrefix(t, ">"), " ")

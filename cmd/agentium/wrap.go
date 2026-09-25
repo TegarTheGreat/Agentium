@@ -112,7 +112,7 @@ func (ww *wrapWriter) flushWord(out []byte) []byte {
 	if !ww.started {
 		// A bullet, quote bar or list number: wrapped lines align after it.
 		plain := ansiRE.ReplaceAllString(string(ww.word), "")
-		if plain == "•" || plain == "│" || isListNumber(plain) {
+		if plain == "•" || plain == "☐" || plain == "☑" || plain == "│" || isListNumber(plain) {
 			ww.hang = ww.col + 1
 		}
 		ww.started = true

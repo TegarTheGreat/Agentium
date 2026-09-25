@@ -15,6 +15,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 - `/review` and `/security-review` look at the branch's commits when nothing is uncommitted.
 
+- Task lists in replies show as checkboxes: `- [ ]` as ☐ and `- [x]` as a green ☑. Exported pages show them the same way.
+
 ### Fixed
 
 - Typing a whole command name and pressing Enter runs that command. Before, Enter on `/st` could run `/style` when both were listed.

@@ -143,7 +143,13 @@ func mdHTML(md string) string {
 		case strings.HasPrefix(t, "#"):
 			b.WriteString("<b>" + inline(strings.TrimLeft(t, "# ")) + "</b>\n")
 		case strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* "):
-			b.WriteString("• " + inline(t[2:]) + "\n")
+			item, mark := t[2:], "• "
+			if r, ok := strings.CutPrefix(item, "[ ] "); ok {
+				item, mark = r, "☐ "
+			} else if len(item) >= 4 && strings.EqualFold(item[:4], "[x] ") {
+				item, mark = item[4:], "☑ "
+			}
+			b.WriteString(mark + inline(item) + "\n")
 		default:
 			b.WriteString(inline(l) + "\n")
 		}
