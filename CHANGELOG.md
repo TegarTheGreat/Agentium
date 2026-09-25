@@ -25,6 +25,7 @@ Found by fault-injection tests (a scripted fake provider), a gap analysis and lo
 - A fuzzy edit changes only the matched lines: files mixing LF and CRLF keep their endings, and a byte-order mark is kept.
 - Editing a symlink whose target is missing no longer replaces the link. Config and auth errors name the file, line and column. A 1-column terminal no longer panics. When undo cannot work (read-only or full disk), a line says so.
 - `bash` accepts `command` as well as `cmd`.
+- After falling back to a backup model, agentium tries the first model again after 5 minutes instead of staying on the backup for the rest of the session.
 
 ### Security
 

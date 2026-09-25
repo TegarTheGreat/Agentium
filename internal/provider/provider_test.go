@@ -502,6 +502,13 @@ func TestFallback(t *testing.T) {
 	if a.calls != 1 || b.calls != 2 {
 		t.Fatalf("calls a=%d b=%d", a.calls, b.calls)
 	}
+	// After the recovery time the first model gets another chance.
+	f.Recover = time.Nanosecond
+	a.err = nil
+	time.Sleep(time.Millisecond)
+	if resp, _ := f.Stream(context.Background(), Request{}, nil); resp.Text != "from main" || f.Active().Model != "main" {
+		t.Fatalf("did not return to the first model: %+v", resp)
+	}
 	// Non-retryable errors are returned without trying others.
 	c := &stub{err: &HTTPError{Status: 400}}
 	d := &stub{}
