@@ -1139,3 +1139,14 @@ func TestEditKeepsFileEncoding(t *testing.T) {
 		t.Fatalf("unrepresentable character: %v", err)
 	}
 }
+
+func TestShellOutputDropsProgressBars(t *testing.T) {
+	e := env(t)
+	out, err := call(t, bashTool, e, `{"cmd":"for i in $(seq 200); do printf '\\r\\033[32m[###] %d%%\\033[0m' $i; done; echo; echo END"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "\x1b") || strings.Count(out, "%") > 1 || !strings.Contains(out, "[###] 200%") || !strings.Contains(out, "END") {
+		t.Fatalf("got %d chars: %q", len(out), out[:min(len(out), 300)])
+	}
+}

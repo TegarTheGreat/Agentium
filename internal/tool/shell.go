@@ -193,9 +193,12 @@ var quietEnv = []string{"PAGER=cat", "GIT_PAGER=cat", "GIT_EDITOR=true", "GIT_TE
 
 var spillSweep sync.Once
 
-// clipOrSpill clips long output to its head and tail, and keeps the whole
+// clipOrSpill cleans terminal escapes, clips long output to its head and tail, and keeps the whole
 // output in a file the model can grep instead of running the command again.
 func clipOrSpill(out string) string {
+	// Colors and progress bars redrawn with \r are noise to the model
+	// (one bar can be thousands of characters): keep the final text.
+	out = cleanTTY(out)
 	if len(out) <= bashMaxOutput {
 		return out
 	}

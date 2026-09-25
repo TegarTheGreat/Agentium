@@ -64,10 +64,7 @@ func (j *job) unread() string {
 	}
 	s := string(j.buf[j.readPos-start:])
 	j.readPos = j.total
-	if j.tty {
-		s = cleanTTY(s)
-	}
-	return note + s
+	return note + cleanTTY(s)
 }
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>78NOM]`)
