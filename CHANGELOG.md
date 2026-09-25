@@ -8,6 +8,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 - `/bug` opens a GitHub issue form already filled in with the version, system, terminal and model. Nothing is sent until you submit it.
 - `/security-review` looks for vulnerabilities an attacker could exploit in the current changes: injection, path traversal, broken access checks, secrets, SSRF, XSS and unsafe deserialization. Each finding has a severity, the place, how it would be exploited and a fix.
+- A custom command's `argument-hint` (front matter, as in Claude Code) shows beside its name in the `/` menu.
 - Custom commands take `$1` … `$9` for single arguments, as in Claude Code. `"quoted words"` count as one.
 - Custom commands can pull in live context: `` !`git diff --stat` `` in the file is replaced by the command's output. Commands in your home folder run theirs. A repository's commands show what they would run and ask first.
 

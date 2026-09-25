@@ -106,7 +106,11 @@ func (c *completer) commands(prefix string) []suggestion {
 	for _, uc := range c.cmds {
 		name := "/" + uc.name
 		if strings.HasPrefix(name, prefix) {
-			out = append(out, suggestion{insert: name + " ", label: name, hint: "command · " + firstLine(uc.desc)})
+			label := name
+			if uc.hint != "" {
+				label += " " + uc.hint
+			}
+			out = append(out, suggestion{insert: name + " ", label: label, hint: "command · " + firstLine(uc.desc)})
 		}
 	}
 	for _, sk := range c.skills {
@@ -117,7 +121,7 @@ func (c *completer) commands(prefix string) []suggestion {
 	}
 	// What is typed in full comes first: Enter on /st runs /st, not /style.
 	for i, sg := range out {
-		if sg.label == prefix && i > 0 {
+		if strings.TrimSpace(sg.insert) == prefix && i > 0 {
 			copy(out[1:i+1], out[:i])
 			out[0] = sg
 			break

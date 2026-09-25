@@ -176,11 +176,11 @@ func TestCustomCommands(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	os.MkdirAll(filepath.Join(cwd, ".claude", "commands"), 0o755)
 	os.WriteFile(filepath.Join(cwd, ".claude", "commands", "fix-issue.md"),
-		[]byte("---\ndescription: fix a GitHub issue\n---\nFix issue #$ARGUMENTS and add a test.\n"), 0o644)
+		[]byte("---\ndescription: fix a GitHub issue\nargument-hint: <number>\n---\nFix issue #$ARGUMENTS and add a test.\n"), 0o644)
 	os.MkdirAll(filepath.Join(home, "commands"), 0o755)
 	os.WriteFile(filepath.Join(home, "commands", "standup.md"), []byte("Summarize yesterday's commits.\n"), 0o644)
 	cmds := userCommands(cwd)
-	if len(cmds) != 2 || cmds[0].name != "fix-issue" || cmds[0].desc != "fix a GitHub issue" {
+	if len(cmds) != 2 || cmds[0].name != "fix-issue" || cmds[0].desc != "fix a GitHub issue" || cmds[0].hint != "<number>" {
 		t.Fatalf("commands: %+v", cmds)
 	}
 	if msg, ok := expandCommand(cwd, "/fix-issue 42"); !ok || msg != "Fix issue #42 and add a test." {
@@ -518,9 +518,9 @@ func TestCommandShell(t *testing.T) {
 }
 
 func TestCommandsExactFirst(t *testing.T) {
-	c := &completer{cmds: []userCmd{{name: "st"}}}
+	c := &completer{cmds: []userCmd{{name: "st", hint: "[file]"}}}
 	got := c.commands("/st")
-	if len(got) < 2 || got[0].label != "/st" {
+	if len(got) < 2 || got[0].label != "/st [file]" || got[0].insert != "/st " {
 		t.Fatalf("got %+v", got)
 	}
 }
