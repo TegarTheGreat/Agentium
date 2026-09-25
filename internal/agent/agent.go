@@ -187,6 +187,9 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		input = "[" + a.Note + "]\n\n" + input
 		a.Note = ""
 	}
+	if a.Env != nil {
+		a.Ledger.root = a.Env.Root
+	}
 	a.Ledger.startTurn()
 	// Thinking harder is for the moments that need it; each user turn
 	// starts again at the configured level.

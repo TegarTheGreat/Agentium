@@ -1056,3 +1056,20 @@ func TestEditDanglingSymlink(t *testing.T) {
 		t.Fatal("the link was replaced")
 	}
 }
+
+func TestStripCdRoot(t *testing.T) {
+	for in, want := range map[string]string{
+		"cd /w && go test ./...":      "go test ./...",
+		"cd '/w' && pytest -q":        "pytest -q",
+		`cd "/w/"; make`:              "make",
+		"cd /w/sub && make":           "cd /w/sub && make",
+		"cd /work && make":            "cd /work && make",
+		"cd /w":                       "cd /w",
+		"cd /w && ":                   "cd /w && ",
+		"go test ./... && cd /w && x": "go test ./... && cd /w && x",
+	} {
+		if got := StripCdRoot(in, "/w"); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}

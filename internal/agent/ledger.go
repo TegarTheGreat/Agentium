@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/tegarthegreat/agentium/internal/tool"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 // reconstruct file lists or error text (Claude Code, Codex and OpenCode
 // all carry such state across compaction).
 type Ledger struct {
+	root      string // the workspace, for command display
 	mu        sync.Mutex
 	read      []string
 	edited    []string
@@ -98,7 +100,7 @@ func (l *Ledger) record(name string, args json.RawMessage, out string, err error
 			exit = -1
 		}
 		failed = exit != 0
-		cmd := oneLine(str("cmd"), 120)
+		cmd := oneLine(tool.StripCdRoot(str("cmd"), l.root), 120)
 		l.commands = append(l.commands, cmdRecord{cmd, exit})
 		if len(l.commands) > ledgerCommands {
 			l.commands = l.commands[len(l.commands)-ledgerCommands:]

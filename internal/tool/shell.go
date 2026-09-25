@@ -48,6 +48,7 @@ var bashTool = Tool{
 		if a.Cmd == "" {
 			a.Cmd = a.Command // not "(no background jobs)" for a misnamed key
 		}
+		a.Cmd = StripCdRoot(a.Cmd, env.Root)
 		// kill is a boolean; some models send the job id there instead.
 		kill := false
 		switch k := strings.TrimSpace(string(a.Kill)); {
@@ -314,4 +315,31 @@ func runShell(ctx context.Context, dir, cmdline string, timeout time.Duration, b
 		s = "(no output, exit 0)"
 	}
 	return s, nil
+}
+
+// StripCdRoot drops a leading "cd <workspace> &&" (or ";"): commands
+// already run there, and the prefix would hide the real command from
+// permission rules and the command history.
+func StripCdRoot(cmd, root string) string {
+	t := strings.TrimLeft(cmd, " \t")
+	rest, ok := strings.CutPrefix(t, "cd ")
+	if !ok || root == "" {
+		return cmd
+	}
+	rest = strings.TrimLeft(rest, " ")
+	for _, q := range []string{root, "'" + root + "'", `"` + root + `"`, root + "/", "'" + root + "/'", `"` + root + `/"`} {
+		after, ok := strings.CutPrefix(rest, q)
+		if !ok {
+			continue
+		}
+		after = strings.TrimLeft(after, " \t")
+		for _, sep := range []string{"&&", ";"} {
+			if r, ok := strings.CutPrefix(after, sep); ok {
+				if r = strings.TrimSpace(r); r != "" {
+					return r
+				}
+			}
+		}
+	}
+	return cmd
 }
