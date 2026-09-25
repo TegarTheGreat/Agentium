@@ -770,7 +770,10 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, u.dim("· "+sh))
 		}
 	}
-	baseSystem := agent.SystemPrompt(cwd, mem != nil, snapshot) + selfPrompt(cwd) + skill.Prompt(skills) + dirsPrompt(extraDirs)
+	var skillBox atomic.Value // for the composer, which may run during a turn
+	skillBox.Store(skills)
+	sysHead, sysTail := agent.SystemPrompt(cwd, mem != nil, snapshot)+selfPrompt(cwd), dirsPrompt(extraDirs)
+	baseSystem := sysHead + skill.Prompt(skills) + sysTail
 	system := baseSystem + stylePrompt(cfg.Style)
 	a := &agent.Agent{
 		Client: client, Model: res.Model, System: system,
@@ -1279,7 +1282,7 @@ func run(args []string) error {
 		for _, b := range badKeys {
 			fmt.Fprintln(os.Stderr, u.dim("· "+b))
 		}
-		ed.complete = (&completer{root: cwd, skills: skills, cmds: userCommands(cwd)}).complete
+		ed.complete = (&completer{root: cwd, skillList: func() []skill.Skill { return skillBox.Load().([]skill.Skill) }, cmds: userCommands(cwd), cmdsAt: time.Now()}).complete
 		var lastEsc time.Time
 		ed.hook = func(e *editor, k string) bool {
 			submit := func(cmd string) bool {
@@ -1447,6 +1450,20 @@ func run(args []string) error {
 			if extra != "" {
 				line += "\n\n" + extra
 			}
+		}
+		// Skills added, changed or removed since the last message count
+		// now, without a restart.
+		if fresh := skill.Discover(config.Home(), cwd); skill.Prompt(fresh) != skill.Prompt(skills) {
+			added, removed := skillDiff(skills, fresh)
+			skills = fresh
+			skillBox.Store(fresh)
+			baseSystem = sysHead + skill.Prompt(skills) + sysTail
+			a.System = baseSystem + stylePrompt(cfg.Style)
+			for i := range a.Messages {
+				a.Messages[i].Raw = nil // signed thinking belongs to the old system prompt
+			}
+			sess.SystemHash = hashString(a.System)
+			u.note(skillChangeNote(added, removed))
 		}
 		if skillCall(skills, line) {
 			// a skill: sent as it is, below

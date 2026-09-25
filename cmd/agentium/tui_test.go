@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/tegarthegreat/agentium/internal/provider"
 	"github.com/tegarthegreat/agentium/internal/session"
+	"github.com/tegarthegreat/agentium/internal/skill"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -563,5 +564,15 @@ func TestRecapLines(t *testing.T) {
 	got := recapLines("one\n\n```go\ntwo\nthree\nfour\x1b[31m", 3, 40)
 	if len(got) != 3 || got[0] != "one" || got[1] != "two" || got[2] != "three …" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestSkillDiff(t *testing.T) {
+	a, r := skillDiff([]skill.Skill{{Name: "a"}, {Name: "b"}}, []skill.Skill{{Name: "b"}, {Name: "c"}})
+	if len(a) != 1 || a[0] != "/c" || len(r) != 1 || r[0] != "/a" {
+		t.Fatalf("%v %v", a, r)
+	}
+	if n := skillChangeNote(a, r); n != "skills updated: new /c · gone /a" {
+		t.Fatalf("%q", n)
 	}
 }

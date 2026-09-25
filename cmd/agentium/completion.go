@@ -70,9 +70,11 @@ var slashCommands = []slashCmd{
 }
 
 type completer struct {
-	root   string
-	skills []skill.Skill
-	cmds   []userCmd
+	root      string
+	skills    []skill.Skill
+	skillList func() []skill.Skill // the current skills, when they can change
+	cmds      []userCmd
+	cmdsAt    time.Time // when cmds were read; zero: never re-read
 
 	mu     sync.Mutex
 	files  []string
@@ -104,6 +106,13 @@ func (c *completer) commands(prefix string) []suggestion {
 			out = append(out, suggestion{insert: insert, label: cmd.name, hint: cmd.hint, run: !cmd.args})
 		}
 	}
+	if !c.cmdsAt.IsZero() && time.Since(c.cmdsAt) > 2*time.Second {
+		c.cmds, c.cmdsAt = userCommands(c.root), time.Now() // a command file added or changed
+	}
+	skills := c.skills
+	if c.skillList != nil {
+		skills = c.skillList()
+	}
 	for _, uc := range c.cmds {
 		name := "/" + uc.name
 		if strings.HasPrefix(name, prefix) {
@@ -114,7 +123,7 @@ func (c *completer) commands(prefix string) []suggestion {
 			out = append(out, suggestion{insert: name + " ", label: label, hint: "command · " + firstLine(uc.desc)})
 		}
 	}
-	for _, sk := range c.skills {
+	for _, sk := range skills {
 		name := "/" + sk.Name
 		if strings.HasPrefix(name, prefix) {
 			out = append(out, suggestion{insert: name + " ", label: name, hint: "skill · " + firstLine(sk.Description)})

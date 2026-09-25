@@ -7,6 +7,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 ### Added
 
 - `/bug` opens a GitHub issue form already filled in with the version, system, terminal and model. Nothing is sent until you submit it.
+- Skills and custom commands you add or change while agentium runs work right away, with no restart. A note says which skills came or went.
 - A resumed conversation (`/resume`, `-c`) opens with a short recap: your last message and the start of the reply to it.
 - `Ctrl-Z` suspends agentium to the shell, like any terminal program, and `fg` brings it back with your draft intact. This works on macOS and Linux.
 - The first start after an update says which version you came from and points to `/release-notes`.
