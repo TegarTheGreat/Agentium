@@ -26,6 +26,8 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 - `@remember` and other memory lines are no longer shown inside the reply (agentium already reports what it remembered).
 - An unknown provider in `-m`/`/model` suggests the closest ones instead of printing every provider id. `/compact` on a short conversation says so plainly.
 - README status no longer names an old version.
+- `/undo` says when git still has staged changes to the files it restored (a turn that ran `git mv` or `git add`), since undo never touches `.git`.
+- The "verify your change" nudge is skipped when the request waives it ("no need to run the tests", "skip verification").
 - `edit` refuses read-only files (the atomic rename only needed the directory to be writable, so a `chmod 444` file was replaced).
 
 ## [0.24.0] - 2026-09-25

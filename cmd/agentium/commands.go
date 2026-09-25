@@ -322,6 +322,26 @@ func openCheckpoints(cfg config.Config, root string) *checkpoint.Store {
 	return s
 }
 
+// stagedAmong returns the paths among files that git's index has
+// changes to (nil outside a git repository).
+func stagedAmong(root string, files []string) []string {
+	out, err := exec.Command("git", "-C", root, "diff", "--cached", "--name-only", "-z", "--no-renames", "--relative").Output()
+	if err != nil {
+		return nil
+	}
+	staged := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		staged[p] = true
+	}
+	var hit []string
+	for _, f := range files {
+		if staged[filepath.ToSlash(f)] {
+			hit = append(hit, f)
+		}
+	}
+	return hit
+}
+
 // undoLast restores the newest checkpoint of sess and returns a note for
 // the model describing what was reverted.
 func undoLast(store *checkpoint.Store, sess *session.Session) (string, error) {
@@ -345,6 +365,11 @@ func undoLast(store *checkpoint.Store, sess *session.Session) (string, error) {
 		return "", nil
 	}
 	fmt.Fprintf(os.Stderr, "· reverted %d file(s) changed by %q: %s\n", len(files), firstLine(cp.Prompt), strings.Join(limitList(files, 8), ", "))
+	if staged := stagedAmong(store.Root, files); len(staged) > 0 {
+		// Undo restores files, never your .git: a turn's git add/mv/rm
+		// stays in the staging area.
+		fmt.Fprintf(os.Stderr, "· git still has staged changes to %s (the turn staged them; undo leaves .git alone): git restore --staged -- <path> unstages them\n", strings.Join(limitList(staged, 5), ", "))
+	}
 	return fmt.Sprintf("The user undid the file changes from the turn %q. Restored: %s. Re-read files before editing them.",
 		firstLine(cp.Prompt), strings.Join(limitList(files, 20), ", ")), nil
 }

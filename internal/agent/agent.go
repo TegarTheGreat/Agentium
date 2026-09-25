@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,6 +160,12 @@ const (
 )
 
 // runState is per-Run bookkeeping.
+// noChecksWanted matches a request that waives verification ("no need to
+// run the tests", "skip verification", "without testing"): the gate then
+// does not insist. Only filler words may sit in between, so "don't break
+// the tests" still gets checked.
+var noChecksWanted = regexp.MustCompile(`(?i)\b(?:no|don'?t|do not|without|skip)\s+(?:(?:need|needs|to|any|the|run|running|bother|bothering|with)\s+){0,4}(?:verif\w*|tests?|testing|checks?|checking)\b`)
+
 type runState struct {
 	editedCode  bool
 	checkFailed bool // the latest build/test/lint run failed
@@ -338,7 +345,7 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		if len(resp.ToolCalls) > 0 {
 			continue
 		}
-		if a.Verify && (rs.editedCode || rs.checkFailed) && rs.reminded < 2 {
+		if a.Verify && (rs.editedCode || rs.checkFailed) && rs.reminded < 2 && !noChecksWanted.MatchString(rs.task) {
 			// The verification gate: an unverified or failing change is not
 			// done. The task is quoted back, since it may be far above.
 			rs.reminded++

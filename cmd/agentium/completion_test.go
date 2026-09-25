@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,5 +30,26 @@ func TestFileSuggestionsLargeProject(t *testing.T) {
 		if a < b {
 			t.Fatalf("not ranked: %q before %q", got[i-1].insert, got[i].insert)
 		}
+	}
+}
+
+func TestStagedAmong(t *testing.T) {
+	repo := t.TempDir()
+	run := func(args ...string) {
+		c := exec.Command("git", append([]string{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Skip(string(out))
+		}
+	}
+	run("init", "-q")
+	os.MkdirAll(filepath.Join(repo, "sub"), 0o755)
+	os.WriteFile(filepath.Join(repo, "sub", "a.go"), []byte("a"), 0o644)
+	os.WriteFile(filepath.Join(repo, "sub", "b.go"), []byte("b"), 0o644)
+	run("add", ".")
+	run("commit", "-qm", "x")
+	run("mv", "sub/a.go", "sub/a2.go")
+	got := stagedAmong(filepath.Join(repo, "sub"), []string{"a.go", "a2.go", "b.go"})
+	if strings.Join(got, ",") != "a.go,a2.go" {
+		t.Fatalf("got %v", got)
 	}
 }

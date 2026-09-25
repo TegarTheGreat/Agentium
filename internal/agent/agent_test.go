@@ -974,3 +974,16 @@ func TestTurnEditedOnlySuccessful(t *testing.T) {
 		t.Fatal("not reset per turn")
 	}
 }
+
+func TestNoChecksWanted(t *testing.T) {
+	for _, s := range []string{"rename x to y, no need to run the tests", "Skip verification please", "add a helper without testing", "quick fix, no tests", "don't bother with checks"} {
+		if !noChecksWanted.MatchString(s) {
+			t.Errorf("missed: %q", s)
+		}
+	}
+	for _, s := range []string{"don't break the tests", "fix the failing test", "no regressions in the test suite", "add tests"} {
+		if noChecksWanted.MatchString(s) {
+			t.Errorf("matched: %q", s)
+		}
+	}
+}
