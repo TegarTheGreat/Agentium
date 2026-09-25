@@ -158,7 +158,8 @@ func sliceLines(s string, offset, limit int) string {
 		if sb.Len()+len(prefix)+len(lines[i]) > readMaxBytes {
 			if sb.Len() == 0 {
 				// A single huge line (minified code): show its start.
-				sb.WriteString(prefix + strings.ToValidUTF8(lines[i][:readMaxBytes], "") + "…[line truncated]\n")
+				cut := min(len(lines[i]), max(readMaxBytes-len(prefix)-32, 0))
+				sb.WriteString(prefix + strings.ToValidUTF8(lines[i][:cut], "") + "…[line truncated]\n")
 				end = i + 1
 			} else {
 				end = i
@@ -194,14 +195,33 @@ func readLarge(p string, size int64, offset, limit int) (string, error) {
 	var sb strings.Builder
 	line, shown := 0, 0
 	for shown < limit && sb.Len() < readMaxBytes {
-		l, err := r.ReadString('\n')
-		if len(l) > 0 {
+		// A line is read in pieces: a gigantic one (a minified bundle, a
+		// log without newlines) is never held whole.
+		var head []byte
+		long, n := false, 0
+		var err error
+		for {
+			var chunk []byte
+			chunk, err = r.ReadSlice('\n')
+			n += len(chunk)
+			if line+1 >= offset && len(head) < 2000 {
+				head = append(head, chunk[:min(len(chunk), 2000-len(head))]...)
+			}
+			if len(chunk) > 0 && (len(head) >= 2000 && chunk[len(chunk)-1] != '\n' || long) {
+				long = true
+			}
+			if err != bufio.ErrBufferFull {
+				break
+			}
+		}
+		if n > 0 {
 			line++
 			if line >= offset {
-				if len(l) > 2000 {
-					l = strings.ToValidUTF8(l[:2000], "") + "…[line truncated]\n"
+				l := string(head)
+				if long || n > 2000 {
+					l = strings.ToValidUTF8(strings.TrimRight(l, "\n"), "") + "…[line truncated]\n"
 				}
-				sb.WriteString(l)
+				fmt.Fprintf(&sb, "%d\t%s", line, l)
 				shown++
 			}
 		}

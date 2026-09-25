@@ -461,8 +461,14 @@ func TestSymlinkEscapeAndSecretSearch(t *testing.T) {
 	// A single huge line is shown truncated rather than as nothing.
 	write(t, e, "min.js", strings.Repeat("x", readMaxBytes+500))
 	out, _ := call(t, readTool, e, `{"path":"min.js"}`)
-	if !strings.Contains(out, "line truncated") || len(out) < readMaxBytes {
+	if !strings.Contains(out, "line truncated") || len(out) < readMaxBytes-200 || len(out) > readMaxBytes+200 {
 		t.Fatalf("huge line: len=%d", len(out))
+	}
+	// Just under the limit, with the line-number prefix pushing it over,
+	// used to panic.
+	write(t, e, "near.js", strings.Repeat("y", readMaxBytes-1))
+	if out, err := call(t, readTool, e, `{"path":"near.js"}`); err != nil || !strings.Contains(out, "yyy") {
+		t.Fatalf("near-limit line: %v", err)
 	}
 }
 
