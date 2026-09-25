@@ -708,9 +708,9 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 			body.WriteString("  " + u.paint(cYellow, fmt.Sprintf("%d changes to this file are pending; each is asked for separately", len(match))) + "\n")
 		}
 	}
-	keepOpt, keepKey := " · p always here", " · p always here"
+	keepOpt := " · p always here"
 	if !keep {
-		keepOpt, keepKey = "", ""
+		keepOpt = ""
 	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
@@ -719,7 +719,6 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
 		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · n no"+u.paint(cDim, " · more choices above"), "", nil)
-		_ = keepKey
 	}
 	u.setTitle("needs you")
 	u.notify("Agentium needs your answer: " + title)
