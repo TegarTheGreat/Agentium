@@ -4,6 +4,16 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.26.3] - 2026-09-25
+
+### Changed
+- The chat box at the bottom of the full-screen view is redesigned: a quiet
+  gray frame around the input line with nothing written into its borders,
+  and one line under it saying what the agent is doing on the left and
+  which keys do what on the right. Keys that do not fit are left out whole
+  instead of being cut off with "…". While a question waits for a key the
+  frame turns yellow.
+
 ## [0.26.2] - 2026-09-25
 
 ### Fixed

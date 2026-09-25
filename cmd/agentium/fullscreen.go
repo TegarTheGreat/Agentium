@@ -277,7 +277,7 @@ func (f *fullscreen) height() int {
 }
 
 func (f *fullscreen) composerRows() int {
-	n := 3 // borders and the input line
+	n := 4 // the frame, the input line and the line under it
 	if f.busy {
 		n += min(len(f.queued), maxQueued)
 	}
@@ -516,36 +516,32 @@ func (f *fullscreen) draw() {
 	f.tty.WriteString(out.String())
 }
 
-// composer draws the input box: the editor's line when it is active, the
-// type-ahead while a turn runs.
+// composer draws the input box, a quiet rounded frame around the
+// editor's line (or the type-ahead while a turn runs), and under it one
+// line saying what is happening and which keys do what.
 func (f *fullscreen) composer(w, inputRow int) []string {
 	border := sgr(cGray)
-	if f.input {
-		border = sgr(cInk)
-	} else if f.busy {
-		border = sgr(cAccent)
+	if f.asking {
+		border = sgr(cYellow)
 	}
 	inner := max(w-4, 1)
-	top := border + "╭" + strings.Repeat("─", w-2) + "╮\x1b[0m"
-	if f.busy && f.strip != "" {
-		strip := truncate(f.strip, w-8)
-		top = border + "╭─ \x1b[0m" + strip + " " + border + strings.Repeat("─", max(w-5-strWidth(strip), 0)) + "╮\x1b[0m"
+	rows := []string{border + "╭" + strings.Repeat("─", max(w-2, 0)) + "╮\x1b[0m"}
+	box := func(s string) string {
+		return border + "│\x1b[0m " + padTo(s, inner) + " " + border + "│\x1b[0m"
 	}
-	var rows []string
-	rows = append(rows, top)
 	if f.busy {
 		for i, q := range f.queued {
 			if i == maxQueued {
 				break
 			}
 			q = truncate(strings.ReplaceAll(q, "\n", "↵"), inner-12)
-			rows = append(rows, border+"│\x1b[0m "+padTo(sgr(cDim)+"↳ "+q+"\x1b[0m", inner)+" "+border+"│\x1b[0m")
+			rows = append(rows, box(sgr(cGray)+"↳ queued  \x1b[0m"+sgr(cDim)+q+"\x1b[0m"))
 		}
 	}
 	var line string
 	switch {
 	case f.asking:
-		line = sgr(cYellow) + "▲\x1b[0m " + sgr(cInk) + "Answer the question above with one key\x1b[0m" + sgr(cGray) + " · typing here is paused\x1b[0m"
+		line = sgr(cGray) + "❯ answer the question above · typing here is paused\x1b[0m"
 	case f.input:
 		line, _ = f.vt.renderW(inputRow, inner)
 	case f.busy && f.typing != "":
@@ -553,23 +549,51 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 		for strWidth(t) > inner-4 {
 			_, t = firstRune(t)
 		}
-		line = sgr(cInk) + "❯\x1b[0m " + t + sgr(cDim) + "▏\x1b[0m"
+		line = sgr(cCyan) + "❯\x1b[0m " + t + sgr(cDim) + "▏\x1b[0m"
 	case f.busy:
-		line = sgr(cGray) + "❯ type to steer: enter sends at the next step · tab queues for after\x1b[0m"
+		line = sgr(cCyan) + "❯\x1b[0m " + sgr(cGray) + "Type to steer the agent while it works\x1b[0m"
 	}
-	rows = append(rows, border+"│\x1b[0m "+padTo(line, inner)+" "+border+"│\x1b[0m")
-	hint := "enter send · ctrl+j new line · / commands · pgup scroll"
-	if f.asking {
-		hint = "y yes · n no · esc no · pgup scroll to read"
-	} else if f.busy {
-		hint = "enter steer · tab queue · ↑ take back · esc stop"
+	rows = append(rows, box(line))
+	rows = append(rows, border+"╰"+strings.Repeat("─", max(w-2, 0))+"╯\x1b[0m")
+
+	// The line under the box: what is happening on the left, keys on the
+	// right. Keys that do not fit are left out whole, never cut.
+	var left string
+	var keys []string
+	switch {
+	case f.asking:
+		left = sgr(cYellow) + "▲\x1b[0m " + "Waiting for your answer"
+		keys = []string{"y yes", "n no", "esc no", "pgup scroll"}
+	case f.busy:
+		left = f.strip
+		keys = []string{"enter steer", "tab queue", "↑ take back"}
+	default:
+		keys = []string{"enter send", "ctrl+j new line", "pgup scroll", "? shortcuts"}
+		if f.cols >= sideMinW {
+			keys = append(keys, "ctrl+t panel")
+		}
 	}
-	if f.cols >= sideMinW {
-		hint += " · ctrl+t panel"
+	left = truncate(left, max(w-3, 0))
+	room := w - 3 - strWidth(left)
+	if left != "" {
+		room -= 3
 	}
-	hint = truncate(hint, w-8)
-	rows = append(rows, border+"╰─ \x1b[0m"+sgr(cGray)+hint+"\x1b[0m "+border+strings.Repeat("─", max(w-5-strWidth(hint), 0))+"╯\x1b[0m")
-	return rows
+	var right string
+	for _, k := range keys {
+		next := k
+		if right != "" {
+			next = right + " · " + k
+		}
+		if strWidth(next) > room {
+			break
+		}
+		right = next
+	}
+	foot := " " + left
+	if right != "" {
+		foot += strings.Repeat(" ", max(w-2-strWidth(left)-strWidth(right), 1)) + sgr(cGray) + right + "\x1b[0m"
+	}
+	return append(rows, padTo(foot, w))
 }
 
 func firstRune(s string) (string, string) {
