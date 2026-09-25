@@ -29,3 +29,23 @@ func TestFetchRelease(t *testing.T) {
 		t.Fatalf("missing: %v", err)
 	}
 }
+
+func TestJustUpdated(t *testing.T) {
+	t.Setenv("AGENTIUM_HOME", t.TempDir())
+	defer func(v string) { version = v }(version)
+	version = "0.20.0"
+	if p := justUpdated(); p != "" {
+		t.Fatalf("first run: %q", p)
+	}
+	version = "0.21.0"
+	if p := justUpdated(); p != "0.20.0" {
+		t.Fatalf("after update: %q", p)
+	}
+	if p := justUpdated(); p != "" {
+		t.Fatalf("said twice: %q", p)
+	}
+	version = "0.20.0" // a downgrade is not news
+	if p := justUpdated(); p != "" {
+		t.Fatalf("downgrade: %q", p)
+	}
+}

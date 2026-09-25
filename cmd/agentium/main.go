@@ -1226,11 +1226,17 @@ func run(args []string) error {
 		}
 		screen.mu.Unlock()
 		u.welcome(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)
+		if prev := justUpdated(); prev != "" {
+			u.note(u.paint(cGreen, "Updated from "+prev+" to "+version) + u.paint(cDim, " · /release-notes shows what changed"))
+		}
 		if v := updateNotice(); v != "" {
 			u.note(u.paint(cYellow, "agentium "+v+" is available") + u.paint(cDim, " · type /update"))
 		}
 	} else if u.live {
 		u.banner(res.Provider+"/"+res.Model, string(gate.GetMode()), box, cwd)
+		if prev := justUpdated(); prev != "" {
+			u.note(u.paint(cGreen, "Updated from "+prev+" to "+version) + u.paint(cDim, " · /release-notes shows what changed"))
+		}
 		if v := updateNotice(); v != "" {
 			u.note(u.paint(cYellow, "agentium "+v+" is available") + u.paint(cDim, " · run `agentium update`"))
 		}

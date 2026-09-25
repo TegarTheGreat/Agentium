@@ -72,6 +72,40 @@ func newer(a, b string) bool {
 type updateState struct {
 	Checked time.Time `json:"checked"`
 	Latest  string    `json:"latest"`
+	Seen    string    `json:"seen,omitempty"` // the version that last ran
+}
+
+func loadUpdateState() updateState {
+	var st updateState
+	if b, err := os.ReadFile(updatePath()); err == nil {
+		_ = json.Unmarshal(b, &st)
+	}
+	return st
+}
+
+func saveUpdateState(st updateState) {
+	b, _ := json.Marshal(st)
+	_ = os.MkdirAll(config.Home(), 0o700)
+	_ = os.WriteFile(updatePath(), b, 0o600)
+}
+
+// justUpdated returns the version that ran before this one, once, when
+// this one is newer: the welcome then points at /release-notes.
+func justUpdated() string {
+	if version == "dev" {
+		return ""
+	}
+	st := loadUpdateState()
+	if st.Seen == version {
+		return ""
+	}
+	prev := st.Seen
+	st.Seen = version
+	saveUpdateState(st)
+	if prev != "" && newer(version, prev) {
+		return prev
+	}
+	return ""
 }
 
 func updatePath() string { return filepath.Join(config.Home(), "update.json") }
@@ -82,10 +116,7 @@ func updateNotice() string {
 	if version == "dev" || os.Getenv("AGENTIUM_NO_UPDATE_CHECK") != "" {
 		return ""
 	}
-	var st updateState
-	if b, err := os.ReadFile(updatePath()); err == nil {
-		_ = json.Unmarshal(b, &st)
-	}
+	st := loadUpdateState()
 	if time.Since(st.Checked) > 24*time.Hour {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -94,9 +125,9 @@ func updateNotice() string {
 			if err != nil {
 				return
 			}
-			b, _ := json.Marshal(updateState{Checked: time.Now(), Latest: v})
-			_ = os.MkdirAll(config.Home(), 0o700)
-			_ = os.WriteFile(updatePath(), b, 0o600)
+			now := loadUpdateState() // keep what else was written meanwhile
+			now.Checked, now.Latest = time.Now(), v
+			saveUpdateState(now)
 		}()
 	}
 	if st.Latest != "" && newer(st.Latest, version) {
