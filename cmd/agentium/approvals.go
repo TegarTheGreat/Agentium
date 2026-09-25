@@ -153,7 +153,7 @@ type cmdStep struct{ text, op string }
 // step per line. Anything else, heredocs and multi-line scripts included,
 // is shown as written.
 func commandSteps(action, what string) []cmdStep {
-	if !strings.HasPrefix(action, "bash: ") || strings.Contains(what, "\n") || strings.Contains(what, "<<") {
+	if !strings.HasPrefix(action, "bash: ") && !strings.HasPrefix(action, "network: ") || strings.Contains(what, "\n") || strings.Contains(what, "<<") {
 		return []cmdStep{{text: what}}
 	}
 	var steps []cmdStep

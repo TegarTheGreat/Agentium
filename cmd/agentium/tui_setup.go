@@ -661,7 +661,7 @@ func approvalTitle(action, reason string) (title, what string) {
 	case "write":
 		title = "Change this file?"
 	case "network":
-		title = "Allow network access for this command?"
+		title = "Run this command with internet access?"
 	case "read":
 		title = "Read this file?"
 	case "fetch":
@@ -680,7 +680,7 @@ func approvalTitle(action, reason string) (title, what string) {
 // reasonNote is why agentium asks, shown after the title ("" when it is
 // just ask mode).
 func reasonNote(reason, title string) string {
-	if reason == "" || reason == "ask mode" || strings.HasPrefix(title, "Allow network") {
+	if reason == "" || reason == "ask mode" || strings.Contains(title, "internet access") {
 		return ""
 	}
 	return "  · " + reason
@@ -792,9 +792,10 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 			body.WriteString("  " + u.paint(cYellow, fmt.Sprintf("%d changes to this file are pending; each is asked for separately", len(match))) + "\n")
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n%s %s%s\n%s\n%s%s ",
+	card := fmt.Sprintf("\n%s %s%s\n%s\n%s%s ",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), u.paint(cDim, reasonNote(reason, title)), body.String(),
 		u.approvalKeys(scope, keep, width), "  "+u.paint(cDim, "press a key")+" "+u.paint(cYellow, "›"))
+	fmt.Fprint(os.Stderr, card)
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
@@ -818,8 +819,34 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 		}
 		u.mu.Unlock()
 	}()
-	last := time.Now()
-	u.drainKeys()
+	// Once answered, the card folds into one line saying what was
+	// decided, so a run of questions does not fill the screen with them.
+	rows := strings.Count(card, "\n") // the card's last row is the cursor's
+	extra := 0
+	short := sanitize(what)
+	finish := func(ans, summary string) (string, error) {
+		up := rows + extra - 1
+		if up > 0 && up+2 < termRows(os.Stderr) {
+			fmt.Fprintf(os.Stderr, "\r\x1b[%dA\x1b[J", up)
+		} else {
+			fmt.Fprint(os.Stderr, "\r\n")
+		}
+		// The command follows on the step's own line: here only what
+		// fits on this one.
+		if room := width - strWidth(stripANSI(summary)) - 6; room >= 16 {
+			summary += u.paint(cDim, " · "+oneLine(short, room))
+		}
+		fmt.Fprintln(os.Stderr, summary)
+		return ans, nil
+	}
+	allowed := func(s string) string { return u.paint(cGreen, "✓ "+s) }
+	declined := func(s string) string { return u.paint(cRed, "✗ "+s) }
+	// Keys typed just before the question (a message typed ahead) mean
+	// the user is typing: a key then only counts once there is a pause.
+	var last time.Time
+	if u.drainKeys() {
+		last = time.Now()
+	}
 	hinted := false
 	for {
 		k, err := u.nextKey()
@@ -827,59 +854,52 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 			return "", err
 		}
 		if k == "\x1b" || k == "\x03" { // Esc and Ctrl-C always mean no
-			fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
-			return "n", nil
+			return finish("n", declined("Declined"))
 		}
-		// An answer is a key on its own: a pause before it, and nothing
-		// right after it. Keys inside a burst of typing (a message typed
-		// ahead: "add tests" must not answer "always") never count.
+		// An answer is a key on its own: no key right before it, and none
+		// right after it. Keys inside a burst of typing ("add tests" must
+		// not answer "always") never count.
 		gap := time.Since(last)
 		last = time.Now()
 		ans := strings.ToLower(k)
 		isAnswer := ans == "y" || ans == "a" || ans == "p" || ans == "n" || ans == "t" || ans == "c" || ans == "\r" || ans == "\n"
-		if gap >= 400*time.Millisecond && isAnswer {
-			if next, ok := u.keyWithin(400 * time.Millisecond); !ok {
+		if gap >= 250*time.Millisecond && isAnswer {
+			if next, ok := u.keyWithin(250 * time.Millisecond); !ok {
 				switch ans {
 				case "y":
-					fmt.Fprintln(os.Stderr, u.paint(cGreen, "yes"))
-					return "y", nil
+					return finish("y", allowed("Allowed"))
 				case "a":
-					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always"))
-					return "a", nil
+					return finish("a", allowed("Always allowed "+scope))
 				case "p":
 					if !keep {
-						fmt.Fprintln(os.Stderr, u.paint(cGreen, "always")+u.paint(cDim, " (this session; this one is not kept)"))
-						return "a", nil
+						return finish("a", allowed("Always allowed this session")+u.paint(cDim, " (this kind is not kept)"))
 					}
-					fmt.Fprintln(os.Stderr, u.paint(cGreen, "always, in this project")+u.paint(cDim, " · /permissions to review"))
-					return "p", nil
+					return finish("p", allowed("Always allowed in this project")+u.paint(cDim, " (/permissions to review)"))
 				case "t":
-					fmt.Fprint(os.Stderr, u.paint(cRed, "no")+"\n  "+u.paint(cInk, "tell Agentium:")+" ")
+					fmt.Fprint(os.Stderr, u.paint(cRed, "no")+"\n  "+u.paint(cInk, "tell the agent why:")+" ")
 					reply, _ := u.readReply()
-					return "t:" + reply, nil
+					extra += 2
+					return finish("t:"+reply, declined("Declined")+u.paint(cDim, ": ")+sanitize(oneLine(reply, 80)))
 				case "c":
-					fmt.Fprint(os.Stderr, u.paint(cGreen, "yes")+"\n  "+u.paint(cInk, "and tell Agentium:")+" ")
+					fmt.Fprint(os.Stderr, u.paint(cGreen, "yes")+"\n  "+u.paint(cInk, "note for the agent:")+" ")
 					reply, ok := u.readReply()
+					extra += 2
 					if !ok { // Esc or Ctrl-C: no after all
-						fmt.Fprintln(os.Stderr, u.paint(cRed, "  cancelled: no"))
-						return "n", nil
+						return finish("n", declined("Declined (cancelled)"))
 					}
-					return "c:" + reply, nil
+					return finish("c:"+reply, allowed("Allowed")+u.paint(cDim, ", note: ")+sanitize(oneLine(reply, 80)))
 				default:
-					fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
-					return "n", nil
+					return finish("n", declined("Declined"))
 				}
 			} else if next == "\x1b" || next == "\x03" {
-				fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
-				return "n", nil
+				return finish("n", declined("Declined"))
 			}
 			last = time.Now()
 		}
 		if !hinted {
 			hinted = true
-			// Keys typed in a quick run (a message typed ahead) never
-			// answer: "add tests" must not mean "always".
-			fmt.Fprint(os.Stderr, "\n  "+u.paint(cDim, "that looked like typing, so it was ignored: press one key (y or n) on its own")+" "+u.paint(cYellow, "›")+" ")
+			extra++
+			fmt.Fprint(os.Stderr, "\n  "+u.paint(cDim, "you were typing, so that key was ignored: press y or n on its own")+" "+u.paint(cYellow, "›")+" ")
 		}
 	}
 }
@@ -951,6 +971,18 @@ func (u *ui) askUser(question string, options []string) (string, error) {
 	fmt.Fprintf(&b, "  %s  %s\n", u.paint(cDim, "esc"), u.paint(cDim, "skip: let the agent decide"))
 	b.WriteString("  " + u.paint(cDim, "press a key") + " " + u.paint(cYellow, "›") + " ")
 	fmt.Fprint(os.Stderr, b.String())
+	rows, extra := strings.Count(b.String(), "\n"), 0
+	// Answered, the question folds into one line with the answer.
+	finish := func(ans, shown string) (string, error) {
+		up := rows + extra - 1
+		if up > 0 && up+2 < termRows(os.Stderr) {
+			fmt.Fprintf(os.Stderr, "\r\x1b[%dA\x1b[J", up)
+		} else {
+			fmt.Fprint(os.Stderr, "\r\n")
+		}
+		fmt.Fprintln(os.Stderr, u.paint(cCyan, "?")+" "+sanitize(oneLine(question, max(width-40, 30)))+u.paint(cDim, " → ")+shown)
+		return ans, nil
+	}
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
@@ -982,20 +1014,18 @@ func (u *ui) askUser(question string, options []string) (string, error) {
 		}
 		switch {
 		case k == "\x1b" || k == "\x03":
-			fmt.Fprintln(os.Stderr, u.paint(cDim, "skipped"))
-			return "", nil
+			return finish("", u.paint(cDim, "skipped: the agent decides"))
 		case k == "o" || k == "O" || len(options) == 0 && (k == "\r" || k == "\n"):
 			fmt.Fprint(os.Stderr, "\n  "+u.paint(cInk, "your answer:")+" ")
 			reply, ok := u.readReply()
+			extra += 2
 			if !ok {
-				fmt.Fprintln(os.Stderr, u.paint(cDim, "  skipped"))
-				return "", nil
+				return finish("", u.paint(cDim, "skipped: the agent decides"))
 			}
-			return reply, nil
+			return finish(reply, u.paint(cGreen, sanitize(oneLine(reply, 100))))
 		case len(k) == 1 && k[0] >= '1' && int(k[0]-'0') <= len(options):
 			pick := options[k[0]-'1']
-			fmt.Fprintln(os.Stderr, u.paint(cGreen, sanitize(pick)))
-			return pick, nil
+			return finish(pick, u.paint(cGreen, sanitize(pick)))
 		}
 	}
 }

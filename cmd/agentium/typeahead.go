@@ -217,17 +217,19 @@ func (u *ui) typeaheadLines(width int) []string {
 }
 
 // drainKeys drops keys buffered for an approval prompt before it showed.
-func (u *ui) drainKeys() {
+func (u *ui) drainKeys() (drained bool) {
 	u.mu.Lock()
 	keys := u.keys
 	u.mu.Unlock()
 	for keys != nil {
 		select {
 		case <-keys:
+			drained = true
 		default:
-			return
+			return drained
 		}
 	}
+	return drained
 }
 
 // keyWithin reports a key pressed within d, if any (read and dropped).

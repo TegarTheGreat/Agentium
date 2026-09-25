@@ -16,7 +16,7 @@ func TestApprovalTitle(t *testing.T) {
 	for _, c := range []struct{ action, reason, title, what string }{
 		{"bash: rm -rf x", "ask mode", "Run this command?", "rm -rf x"},
 		{"write: /a/b.go", "ask mode", "Change this file?", "/a/b.go"},
-		{"network: npm i", "needs network access", "Allow network access for this command?", "npm i"},
+		{"network: npm i", "needs network access", "Run this command with internet access?", "npm i"},
 		{"bash: sudo ls", "privilege escalation", "Run this command?", "sudo ls"},
 	} {
 		title, what := approvalTitle(c.action, c.reason)

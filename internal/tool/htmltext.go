@@ -140,33 +140,46 @@ func isTagName(s string) bool {
 }
 
 // mainRegion is the token range of the page's main content: its <main>
-// (or role=main), else its only/first <article>, else everything.
+// (or role=main), else its first <article> with real content, else
+// everything. One pass matches open and close tags (a stack, tolerant of
+// unclosed ones), so a malformed page cannot make this quadratic.
 func mainRegion(toks []htmlTok) (int, int) {
+	closeAt := make([]int, len(toks)) // for an open tag: its close, or -1
+	textBefore := make([]int, len(toks)+1)
+	type open struct {
+		tag string
+		i   int
+	}
+	var stack []open
+	for i, t := range toks {
+		closeAt[i] = -1
+		textBefore[i+1] = textBefore[i]
+		switch {
+		case t.tag == "":
+			textBefore[i+1] += len(strings.TrimSpace(t.text))
+		case t.self || voidTag(t.tag):
+		case !t.close:
+			stack = append(stack, open{t.tag, i})
+		default:
+			for k := len(stack) - 1; k >= 0; k-- {
+				if stack[k].tag == t.tag {
+					closeAt[stack[k].i] = i
+					stack = stack[:k]
+					break
+				}
+			}
+		}
+	}
 	for _, want := range []func(htmlTok) bool{
 		func(t htmlTok) bool { return t.tag == "main" || t.attrs["role"] == "main" },
 		func(t htmlTok) bool { return t.tag == "article" },
 	} {
 		for i, t := range toks {
-			if t.tag == "" || t.close || !want(t) {
+			if t.tag == "" || t.close || closeAt[i] < 0 || !want(t) {
 				continue
 			}
-			depth := 0
-			for j := i; j < len(toks); j++ {
-				u := toks[j]
-				if u.tag != t.tag || u.self {
-					continue
-				}
-				if u.close {
-					depth--
-					if depth == 0 {
-						if textLen(toks[i:j]) > 200 { // a real content area, not a stub
-							return i, j + 1
-						}
-						break
-					}
-				} else {
-					depth++
-				}
+			if textBefore[closeAt[i]]-textBefore[i] > 200 { // a real content area, not a stub
+				return i, closeAt[i] + 1
 			}
 		}
 	}

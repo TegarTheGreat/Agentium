@@ -4,6 +4,16 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- An answered question folds into one line saying what was decided ("✓ Always allowed for this exact command · git clone …", "✗ Declined: not needed · ls"), so a run of approvals no longer fills the screen with option grids; the ask tool's questions fold the same way ("? question → answer").
+- A key pressed right after a question appears is taken as the answer; it is ignored as typing only when other keys came just before or just after it (a message typed ahead). It used to be ignored whenever it came within 0.4 s of the question.
+- Network approvals read "Run this command with internet access?" and show a chained command one step per line like other commands.
+
+### Fixed
+
+- A malformed page (thousands of unclosed `<main>` tags) took `fetch` 9 s to convert; it takes under 0.1 s now.
+
 ## [0.26.0] - 2026-09-25
 
 ### Added
