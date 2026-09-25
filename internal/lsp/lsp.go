@@ -56,7 +56,7 @@ type Manager struct {
 	Env []string
 
 	mu      sync.Mutex
-	servers map[string]*server // by spec name; nil entry = unavailable
+	servers map[string]*server        // by spec name; nil entry = unavailable
 	shown   map[string]map[string]int // per file: errors already reported (by message)
 }
 
