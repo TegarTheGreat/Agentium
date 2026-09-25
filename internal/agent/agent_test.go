@@ -924,3 +924,23 @@ func TestBufferTextOnRetry(t *testing.T) {
 		t.Fatalf("%q", got.String())
 	}
 }
+
+// Fixes made together in one batch are one attempt, not a loop.
+func TestOneBatchOfEditsIsOneAttempt(t *testing.T) {
+	var batch []provider.ToolCall
+	for i := 0; i < fileEditWarn*2; i++ {
+		batch = append(batch, tc(fmt.Sprint(i), "edit", fmt.Sprintf(`{"path":"notes%d.txt","new":"v\n"}`, i%2)))
+	}
+	a := newAgent(t, &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(batch...),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "ok"}, nil },
+	}})
+	if _, err := a.Run(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleTool && strings.Contains(m.Text, "Step back") {
+			t.Fatal("step-back note after a single batch")
+		}
+	}
+}

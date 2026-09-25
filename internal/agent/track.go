@@ -46,6 +46,7 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 			a.escalate(rs)
 		}
 	}()
+	batchEdited, batchSigs := map[string]bool{}, map[string]bool{}
 	for i, c := range calls {
 		r := &results[i]
 		switch c.Name {
@@ -54,15 +55,17 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 			if !r.IsError && codeExt[strings.ToLower(filepath.Ext(path))] {
 				rs.editedCode = true
 			}
-			// Many edits to one file without a passing check: the model is
-			// probably iterating on a wrong idea.
-			if !r.IsError && rs.fileEdits != nil {
+			// Many rounds of edits to one file without a passing check: the
+			// model is probably iterating on a wrong idea. A batch counts
+			// once (twelve fixes made together are one attempt), and the
+			// warning does not raise the effort: it is a nudge to test.
+			if !r.IsError && rs.fileEdits != nil && !batchEdited[path] {
+				batchEdited[path] = true
 				rs.fileEdits[path]++
 				if rs.fileEdits[path] >= fileEditWarn && !rs.editWarned[path] {
 					rs.editWarned[path] = true
-					warned = true
-					r.Text += fmt.Sprintf("\n[agentium: %d edits to %s without a passing check. Step back: say what you have learned, name two other explanations for the problem, and test the likeliest before editing again]", rs.fileEdits[path], path)
-					a.notice(fmt.Sprintf("%d edits to %s without a passing check; asked the model to step back", rs.fileEdits[path], filepath.Base(path)))
+					r.Text += fmt.Sprintf("\n[agentium: %d rounds of edits to %s without a passing check. Step back: say what you have learned, name two other explanations for the problem, and test the likeliest before editing again]", rs.fileEdits[path], path)
+					a.notice(fmt.Sprintf("%d rounds of edits to %s without a passing check; asked the model to step back", rs.fileEdits[path], filepath.Base(path)))
 				}
 			}
 		case "bash":
@@ -88,6 +91,10 @@ func (a *Agent) track(rs *runState, calls []provider.ToolCall, results []provide
 		}
 		h := sha256.Sum256([]byte(c.Name + "\x00" + canonical(c.Args) + "\x00" + r.Text))
 		sig := hex.EncodeToString(h[:8])
+		if batchSigs[sig] {
+			continue // the same call twice in one batch is one attempt
+		}
+		batchSigs[sig] = true
 		rs.sigs = append(rs.sigs, sig)
 		if len(rs.sigs) > stuckWindow {
 			rs.sigs = rs.sigs[len(rs.sigs)-stuckWindow:]
