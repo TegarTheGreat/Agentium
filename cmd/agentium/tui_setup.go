@@ -95,73 +95,88 @@ func (u *ui) prompt(plan bool) string {
 	return u.paint(cCyan, "❯") + " "
 }
 
+// helpRows are the commands by group; a row with an empty description
+// starts a group.
 var helpRows = [][2]string{
-	{"/model", "choose a model (or /model provider/model)"},
-	{"/login  /logout", "add, change or remove a provider's API key"},
-	{"/mode", "approvals: ask · auto · yolo · plan (shift+tab cycles)"},
-	{"/effort", "reasoning effort: low · medium · high · xhigh · max"},
+	{"Work", ""},
 	{"/plan  /go", "investigate read-only, then carry out the plan"},
 	{"/undo  /rewind", "revert the last turn, or back to an earlier one (esc esc)"},
-	{"/copy  /diff", "copy the last reply · show what changed"},
-	{"/context  /compact", "what fills the context · summarize to free it"},
+	{"/diff  /copy", "what changed · copy the last reply"},
+	{"/review  /commit  /pr", "review the changes · commit them · open a pull request"},
+	{"/init", "write AGENTS.md for this repository"},
 	{"/btw <question>", "a side question, not added to the conversation"},
-	{"/theme", "auto · dark · light"},
+	{"!command", "run a shell command yourself (the agent sees it)"},
+	{"Conversation", ""},
+	{"/context  /compact", "what fills the context · summarize to free it"},
+	{"/sessions  /resume", "list and continue saved conversations (number or name)"},
+	{"/rename  /fork", "name this conversation · continue in a copy"},
+	{"/clear  /export", "start a new one · save this one as Markdown"},
 	{"/memory", "what I remember and where · /memory edit"},
-	{"/export [file]", "save the conversation as Markdown"},
-	{"/sessions  /resume", "list and continue saved conversations (by number or name)"},
-	{"/rename <name>", "name this conversation"},
-	{"/clear", "start a new conversation"},
-	{"/skills", "list skills; /<skill> [task] runs one"},
-	{"/init  /review", "write AGENTS.md for this repo · review the current changes"},
-	{"/commit  /pr", "commit with a fitting message · push and open a pull request"},
-	{"/fork [name]", "continue in a copy; the original stays resumable"},
-	{"/<command> [args]", "your commands: .agentium/commands/<name>.md ($ARGUMENTS)"},
-	{"/usage  /config", "tokens used · current settings"},
-	{"/update", "install the latest release"},
+	{"Setup", ""},
+	{"/model  /effort  /mode", "model · reasoning effort · approvals (ask auto yolo plan)"},
+	{"/login  /logout", "add, change or remove a provider's API key"},
+	{"/permissions  /add-dir", "what runs without asking · another working folder"},
+	{"/theme  /vim", "auto · dark · light · vim keys in the message box"},
+	{"/skills  /<name> [args]", "skills, and your commands in .agentium/commands"},
 	{"/doctor  /mcp  /tools", "health check · MCP servers · available tools"},
-	{"/permissions", "what runs without asking; revoke approvals"},
-	{"/add-dir <path>", "work in another directory too (also --add-dir, \"dirs\")"},
+	{"/usage  /config  /update", "tokens used · settings · install the latest release"},
 	{"/exit", "quit (also ctrl+d)"},
 }
 
 var keyRows = [][2]string{
-	{"enter", "send · while a turn runs: steer it at the next step"},
-	{"tab  ↑", "while a turn runs: queue for after · take a message back"},
-	{"tab (empty input)", "take the suggested next message (\"suggest\": false turns it off)"},
-	{"!command", "run a shell command yourself (the agent sees it)"},
-	{"ctrl+j  shift+enter", "new line (or end a line with \\)"},
-	{"/  @", "commands · mention a file (tab or enter picks)"},
-	{"esc", "stop the running turn · esc esc: rewind"},
+	{"Typing", ""},
+	{"enter  ctrl+j", "send · new line (also shift+enter, or end a line with \\)"},
+	{"/  @", "commands · mention a file (@file:10-40 a range; tab or enter picks)"},
+	{"tab", "on an empty message: take the suggested next message"},
+	{"↑ ↓  ctrl+r", "lines of the message, then history · search history"},
+	{"ctrl+k/u/w  ctrl+y", "cut to line end / start, a word · paste it back"},
+	{"ctrl+_  ctrl+s", "undo · put the draft aside (again: bring it back)"},
+	{"ctrl+g", "write the message in $EDITOR"},
+	{"While it works", ""},
+	{"enter  tab  ↑", "steer at the next step · queue for after · take back"},
+	{"esc", "stop the turn · esc esc: rewind"},
+	{"ctrl+o", "step outputs · t the conversation · / search · [ ] your messages"},
+	{"Anytime", ""},
 	{"shift+tab", "next approval mode"},
 	{"alt+p  alt+t", "switch model · reasoning effort"},
-	{"ctrl+r", "search your earlier messages"},
-	{"ctrl+g", "write the message in $EDITOR"},
-	{"ctrl+o", "step outputs · t the whole conversation · / search · [ ] your messages"},
-	{"↑ ↓", "line above/below, else history"},
-	{"ctrl+k/u/w  ctrl+y", "cut to line end/start, a word · paste it back"},
-	{"ctrl+_  ctrl+s", "undo typing · put the draft aside (again: bring back)"},
-	{"alt+b/f  alt+d", "word left/right · cut the next word"},
-	{"/vim", "vim keys: esc normal mode · hjkl w b e 0 $ · x dd dw cw D C p u · i a A o"},
-	{"@file.png", "attach an image"},
+	{"?", "this help"},
 }
 
 func (u *ui) help() {
 	var sb strings.Builder
-	row := func(k, v string) {
-		sb.WriteString("  " + u.paint(cAccent, fmt.Sprintf("%-22s", k)) + u.paint(cDim, v) + "\n")
+	width := termWidth(os.Stderr) - 1
+	keyW := 0
+	for _, r := range append(append([][2]string(nil), helpRows...), keyRows...) {
+		if r[1] != "" {
+			keyW = max(keyW, strWidth(r[0])+2)
+		}
 	}
-	sb.WriteString("\n" + u.paint(cBold, "Commands") + "\n")
+	keyW = min(keyW, max(width/3, 16))
+	row := func(k, v string) {
+		if v == "" { // a group
+			sb.WriteString("\n  " + u.paint(cBold, k) + "\n")
+			return
+		}
+		lines := wordWrap(v, max(width-keyW-4, 20))
+		for i, l := range lines {
+			key := ""
+			if i == 0 {
+				key = k
+			}
+			sb.WriteString("    " + u.paint(cAccent, padTo(key, keyW)) + u.paint(cDim, l) + "\n")
+		}
+	}
+	sb.WriteString("\n" + u.paint(cBold, "Commands"))
 	for _, r := range helpRows {
 		row(r[0], r[1])
 	}
-	sb.WriteString("\n" + u.paint(cBold, "Keys") + "\n")
+	sb.WriteString("\n" + u.paint(cBold, "Keys"))
 	for _, r := range keyRows {
 		row(r[0], r[1])
 	}
 	if activeFS() != nil {
 		row("pgup pgdn  wheel", "scroll · shift+drag selects text")
 		row("ctrl+t", "show or hide the side panel")
-		row("agentium --classic", "the inline interface instead")
 	}
 	os.Stderr.WriteString(sb.String())
 }
