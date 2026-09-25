@@ -36,7 +36,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.16.1"
+var version = "0.17.0"
 
 const usage = `agentium — fast, minimal coding agent
 

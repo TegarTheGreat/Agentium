@@ -2,6 +2,44 @@
 
 All notable changes to Agentium are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] - 2026-09-25
+
+### Added
+
+- **Sessions you can name and branch.** `/rename` names a conversation, `/resume` opens a picker (or takes a number or a name), and `/fork` continues in a copy while the original stays resumable. Named sessions are never pruned.
+- **Built-in prompts:** `/init` writes `AGENTS.md` for the repository, `/review` reviews the current changes, `/commit` commits them in the repository's style, and `/pr` pushes the branch and opens a pull request.
+- **Your own commands.** Markdown files in `.agentium/commands/` or `.claude/commands/` (in the project or your home folder) become `/name` commands, and `$ARGUMENTS` is replaced by what follows. They cannot replace a built-in command.
+- **More hooks.**
+  - `pre_tool` sees each tool call as JSON and can block it (exit code 2); its reason goes to the model.
+  - `user_prompt` adds context to a message or stops it.
+  - `session_start` adds context to the first message.
+  - Hooks come only from your own config, never from a repository.
+- **Approvals you keep.** `p` at an approval keeps it for the project. It is stored in Agentium's data folder, never in the repository. `/permissions` lists what runs without asking and revokes it.
+- **`/doctor`** checks the model and key (with a live call), updates, git, ripgrep, the editor, the sandbox, the terminal, project instructions and MCP servers. **`/mcp`** shows each server's state, tools, errors and log. **`/tools`** lists what the agent can use.
+- **Suggested next message.** After a reply, a guess at your next message shows dimmed in the empty composer, and `Tab` takes it. It is on for inexpensive models or when `fast_model` is set; `"suggest"` turns it on or off.
+- **Status line.** Shows the git branch, commits ahead and changed files. `"status_line": "<command>"` shows your own line instead.
+- **Conversation viewer.** In `Ctrl-O`, `t` shows the whole conversation, `/` searches it (`n`/`N`), `[` and `]` jump between your messages, and `e` opens it in `$EDITOR`.
+- **Editing comforts.**
+  - `Ctrl-K`, `Ctrl-U` and `Ctrl-W` cut; `Ctrl-Y` pastes back; `Alt-D` cuts the next word.
+  - `Ctrl-_` undoes.
+  - `Ctrl-S` puts a draft aside and brings it back.
+  - `↑`/`↓` move between the lines of a long message before going through history.
+  - `Alt-P` and `Alt-T` open the model and effort pickers.
+- **`subagent_model`** runs sub-agents on another (usually cheaper) model, with its own price, context size and your reasoning effort.
+
+### Changed
+
+- **Colors over SSH.** Agentium asks the terminal whether it can show 24-bit color, since `COLORTERM` rarely survives SSH. Remote sessions now get the full palette instead of the 256-color fallback.
+- **The turn receipt shows what was actually spent**, including sub-agents on their own model.
+- **Compaction keeps your two latest requests word for word**, without recalled memory or hook output.
+
+### Fixed
+
+- A server started through `npx` or a wrapper script no longer hangs Agentium's exit, and its log is capped at 2 MiB.
+- A hook that leaves a child process running no longer blocks the turn past its timeout.
+- Branch names and `status_line` output cannot send control sequences to the terminal.
+- The status line's git check never takes `.git/index.lock` from your own git commands.
+
 ## [0.16.1] - 2026-09-25
 
 ### Fixed
