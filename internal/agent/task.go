@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/tegarthegreat/agentium/internal/policy"
 	"github.com/tegarthegreat/agentium/internal/provider"
@@ -25,16 +26,27 @@ Task: `
 // well-specified change, then costs the main conversation only the
 // report. Several task calls in one turn run in parallel.
 func (a *Agent) TaskTool() tool.Tool {
+	desc := "Delegate a self-contained subtask (broad investigation, or a well-specified change) to a sub-agent with a fresh context; returns a short report. Calls in one turn run in parallel. explore=true: read-only. title: a 3-6 word label shown to the user."
+	schema := `{"type":"object","required":["prompt"],"properties":{"title":{"type":"string"},"prompt":{"type":"string"},"explore":{"type":"boolean"}}}`
+	if len(a.Agents) > 0 {
+		var names []string
+		for _, d := range a.Agents {
+			names = append(names, d.Name+" ("+oneLine(d.Description, 120)+")")
+		}
+		desc += " agent: hand it to one of the user's specialists when it fits: " + strings.Join(names, "; ") + "."
+		schema = `{"type":"object","required":["prompt"],"properties":{"title":{"type":"string"},"prompt":{"type":"string"},"explore":{"type":"boolean"},"agent":{"type":"string"}}}`
+	}
 	return tool.Tool{
 		Def: provider.ToolDef{
 			Name:        "task",
-			Description: "Delegate a self-contained subtask (broad investigation, or a well-specified change) to a sub-agent with a fresh context; returns a short report. Calls in one turn run in parallel. explore=true: read-only. title: a 3-6 word label shown to the user.",
-			Schema:      json.RawMessage(`{"type":"object","required":["prompt"],"properties":{"title":{"type":"string"},"prompt":{"type":"string"},"explore":{"type":"boolean"}}}`),
+			Description: desc,
+			Schema:      json.RawMessage(schema),
 		},
 		Run: func(ctx context.Context, env *tool.Env, raw json.RawMessage) (string, error) {
 			var in struct {
 				Prompt  string `json:"prompt"`
 				Explore bool   `json:"explore"`
+				Agent   string `json:"agent"`
 			}
 			if err := json.Unmarshal(raw, &in); err != nil {
 				return "", fmt.Errorf("invalid arguments: %v", err)
@@ -46,12 +58,34 @@ func (a *Agent) TaskTool() tool.Tool {
 			if parent.depth > 0 {
 				return "", errors.New("a sub-agent cannot start sub-agents; do the work directly")
 			}
-			return parent.runSub(ctx, env, in.Prompt, in.Explore)
+			var def *AgentDef
+			if in.Agent != "" {
+				for i := range parent.Agents {
+					if strings.EqualFold(parent.Agents[i].Name, in.Agent) {
+						def = &parent.Agents[i]
+					}
+				}
+				if def == nil {
+					return "", fmt.Errorf("no agent named %q", in.Agent)
+				}
+				in.Explore = in.Explore || def.ReadOnly
+			}
+			return parent.runSub(ctx, env, in.Prompt, in.Explore, def)
 		},
 	}
 }
 
-func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explore bool) (string, error) {
+// AgentDef is a specialist sub-agent the user defined (.agentium/agents
+// or .claude/agents): its instructions, the tools it may use (all when
+// empty), and optionally its own model.
+type AgentDef struct {
+	Name, Description, Prompt string
+	Tools                     []string
+	ReadOnly                  bool
+	Model                     *SubModel
+}
+
+func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explore bool, def *AgentDef) (string, error) {
 	gate := env.Gate
 	if explore || gate != nil && gate.GetMode() == policy.Plan {
 		g := &policy.Gate{Mode: policy.Plan}
@@ -79,7 +113,29 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 			}
 		}},
 	}
-	if m := a.Sub; m != nil {
+	if def != nil {
+		// A specialist: its own instructions after the shared rules, and
+		// only the tools it lists.
+		sub.System = a.System + "\n\n# Your role: " + def.Name + "\n" + def.Prompt
+		if len(def.Tools) > 0 {
+			allow := map[string]bool{}
+			for _, t := range def.Tools {
+				allow[t] = true
+			}
+			var tools []tool.Tool
+			for _, t := range a.Tools {
+				if allow[t.Def.Name] && t.Def.Name != "task" {
+					tools = append(tools, t)
+				}
+			}
+			sub.Tools = tools
+		}
+	}
+	m := a.Sub
+	if def != nil && def.Model != nil {
+		m = def.Model
+	}
+	if m != nil {
 		// A separate (usually cheaper) model: its own system prompt cache.
 		sub.Client, sub.Model, sub.Cost = m.Client, m.Model, m.Cost
 		sub.Fast, sub.FastModel = nil, ""

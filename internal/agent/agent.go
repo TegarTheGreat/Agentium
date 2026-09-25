@@ -84,6 +84,8 @@ type Agent struct {
 	Sub *SubModel
 	// Oracle, if set, is a stronger model to consult (the oracle tool).
 	Oracle *Oracle
+	// Agents are the user's specialist sub-agents (the task tool's agent).
+	Agents []AgentDef
 	// PreTool, if set, runs before each tool call (config hooks.pre_tool);
 	// an error blocks the call and is what the model is told.
 	PreTool func(ctx context.Context, c provider.ToolCall) error

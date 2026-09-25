@@ -415,3 +415,23 @@ func TestExportHTML(t *testing.T) {
 		t.Fatal("unescaped or context text in the page")
 	}
 }
+
+func TestLoadAgents(t *testing.T) {
+	t.Setenv("AGENTIUM_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	os.MkdirAll(filepath.Join(cwd, ".claude", "agents"), 0o755)
+	os.WriteFile(filepath.Join(cwd, ".claude", "agents", "reviewer.md"), []byte("---\nname: reviewer\ndescription: reviews diffs\ntools: Read, Grep, Glob\n---\nYou review.\n"), 0o644)
+	os.WriteFile(filepath.Join(cwd, ".claude", "agents", "fixer.md"), []byte("---\ndescription: fixes things\ntools: [Read, Edit, Bash]\nmodel: inherit\n---\nYou fix.\n"), 0o644)
+	os.WriteFile(filepath.Join(cwd, ".claude", "agents", "empty.md"), []byte("---\nname: empty\n---\n"), 0o644)
+	got := loadAgents(cwd)
+	if len(got) != 2 || got[0].def.Name != "fixer" || got[1].def.Name != "reviewer" {
+		t.Fatalf("agents %+v", got)
+	}
+	if !got[1].def.ReadOnly || strings.Join(got[1].def.Tools, ",") != "read,search" {
+		t.Fatalf("reviewer %+v", got[1].def)
+	}
+	if got[0].def.ReadOnly || strings.Join(got[0].def.Tools, ",") != "read,edit,bash" || got[0].model != "" {
+		t.Fatalf("fixer %+v", got[0])
+	}
+}

@@ -322,6 +322,8 @@ agentium mcp list         # servers and login status
 - `user_prompt` runs before each message is sent (the message is on stdin); what it prints goes along as context, and exit code 2 stops the message.
 - `session_start` runs once; what it prints goes along with the first message.
 
+**Specialist sub-agents.** `.agentium/agents/<name>.md` (or `.claude/agents/`, in the project or your home folder) defines a specialist in Claude Code's format: front matter with `name`, `description`, optional `tools` (Read, Grep, Bash …) and `model`, then its instructions. The agent delegates to it when it fits, or when you ask ("have the reviewer check this"). `/agents` lists them.
+
 **Commands.** `/init` writes `AGENTS.md`, `/review` reviews the current changes, `/commit` commits them in the repository's style and `/pr` opens a pull request. Your own commands are Markdown files in `.agentium/commands/` or `.claude/commands/` (in the project, `~/.agentium/commands` or `~/.claude/commands`); `$ARGUMENTS` is replaced by what follows the command. They cannot replace a built-in command.
 
 **Editors.** `agentium acp` implements the [Agent Client Protocol](https://agentclientprotocol.com), so ACP clients such as Zed and JetBrains IDEs can use Agentium. Tool calls, plans and permission prompts appear in the editor.

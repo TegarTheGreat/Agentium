@@ -120,6 +120,7 @@ var helpRows = [][2]string{
 	{"/permissions  /add-dir", "what runs without asking · another working folder"},
 	{"/theme  /vim", "auto · dark · light · vim keys in the message box"},
 	{"/skills  /<name> [args]", "skills, and your commands in .agentium/commands"},
+	{"/agents", "your specialist sub-agents (.agentium/agents, .claude/agents)"},
 	{"/doctor  /mcp  /tools", "health check · MCP servers · available tools"},
 	{"/usage  /config  /update", "tokens used · settings · install the latest release"},
 	{"/exit", "quit (also ctrl+d)"},

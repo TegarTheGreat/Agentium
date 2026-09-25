@@ -79,7 +79,7 @@ func commandDesc(path string) string {
 // builtinCommand reports whether /name is one of agentium's own.
 func builtinCommand(name string) bool {
 	switch name {
-	case "plan", "go", "skills", "settings", "new", "quit", "q", "?", "init", "review", "commit", "pr", "allowed", "vim", "add-dir", "watch", "handoff":
+	case "plan", "go", "skills", "settings", "new", "quit", "q", "?", "init", "review", "commit", "pr", "allowed", "vim", "add-dir", "watch", "handoff", "agents":
 		return true
 	}
 	for _, c := range slashCommands {

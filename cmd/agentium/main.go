@@ -775,6 +775,21 @@ func run(args []string) error {
 		ContextTokens: firstPositive(cfg.ContextTokens, res.Info.Context, provider.ContextWindow(res.Model)),
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
+	agentFiles := loadAgents(cwd)
+	for _, f := range agentFiles {
+		def := f.def
+		if f.model != "" {
+			c := cfg
+			c.SubagentModel = f.model
+			m, _, err := subModel(c, auth, firstNonEmpty(*effort, cfg.Effort))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, u.dim("· agent "+def.Name+": model ignored: "+firstLine(err.Error())))
+			} else {
+				def.Model = m
+			}
+		}
+		a.Agents = append(a.Agents, def)
+	}
 	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
 	a.Notes = ap.takeNotes
 	defer a.Env.KillJobs() // background servers do not outlive the session
@@ -1454,6 +1469,10 @@ func run(args []string) error {
 					u.success("Watching the project: end a comment with AI! to ask for a change, AI? to ask a question" +
 						u.paint(cDim, " · /watch again stops"))
 				}
+				continue
+			}
+			if line == "/agents" {
+				showAgents(u, agentFiles)
 				continue
 			}
 			if line == "/vim" && ed != nil {

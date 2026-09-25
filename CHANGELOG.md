@@ -6,6 +6,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ### Added
 
+- **Your own specialist sub-agents.** Markdown files in `.agentium/agents/` or `.claude/agents/`, in the project or your home folder, use Claude Code's format: `name`, `description`, `tools` and `model` in front matter, then the instructions. The agent hands them work through its task tool ("have the reviewer check this"). A specialist gets only the tools it lists, runs read-only when none of them can change files, and can use its own model. `/agents` lists them.
 - **Paste an image with `Ctrl-V`**, a screenshot you copied, as in Claude Code. It is saved and attached to the message. This works on macOS, Windows and Linux (Wayland or X11). Over SSH the clipboard is on your own machine, so use `@path` there.
 - **Share a conversation as a page.** `/export name.html` writes one self-contained page: your messages, the replies with their Markdown, each step with its output folded under it, and edits as line diffs. It follows the reader's light or dark setting and loads nothing from elsewhere.
 
