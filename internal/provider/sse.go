@@ -37,11 +37,13 @@ var StreamProgressTimeout = func() time.Duration {
 // cancel through the request context.
 var httpClient = &http.Client{
 	Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Minute,
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// A server that accepted the request but never answers is retried
+		// after 2 minutes rather than 5 (streaming replies start at once).
+		ResponseHeaderTimeout: 2 * time.Minute,
 		ForceAttemptHTTP2:     true,
 	},
 }

@@ -33,6 +33,7 @@ var bashTool = Tool{
 	Run: func(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 		var a struct {
 			Cmd        string          `json:"cmd"`
+			Command    string          `json:"command"` // what many models call it
 			Timeout    int             `json:"timeout"`
 			Net        bool            `json:"net"`
 			Background bool            `json:"background"`
@@ -43,6 +44,9 @@ var bashTool = Tool{
 		}
 		if err := decode(raw, &a); err != nil {
 			return "", err
+		}
+		if a.Cmd == "" {
+			a.Cmd = a.Command // not "(no background jobs)" for a misnamed key
 		}
 		// kill is a boolean; some models send the job id there instead.
 		kill := false

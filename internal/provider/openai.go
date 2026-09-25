@@ -178,6 +178,10 @@ func (c *OpenAI) completionTokens() bool {
 
 var callSeq atomic.Int64
 
+// maxReplyBytes caps one reply's text and tool arguments (about 1M tokens
+// would be far past any model's output limit).
+const maxReplyBytes = 4 << 20
+
 // Stream implements Client.
 func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (Response, error) {
 	h := map[string]string{}
@@ -209,6 +213,7 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 	}
 	var reasoning strings.Builder
 	calls := map[int]*partial{}
+	argBytes := 0
 	lastIdx, maxIdx := 0, 0
 	var streamErr error
 	done := false
@@ -253,6 +258,12 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 			} else if choice.Delta.Reasoning != "" && out.ReasoningField == "" {
 				out.ReasoningField = "reasoning"
 			}
+			if text.Len()+argBytes > maxReplyBytes {
+				// A reply that never stops (no output limit known for the
+				// model): end it like a length stop instead of growing.
+				out.StopReason = "length"
+				return false
+			}
 			if d := choice.Delta.Content; d != "" {
 				text.WriteString(d)
 				if onText != nil {
@@ -288,6 +299,7 @@ func (c *OpenAI) Stream(ctx context.Context, req Request, onText func(string)) (
 					p.extra = tc.ExtraContent
 				}
 				p.args.WriteString(tc.Function.Arguments)
+				argBytes += len(tc.Function.Arguments)
 			}
 			if choice.FinishReason != "" {
 				out.StopReason = choice.FinishReason

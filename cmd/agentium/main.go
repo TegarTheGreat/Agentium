@@ -145,7 +145,11 @@ func exit(err error) {
 	if errors.As(err, &js) {
 		os.Exit(js.code)
 	}
-	fmt.Fprintln(os.Stderr, "agentium:", err)
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, "agentium: interrupted")
+	} else {
+		fmt.Fprintln(os.Stderr, "agentium:", err)
+	}
 	os.Exit(exitCode(err))
 }
 
@@ -800,6 +804,9 @@ func run(args []string) error {
 		Verify:        cfg.Verify == nil || *cfg.Verify,
 	}
 	u.detach = a.Env.DetachForeground
+	// Output that cannot be taken back (a pipe, a file) gets each reply
+	// once, not again after a retried call.
+	a.BufferText = !isTTY(os.Stdout) && !*asJSON
 	agentFiles := loadAgents(cwd)
 	for _, f := range agentFiles {
 		def := f.def

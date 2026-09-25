@@ -104,6 +104,10 @@ type Agent struct {
 	// (every call answered): the session saves it, so a crash mid-turn
 	// keeps the steps already done.
 	OnStep func()
+	// BufferText holds a reply's text until the model call succeeds, so a
+	// retried call does not repeat what a failed attempt had streamed
+	// (for output that cannot be taken back: a pipe, a file).
+	BufferText bool
 	// Attach holds images for the next Run's user message.
 	Attach []provider.Image
 	// Ledger is the harness-kept working state (files, commands, errors,
@@ -490,8 +494,16 @@ func (a *Agent) call(ctx context.Context, req provider.Request) (provider.Respon
 	var resp provider.Response
 	var err error
 	for attempt := 0; ; attempt++ {
-		resp, err = a.Client.Stream(ctx, req, a.Events.Text)
+		onText := a.Events.Text
+		var held strings.Builder
+		if a.BufferText && onText != nil {
+			onText = func(d string) { held.WriteString(d) }
+		}
+		resp, err = a.Client.Stream(ctx, req, onText)
 		if err == nil || !provider.Retryable(err) || ctx.Err() != nil || attempt >= maxRetries {
+			if held.Len() > 0 && (err == nil || !provider.Retryable(err) || attempt >= maxRetries) {
+				a.Events.Text(held.String())
+			}
 			return resp, err
 		}
 		wait := time.Duration(1<<attempt) * time.Second

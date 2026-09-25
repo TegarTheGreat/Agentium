@@ -900,3 +900,27 @@ func TestSanitizeCalls(t *testing.T) {
 		t.Fatalf("history must stay saveable: %v", err)
 	}
 }
+
+type flakyText struct{ n int }
+
+func (f *flakyText) Stream(ctx context.Context, req provider.Request, onText func(string)) (provider.Response, error) {
+	f.n++
+	if f.n == 1 {
+		onText("PARTIAL ")
+		return provider.Response{}, provider.ErrIncomplete
+	}
+	onText("whole answer")
+	return provider.Response{Text: "whole answer", StopReason: "stop"}, nil
+}
+
+func TestBufferTextOnRetry(t *testing.T) {
+	var got strings.Builder
+	a := &Agent{Client: &flakyText{}, Model: "m", BufferText: true}
+	a.Events.Text = func(d string) { got.WriteString(d) }
+	if _, err := a.call(context.Background(), provider.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != "whole answer" {
+		t.Fatalf("%q", got.String())
+	}
+}
