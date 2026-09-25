@@ -851,6 +851,9 @@ func run(args []string) error {
 		}
 	}
 	tools := tool.All()
+	if ap.enable && u.live && lineEditing && *prompt == "" {
+		tools = append(tools, tool.AskTool) // someone is there to answer
+	}
 	var mcps *mcpState
 	if len(cfg.MCP) > 0 {
 		mcps = startMCP(cfg.MCP, cwd, func(msg string) {
@@ -909,6 +912,13 @@ func run(args []string) error {
 		a.Agents = append(a.Agents, def)
 	}
 	a.Tools = append(a.Tools, a.TodoTool(), a.TaskTool())
+	if ap.enable && u.live && lineEditing && *prompt == "" {
+		a.Env.Ask = func(q string, opts []string) (string, error) {
+			ap.mu.Lock() // one question on screen at a time, approvals included
+			defer ap.mu.Unlock()
+			return u.askUser(q, opts)
+		}
+	}
 	a.Notes = ap.takeNotes
 	defer a.Env.KillJobs() // background servers do not outlive the session
 	if cfg.LSP == nil || *cfg.LSP {

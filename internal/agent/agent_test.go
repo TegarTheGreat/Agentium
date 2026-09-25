@@ -987,3 +987,31 @@ func TestNoChecksWanted(t *testing.T) {
 		}
 	}
 }
+
+// Other agents' tool names run as the matching tool here.
+func TestToolAliases(t *testing.T) {
+	a := newAgent(t, &script{steps: []func(provider.Request) (provider.Response, error){
+		calls(tc("1", "write", `{"file_path":"w.txt","content":"hello\n"}`),
+			tc("2", "Bash", `{"cmd":"echo ran"}`),
+			tc("3", "grep", `{"pattern":"hel+o","include":"*.txt"}`)),
+		func(provider.Request) (provider.Response, error) { return provider.Response{Text: "ok"}, nil },
+	}})
+	if _, err := a.Run(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Env.Root, "w.txt")); string(b) != "hello\n" {
+		t.Fatalf("write alias: %q", b)
+	}
+	var results []string
+	for _, m := range a.Messages {
+		if m.Role == provider.RoleTool {
+			results = append(results, m.Text)
+			if m.IsError {
+				t.Errorf("alias failed: %s", m.Text)
+			}
+		}
+	}
+	if len(results) != 3 || !strings.Contains(results[1], "ran") || !strings.Contains(results[2], "w.txt") {
+		t.Fatalf("results: %q", results)
+	}
+}

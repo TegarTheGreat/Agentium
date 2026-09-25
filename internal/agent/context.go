@@ -188,11 +188,27 @@ func elideArgs(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	changed := false
-	for k, v := range m {
-		if s, ok := v.(string); ok && len(s) > elideArgOver {
-			m[k] = strings.ToValidUTF8(s[:120], "") + fmt.Sprintf("…[elided %d chars]", len(s)-120)
-			changed = true
+	var shorten func(v any) any
+	shorten = func(v any) any {
+		switch x := v.(type) {
+		case string:
+			if len(x) > elideArgOver {
+				changed = true
+				return strings.ToValidUTF8(x[:120], "") + fmt.Sprintf("…[elided %d chars]", len(x)-120)
+			}
+		case map[string]any: // e.g. each of edit's edits
+			for k, e := range x {
+				x[k] = shorten(e)
+			}
+		case []any:
+			for i, e := range x {
+				x[i] = shorten(e)
+			}
 		}
+		return v
+	}
+	for k, v := range m {
+		m[k] = shorten(v)
 	}
 	if !changed {
 		return raw

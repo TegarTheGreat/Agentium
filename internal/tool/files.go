@@ -96,6 +96,11 @@ var readTool = Tool{
 		if env.alreadyShown(fmt.Sprintf("%s|%d|%d", p, a.Offset, a.Limit), p) {
 			return fmt.Sprintf("(unchanged since you read it earlier in this conversation: the same %s result is above; no need to read it again)", a.Path), nil
 		}
+		if isNotebook(p) {
+			if nb, err := parseNotebook(b); err == nil {
+				text = nb.render()
+			}
+		}
 		out := sliceLines(text, a.Offset, a.Limit)
 		if enc != encUTF8 {
 			out += fmt.Sprintf("\n(the file is %s, shown here as UTF-8; edit keeps its encoding)", enc)

@@ -22,6 +22,9 @@ import (
 // Env is shared by all tools in a session.
 type Env struct {
 	Root string
+	// Ask puts a question to the user (the ask tool); nil when no one can
+	// answer (one-shot runs, sub-agents).
+	Ask  func(question string, options []string) (string, error)
 	Gate *policy.Gate
 	// Vision: the model accepts images, so read attaches image files.
 	Vision bool

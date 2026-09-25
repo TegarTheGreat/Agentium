@@ -926,3 +926,76 @@ func sanitize(s string) string {
 		return r
 	}, s)
 }
+
+// askUser shows a question from the model (the ask tool) and returns the
+// answer: an option picked by its number, the user's own words, or ""
+// when skipped (Esc).
+func (u *ui) askUser(question string, options []string) (string, error) {
+	u.mu.Lock()
+	u.paused = true
+	u.lastPerm = ""
+	u.clearLive()
+	u.endLine()
+	u.afterTool = false
+	width := termWidth(os.Stderr)
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n%s %s\n", u.paint(cCyan, "?"), u.paint(cBold, "The agent asks"))
+	for _, row := range wrapRows(sanitize(question), width-6) {
+		b.WriteString("  " + row + "\n")
+	}
+	b.WriteString("\n")
+	for i, o := range options {
+		fmt.Fprintf(&b, "  %s  %s\n", u.paint(cGreen, fmt.Sprint(i+1)), sanitize(o))
+	}
+	fmt.Fprintf(&b, "  %s  %s\n", u.paint(cGreen, "o"), "my own answer (type it)")
+	fmt.Fprintf(&b, "  %s  %s\n", u.paint(cDim, "esc"), u.paint(cDim, "skip: let the agent decide"))
+	b.WriteString("  " + u.paint(cDim, "press a key") + " " + u.paint(cYellow, "›") + " ")
+	fmt.Fprint(os.Stderr, b.String())
+	u.mu.Unlock()
+	u.inOffice(func(o *office) { o.setLead(actWait, "") })
+	if f := activeFS(); f != nil {
+		f.setBusy(true, u.paint(cCyan, "?")+" The agent asks you something", "", nil)
+		f.setAsking(true)
+		defer f.setAsking(false)
+	}
+	u.setTitle("needs you")
+	u.notify("Agentium asks: " + firstLine(question))
+	asked := time.Now()
+	defer func() {
+		u.setTitle("working")
+		u.inOffice(func(o *office) { o.setLead(actThink, "") })
+		u.mu.Lock()
+		u.paused = false
+		u.approvalWait += time.Since(asked)
+		held := u.held
+		u.held = nil
+		for _, l := range held {
+			fmt.Fprintln(os.Stderr, l)
+		}
+		u.mu.Unlock()
+	}()
+	u.drainKeys()
+	for {
+		k, err := u.nextKey()
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case k == "\x1b" || k == "\x03":
+			fmt.Fprintln(os.Stderr, u.paint(cDim, "skipped"))
+			return "", nil
+		case k == "o" || k == "O" || len(options) == 0 && (k == "\r" || k == "\n"):
+			fmt.Fprint(os.Stderr, "\n  "+u.paint(cInk, "your answer:")+" ")
+			reply, ok := u.readReply()
+			if !ok {
+				fmt.Fprintln(os.Stderr, u.paint(cDim, "  skipped"))
+				return "", nil
+			}
+			return reply, nil
+		case len(k) == 1 && k[0] >= '1' && int(k[0]-'0') <= len(options):
+			pick := options[k[0]-'1']
+			fmt.Fprintln(os.Stderr, u.paint(cGreen, sanitize(pick)))
+			return pick, nil
+		}
+	}
+}

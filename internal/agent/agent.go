@@ -555,6 +555,13 @@ func (a *Agent) runTools(ctx context.Context, calls []provider.ToolCall) []provi
 		wg.Add(1)
 		go func(i int, c provider.ToolCall) {
 			defer wg.Done()
+			if _, known := byName[c.Name]; !known && c.BadArgs == "" {
+				// Another agent's tool name: run it as ours (the history keeps
+				// what the model sent).
+				if ac, ok := resolveAlias(c, func(n string) bool { _, ok := byName[n]; return ok }); ok {
+					c = ac
+				}
+			}
 			if a.Events.ToolStart != nil {
 				a.Events.ToolStart(c)
 			}

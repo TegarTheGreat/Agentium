@@ -7,6 +7,10 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 ### Added
 
 - **`web_search` tool**, separate from `fetch`: results limited to or excluding sites (`domains`, `exclude`), up to 20 results, and a chain of engines tried in turn: Brave, Tavily, Exa, Serper (Google) or SearXNG when configured, then DuckDuckGo and Bing without a key. Results from key-free pages are kept only when they are about the query (Bing sends unrelated pages to requests it takes for bots). `agentium login brave|tavily|exa|serper` stores a search key like a provider key.
+- **`ask` tool**: in an interactive session the model can ask you a question mid-task, with options you pick by number (or your own answer, or Esc to let it decide), and carry on with the answer.
+- **`edit` takes several changes to one file** in one call (`edits`), applied in order, all or none.
+- **Jupyter notebooks**: `read` shows cells numbered with their type and outputs; `edit` changes text inside a cell as read shows it, or a whole cell by number (replace, insert, delete), clears the stale outputs of an edited code cell and writes the file as Jupyter does.
+- Calls to tool names other agents use (`write`, `grep`, `glob`, `ls`, `web_fetch`, `str_replace`, `run_command`, `Bash` …) run as the matching tool instead of failing as unknown.
 - **`fetch` reads pages properly**: the main content as Markdown with links, fenced code blocks (whitespace and language kept), lists and tables, without navigation, footers, forms or hidden elements; JSON pretty-printed; PDFs as text; GitHub file pages as the raw file; a note when a redirect changes the host. Long pages come in parts (`offset`), the whole text is saved to a file to grep, and `find` returns only the sections that mention some words. Pages are cached for 15 minutes, so paging does not download again.
 
 ## [0.25.1] - 2026-09-25

@@ -1259,3 +1259,68 @@ func TestFetchPagesFindJSON(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestEditMultiPart(t *testing.T) {
+	e := env(t)
+	write(t, e, "m.py", "a = 1\nb = 2\nc = 3\n")
+	call(t, readTool, e, `{"path":"m.py"}`)
+	if _, err := call(t, editTool, e, `{"path":"m.py","edits":[{"old":"a = 1","new":"a = 10"},{"old":"c = 3","new":"c = 30"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(e.Root, "m.py"))
+	if string(b) != "a = 10\nb = 2\nc = 30\n" {
+		t.Fatalf("got %q", b)
+	}
+	// One part failing changes nothing.
+	_, err := call(t, editTool, e, `{"path":"m.py","edits":[{"old":"a = 10","new":"a = 11"},{"old":"zzz","new":"y"}]}`)
+	if err == nil || !strings.Contains(err.Error(), "edits[1]") || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.Root, "m.py")); string(b) != "a = 10\nb = 2\nc = 30\n" {
+		t.Fatalf("partial write: %q", b)
+	}
+	if _, err := call(t, editTool, e, `{"path":"m.py","old":"a","new":"b","edits":[{"old":"x","new":"y"}]}`); err == nil {
+		t.Fatal("old/new together with edits must be refused")
+	}
+}
+
+func TestNotebookReadEdit(t *testing.T) {
+	e := env(t)
+	nb := `{
+ "cells": [
+  {"cell_type": "markdown", "metadata": {}, "source": ["# Title\n", "Some notes"]},
+  {"cell_type": "code", "execution_count": 3, "metadata": {}, "outputs": [{"output_type": "stream", "name": "stdout", "text": ["hello\n"]}], "source": ["x = 1\n", "print('hello')"]}
+ ],
+ "metadata": {"language_info": {"name": "python"}},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}`
+	write(t, e, "n.ipynb", nb)
+	out, err := call(t, readTool, e, `{"path":"n.ipynb"}`)
+	if err != nil || !strings.Contains(out, "── cell 0 · markdown") || !strings.Contains(out, "── cell 1 · code · python · [3]") || !strings.Contains(out, "print('hello')") || !strings.Contains(out, "── output") || strings.Contains(out, `"cell_type"`) {
+		t.Fatalf("read: %v\n%s", err, out)
+	}
+	// old/new as read shows it: found in its cell, outputs cleared.
+	if _, err := call(t, editTool, e, `{"path":"n.ipynb","old":"x = 1","new":"x = 2"}`); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(e.Root, "n.ipynb"))
+	if !strings.Contains(string(b), `"x = 2\n"`) || strings.Contains(string(b), "hello\\n\"]") || !strings.Contains(string(b), `"execution_count": null`) {
+		t.Fatalf("after edit:\n%s", b)
+	}
+	if !json.Valid(b) || !strings.HasPrefix(string(b), "{\n \"cells\"") {
+		t.Fatalf("not Jupyter's layout:\n%s", b)
+	}
+	call(t, readTool, e, `{"path":"n.ipynb"}`)
+	if _, err := call(t, editTool, e, `{"path":"n.ipynb","cell":1,"cell_mode":"insert","cell_type":"markdown","new":"## Middle"}`); err != nil {
+		t.Fatal(err)
+	}
+	call(t, readTool, e, `{"path":"n.ipynb"}`)
+	if _, err := call(t, editTool, e, `{"path":"n.ipynb","cell":0,"cell_mode":"delete"}`); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = call(t, readTool, e, `{"path":"n.ipynb"}`)
+	if !strings.Contains(out, "1\t── cell 0 · markdown\n2\t## Middle") || !strings.Contains(out, "── cell 1 · code") || strings.Contains(out, "# Title") {
+		t.Fatalf("insert/delete:\n%s", out)
+	}
+}

@@ -254,18 +254,21 @@ Subscription logins are offered only where the provider's terms allow third-part
 
 ## Tools
 
-The model has eight tools, plus any tools from configured MCP servers.
+The model has nine tools (eight in one-shot runs, where `ask` has no one to ask), plus any tools from configured MCP servers.
 
 | Tool | What it does |
 |---|---|
-| `read` | Read files (streams large ones, rejects binary), show a directory as a gitignore-aware tree, outline a file's definitions, or produce a ranked map of a large codebase within ~2k tokens |
-| `edit` | Create or change files: tolerant matching (CRLF, whitespace, indentation), lint-gated, atomic |
+| `read` | Read files (streams large ones, rejects binary; PDFs as text, notebooks as numbered cells with outputs), show a directory as a gitignore-aware tree, outline a file's definitions, or produce a ranked map of a large codebase within ~2k tokens |
+| `edit` | Create or change files: tolerant matching (CRLF, whitespace, indentation), lint-gated, atomic; several changes to one file in one call (all or none); Jupyter notebooks cell by cell; UTF-16 and Latin-1 files keep their encoding |
 | `bash` | Run commands in the sandbox; background jobs with input, output and stop controls; pseudo-terminal mode for interactive programs |
 | `search` | Text search, symbol definitions (`Type.Method`), references with their enclosing function, and past memory |
 | `fetch` | Read a URL as Markdown: the main content with links and code blocks, JSON pretty-printed, PDFs as text, GitHub file links as the raw file. Long pages come in parts (`offset`), `find` returns only the sections that mention some words, and pages are cached for 15 minutes |
 | `web_search` | Search the web, optionally limited to or excluding sites; see below for engines |
 | `todo` | Keep a checklist for multi-step work |
+| `ask` | Ask you a question mid-task, with options to pick by number or your own answer (interactive sessions) |
 | `task` | Hand a self-contained job to a sub-agent with a fresh context; several can run in parallel, optionally read-only |
+
+Tool names other agents use (`write`, `grep`, `glob`, `ls`, `web_fetch`, `str_replace`, `run_command` …) run as the matching tool, so a model trained elsewhere does not stumble.
 
 **Web search.** Engines with a key are tried first: `agentium login brave` (or `tavily`, `exa`, `serper`) stores one, as do the `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY` and `SERPER_API_KEY` variables; `SEARXNG_URL` points at your own SearXNG. Without a key, DuckDuckGo and then Bing result pages are used, keeping only results that are about the query; they can refuse or degrade (often from cloud machines), so a key is the reliable choice.
 

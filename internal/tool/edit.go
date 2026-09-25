@@ -22,17 +22,21 @@ import (
 
 var editTool = Tool{
 	Def: providerDef("edit",
-		"Replace text in a file. old is the file's text without read's line numbers and must match once (whitespace/indent differences are tolerated) unless all=true. Empty old writes the whole file. Edits that introduce a syntax error are rejected.",
-		`{"type":"object","required":["path","new"],"properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"},"all":{"type":"boolean"}}}`),
+		"Replace text in a file. old is the file's text without read's line numbers and must match once (whitespace/indent differences are tolerated) unless all=true. Empty old writes the whole file. Several changes to one file: edits=[{old,new,all},...], applied in order, all or none. Notebooks (.ipynb): old/new work inside cells as read shows them, or cell=N with cell_mode replace (default), insert or delete. Edits that introduce a syntax error are rejected.",
+		`{"type":"object","required":["path"],"properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"},"all":{"type":"boolean"},"edits":{"type":"array","items":{"type":"object","required":["old","new"],"properties":{"old":{"type":"string"},"new":{"type":"string"},"all":{"type":"boolean"}}}},"cell":{"type":"integer"},"cell_mode":{"type":"string","enum":["replace","insert","delete"]},"cell_type":{"type":"string","enum":["code","markdown"]}}}`),
 	Run: runEdit,
 }
 
 func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error) {
 	var a struct {
-		Path string `json:"path"`
-		Old  string `json:"old"`
-		New  string `json:"new"`
-		All  bool   `json:"all"`
+		Path     string     `json:"path"`
+		Old      string     `json:"old"`
+		New      *string    `json:"new"`
+		All      bool       `json:"all"`
+		Edits    []editPart `json:"edits"`
+		Cell     *int       `json:"cell"`
+		CellMode string     `json:"cell_mode"`
+		CellType string     `json:"cell_type"`
 	}
 	if err := decode(raw, &a); err != nil {
 		return "", err
@@ -40,13 +44,30 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	if a.Path == "" {
 		return "", errors.New("path is required")
 	}
-	// Text copied from read output with its line numbers still on.
-	if numbered(a.Old) {
-		a.Old = stripNumbers(a.Old)
-		if numbered(a.New) {
-			a.New = stripNumbers(a.New)
+	parts := a.Edits
+	switch {
+	case len(parts) > 0 && (a.New != nil || a.Old != ""):
+		return "", errors.New("give either old/new or edits, not both")
+	case len(parts) == 0 && a.New == nil && a.CellMode == "delete":
+		parts = []editPart{{Old: a.Old}} // deleting a cell needs no text
+	case len(parts) == 0 && a.New == nil:
+		return "", errors.New("new is required (or edits)")
+	case len(parts) == 0:
+		parts = []editPart{{Old: a.Old, New: *a.New, All: a.All}}
+	}
+	for i := range parts {
+		if len(parts) > 1 && parts[i].Old == "" {
+			return "", fmt.Errorf("edits[%d]: old is empty (writing a whole file is a single edit)", i)
+		}
+		// Text copied from read output with its line numbers still on.
+		if numbered(parts[i].Old) {
+			parts[i].Old = stripNumbers(parts[i].Old)
+			if numbered(parts[i].New) {
+				parts[i].New = stripNumbers(parts[i].New)
+			}
 		}
 	}
+	a.Old = parts[0].Old
 	p := real(env.abs(a.Path))
 	if env.Gate != nil {
 		if ok, why := env.Gate.Write(p); !ok {
@@ -97,17 +118,37 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	}
 	var after, how string
 	n := 1
-	if a.Old == "" {
-		after = a.New
+	if isNotebook(p) && exists && (a.Cell != nil || a.Old != "") {
+		if len(parts) > 1 {
+			return "", errors.New("in a notebook, make one change per edit (old/new or cell)")
+		}
+		data, h, err := editNotebook(before, parts[0].Old, parts[0].New, parts[0].All, a.Cell, a.CellMode, a.CellType)
+		if err != nil {
+			return "", err
+		}
+		after, how = string(data), h
+	} else if a.Old == "" {
+		after = parts[0].New
 	} else {
 		if !exists {
 			return "", fmt.Errorf("%s does not exist; to create it, omit old", a.Path)
 		}
-		var err error
-		after, n, how, err = replace(text, a.Old, a.New, a.All)
-		if err != nil {
-			return "", err
+		after, n = text, 0
+		var hows []string
+		for i, part := range parts {
+			next, k, h, err := replace(after, part.Old, part.New, part.All)
+			if err != nil {
+				if len(parts) > 1 {
+					return "", fmt.Errorf("edits[%d] (nothing was changed): %w", i, err)
+				}
+				return "", err
+			}
+			after, n = next, n+k
+			if h != "" {
+				hows = append(hows, h)
+			}
 		}
+		how = strings.Join(uniqStrings(hows), "; ")
 	}
 	if exists && after == text {
 		return "", errors.New("no change: new text equals the current content")
@@ -444,6 +485,25 @@ func runPostEdit(env *Env, path string) string {
 		return ""
 	}
 	return "\n" + strings.Join(notes, "\n")
+}
+
+// editPart is one replacement of a multi-part edit.
+type editPart struct {
+	Old string `json:"old"`
+	New string `json:"new"`
+	All bool   `json:"all"`
+}
+
+func uniqStrings(ss []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // writeIfUnchanged writes data to p unless p no longer holds before

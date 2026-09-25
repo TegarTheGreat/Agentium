@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,6 +101,17 @@ func editDiff(root string, args []byte) (path string, lines []diffLine, start in
 // write is compared with the file as it is now, so the preview shows what
 // would be deleted too.
 func editDiffAt(root string, args []byte, preview bool) (path string, lines []diffLine, start int) {
+	if parts := editParts(args); len(parts) > 0 {
+		// A multi-part edit: its parts' diffs one after another.
+		for i, pa := range parts {
+			p, l, st := editDiffAt(root, pa, preview)
+			if i == 0 {
+				path, start = p, st
+			}
+			lines = append(lines, l...)
+		}
+		return path, lines, start
+	}
 	var a struct{ Path, Old, New string }
 	if jsonUnmarshal(args, &a) != nil || a.Path == "" {
 		return "", nil, 0
@@ -142,6 +154,13 @@ func (u *ui) diffCard(c []byte, width int) []string {
 }
 
 func (u *ui) diffCardAt(c []byte, width int, preview bool) []string {
+	if parts := editParts(c); len(parts) > 0 {
+		var out []string
+		for _, pa := range parts {
+			out = append(out, u.diffCardAt(pa, width, preview)...)
+		}
+		return out
+	}
 	_, lines, start := editDiffAt(u.cwd, c, preview)
 	if len(lines) == 0 {
 		return nil
@@ -240,4 +259,24 @@ func (u *ui) outputTail(out string, width int) []string {
 	}
 	rows = u.gutter(rows)
 	return rows
+}
+
+// editParts splits an edit call with edits=[...] into single-edit
+// arguments ({path, old, new} each); nil for an ordinary edit.
+func editParts(args []byte) [][]byte {
+	var a struct {
+		Path  string
+		Edits []struct{ Old, New string }
+	}
+	if jsonUnmarshal(args, &a) != nil || len(a.Edits) == 0 {
+		return nil
+	}
+	var out [][]byte
+	for _, e := range a.Edits {
+		b, err := json.Marshal(map[string]string{"path": a.Path, "old": e.Old, "new": e.New})
+		if err == nil {
+			out = append(out, b)
+		}
+	}
+	return out
 }
