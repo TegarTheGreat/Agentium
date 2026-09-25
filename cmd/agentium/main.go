@@ -74,6 +74,8 @@ Flags:
   --json              one-shot mode emitting JSON Lines events on stdout (for CI and scripts)
   --max-cost USD      stop once the session has cost this much (needs a known price)
   --add-dir PATH      another working directory the agent may change (repeatable; config "dirs")
+  --allow RULE        run this without asking, e.g. "bash(go test*)", "edit(src/**)" (repeatable)
+  --deny RULE         never allow this, in any mode, e.g. "bash(rm -rf*)" (repeatable; config "permissions")
   --worktree NAME     work in a separate git worktree (branch agentium/NAME) so sessions don't collide
   --best-of N --check CMD   run N attempts in parallel git worktrees, apply the passing one with the smallest diff
   --max-turns N       stop after N model steps (default: none in a session, 100 for -p)
@@ -573,6 +575,9 @@ func run(args []string) error {
 	worktree := fs.String("worktree", "", "")
 	var addDirs dirList
 	fs.Var(&addDirs, "add-dir", "")
+	var allowRules, denyRules dirList
+	fs.Var(&allowRules, "allow", "")
+	fs.Var(&denyRules, "deny", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -704,6 +709,8 @@ func run(args []string) error {
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
+	gate.SetRules(cfg.Permissions)
+	gate.SetRules(policy.Rules{Allow: allowRules, Deny: denyRules})
 	broadRoot := tooBroad(cwd)
 	if broadRoot {
 		// The home folder (or /) as the project would make the sandbox and

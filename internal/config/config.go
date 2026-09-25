@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tegarthegreat/agentium/internal/fsx"
+	"github.com/tegarthegreat/agentium/internal/policy"
 )
 
 // ProviderConf defines or overrides a provider.
@@ -49,13 +50,17 @@ type Config struct {
 	// {"ctrl+x": "/diff", "f5": "run the tests"}.
 	Keys map[string]string `json:"keys,omitempty"`
 	// Dirs are more working directories (like --add-dir).
-	Dirs      []string `json:"dirs,omitempty"`
-	Mode      string   `json:"mode,omitempty"`  // ask | auto | yolo
-	UI        string   `json:"ui,omitempty"`    // fullscreen (default) | classic
-	Theme     string   `json:"theme,omitempty"` // auto (default) | dark | light
-	Mouse     *bool    `json:"mouse,omitempty"` // full screen: wheel scrolling (default); false keeps native selection
-	MaxTokens int      `json:"max_tokens,omitempty"`
-	MaxTurns  int      `json:"max_turns,omitempty"`
+	Dirs []string `json:"dirs,omitempty"`
+	// Permissions are standing rules, as in Claude Code: {"allow":
+	// ["bash(go test*)", "edit(src/**)"], "deny": ["bash(rm -rf*)"]}. A deny
+	// always wins; an allow skips the question.
+	Permissions policy.Rules `json:"permissions,omitempty"`
+	Mode        string       `json:"mode,omitempty"`  // ask | auto | yolo
+	UI          string       `json:"ui,omitempty"`    // fullscreen (default) | classic
+	Theme       string       `json:"theme,omitempty"` // auto (default) | dark | light
+	Mouse       *bool        `json:"mouse,omitempty"` // full screen: wheel scrolling (default); false keeps native selection
+	MaxTokens   int          `json:"max_tokens,omitempty"`
+	MaxTurns    int          `json:"max_turns,omitempty"`
 	// FetchPrivate lets the fetch tool reach localhost/private networks.
 	FetchPrivate bool `json:"fetch_private,omitempty"`
 	// Checkpoints snapshot the workspace before each changing turn so it

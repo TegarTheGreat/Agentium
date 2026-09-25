@@ -4,6 +4,33 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- **Permission rules**, as in Claude Code: `"permissions": {"allow": [...], "deny": [...]}` in the config, or `--allow` / `--deny` on the command line, with rules like `bash(go test*)`, `edit(src/**)`, `read(secrets/**)` and `mcp(github__*)`. A deny wins in every mode, yolo included. Every part of a command line must be allowed, and a command hiding another in `$(…)` is never auto-allowed.
+- `agentium update` tests the new binary before it replaces the old one and keeps the old one: `agentium update --rollback` goes back.
+- A crash writes its details to `~/.agentium/crash/` and points to `/bug`.
+
+### Reliability
+
+Found by fault-injection tests (a scripted fake provider), a gap analysis and long real tasks:
+
+- A tool call with broken JSON arguments, a repeated id or no name no longer makes the conversation impossible to save. Save errors are shown.
+- The conversation is saved after every tool round, so a crash keeps the finished steps. Closing the terminal (SIGHUP/SIGTERM) stops the running command, saves, then exits. A history with unanswered calls is repaired on resume.
+- Two agentium processes can no longer overwrite the same conversation: the second continues in a copy. A damaged session file is reported instead of `-c` quietly continuing an older conversation.
+- Undo covers files the project tracks in folders the snapshot skips (`build/`, `dist/` …), and ignored files the agent edits or creates.
+- Search stops early: a pattern matching millions of lines took 3.7 GB, now about 10 MB. Reading a 286 MB single-line file took 630 MB, now about 10 MB. A line just under 60 KB no longer panics `read`.
+- A provider error sent with status 200 (a quota message) is shown instead of retried as "stream ended early". A reply that never stops ends at 4 MB. A server that never answers is retried after 2 minutes instead of 5.
+- With output piped to a file, a retried reply no longer leaves the failed attempt's text in it.
+- A fuzzy edit changes only the matched lines: files mixing LF and CRLF keep their endings, and a byte-order mark is kept.
+- Editing a symlink whose target is missing no longer replaces the link. Config and auth errors name the file, line and column. A 1-column terminal no longer panics. When undo cannot work (read-only or full disk), a line says so.
+- `bash` accepts `command` as well as `cmd`.
+
+### Security
+
+- Starting agentium in your home folder or `/` made the whole disk the workspace. There, every change now asks, undo is off, and writes to shell startup files, credentials and agentium's own folder always ask.
+- Without an OS sandbox (Windows, older kernels, `--no-sandbox`), auto mode asks before a command that may change things.
+- The Linux sandbox blocks unix-socket connections unless network is approved: docker, the user's D-Bus/systemd and ssh-agent were reachable. On macOS, docker and ssh-agent sockets are blocked.
+
 ### Changed
 
 - **The office is redrawn.** Agentium now sits in a small room across the whole side panel: a window whose sky follows your clock (day, dusk, night with stars), a desk with a keyboard and a steaming mug, a plant, and a monitor that shows the work: code being written, a terminal, a page, a browser, a check mark or a cross. Characters have outlines and shading, and hold a page, clipboard, magnifier or folder as they work. Staff (sub-agents) get their own desks, two side by side with their names under them.

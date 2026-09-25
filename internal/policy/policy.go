@@ -311,6 +311,8 @@ type Gate struct {
 	// workspace: in auto mode a command that may change things asks.
 	Unconfined bool
 
+	allow, deny []rule // the user's permission rules (SetRules)
+
 	mu sync.RWMutex
 }
 
@@ -394,8 +396,15 @@ const planReason = "plan mode is read-only; propose the change in your plan inst
 // Bash reports whether cmd may run. In plan mode only read-only commands
 // pass; the shell tool relaxes that when a sandbox enforces read-only.
 func (g *Gate) Bash(cmd string) (bool, string) {
+	deny, allowed := g.ruleFor("bash", cmd)
+	if deny != "" {
+		return false, "blocked by your permission rule " + deny
+	}
 	mode := g.GetMode()
 	if mode == Yolo {
+		return true, ""
+	}
+	if allowed && mode != Plan {
 		return true, ""
 	}
 	if mode == Plan {
@@ -419,8 +428,15 @@ func (g *Gate) Bash(cmd string) (bool, string) {
 
 // Write reports whether path may be written.
 func (g *Gate) Write(path string) (bool, string) {
+	deny, allowed := g.ruleFor("edit", path)
+	if deny != "" {
+		return false, "blocked by your permission rule " + deny
+	}
 	mode := g.GetMode()
 	if mode == Yolo {
+		return true, ""
+	}
+	if allowed && mode != Plan {
 		return true, ""
 	}
 	if mode == Plan {
@@ -488,6 +504,9 @@ var secretPath = regexp.MustCompile(`/\.(ssh|aws|gnupg|kube|docker|netrc|npmrc|p
 // cloud credentials, ...) need approval: their content would be sent to
 // the model provider.
 func (g *Gate) Read(path string) (bool, string) {
+	if deny, _ := g.ruleFor("read", path); deny != "" {
+		return false, "blocked by your permission rule " + deny
+	}
 	if g.GetMode() == Yolo || !secretPath.MatchString(filepath.ToSlash(path)) && !dotEnv(path) {
 		return true, ""
 	}
@@ -498,6 +517,13 @@ func (g *Gate) Read(path string) (bool, string) {
 // them; in auto mode the user opted in by configuring the server. Plan
 // mode asks too, since an MCP tool may change things.
 func (g *Gate) External(name string) (bool, string) {
+	deny, allowed := g.ruleFor("mcp", name)
+	if deny != "" {
+		return false, "blocked by your permission rule " + deny
+	}
+	if allowed && g.GetMode() != Plan {
+		return true, ""
+	}
 	switch g.GetMode() {
 	case Ask:
 		return g.askWhy("mcp: "+name, "ask mode")

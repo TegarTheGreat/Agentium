@@ -141,6 +141,8 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 | **More commands** | `!command` runs a shell command yourself (the agent sees the output with your next message) · `/diff` shows what changed · `/context` shows what fills the context window · `/compact` summarizes older conversation · `/btw <question>` asks on the side without adding to the conversation · `/theme` switches the palette |
 | **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds to before one of your messages (conversation, files or both) · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
 
+**Permission rules.** `"permissions": {"allow": ["bash(go test*)", "bash(npm run *)", "edit(src/**)"], "deny": ["bash(rm -rf*)", "edit(**/.env*)", "read(secrets/**)"]}` in the config (or `--allow` / `--deny`, repeatable, for scripts) set standing answers, as in Claude Code. A deny always wins, in every mode including yolo. An allow skips the question. Every part of a command line (`a && b | c`) must be allowed, and one with `$(…)` or backquotes is never auto-allowed. Kinds: `bash`, `edit`, `read`, `mcp`; `*` matches anything in a command, and in paths `*` stays within a folder while `**` crosses folders.
+
 **More folders.** `agentium --add-dir ../lib` (repeatable, or `"dirs"` in the config, or `/add-dir` in a session) lets the agent work in another directory as freely as in the current one (git internals there still ask). `/undo` and `/rewind` cover the main folder only. Your home folder and `/` cannot be added.
 
 **Readable and clickable.** `Ctrl-O` also shows what the model thought before each step. File names on Read and Edit lines are hyperlinks: ctrl- or cmd-click opens them in terminals that support OSC 8.
@@ -172,7 +174,7 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 | `agentium mcp [list\|login\|logout <name>]` | Manage remote MCP servers and their login |
 | `agentium acp [-m model]` | Serve the Agent Client Protocol on stdio |
 | `agentium bench [-m model]` | Measure performance; with `-m`, run live tasks |
-| `agentium update` | Update to the latest release |
+| `agentium update` | Update to the latest release (tested before it replaces the binary; `--rollback` goes back) |
 
 Set `AGENTIUM_RAW=1` or `NO_COLOR` for unrendered output. Run `agentium --help` for every flag.
 
@@ -221,6 +223,7 @@ Subscription logins are offered only where the provider's terms allow third-part
   "suggest": true,
   "reduce_motion": false,
   "keys": { "ctrl+x": "/diff", "f5": "run the tests" },
+  "permissions": { "allow": ["bash(go test*)"], "deny": ["bash(rm -rf*)"] },
   "hooks": {
     "post_edit": ["gofmt -w {path}"],
     "stop": ["notify-send agentium done"],
