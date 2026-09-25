@@ -699,11 +699,11 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n%s  %s ",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), body.String(),
-		u.paint(cDim, "[y] yes  [a] always "+scope+keepOpt+"  [n] no  [t] no, and say why ›"))
+		u.paint(cDim, "[y] yes  [a] always "+scope+keepOpt+"  [c] yes, and say something  [n] no  [t] no, and say why ›"))
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
 	if f := activeFS(); f != nil {
-		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always"+keepKey+" · n no · t tell why", "", nil)
+		f.setBusy(true, u.paint(cYellow, "▲")+" Waiting for your answer · y yes · a always"+keepKey+" · c yes + note · n no · t tell why", "", nil)
 	}
 	u.setTitle("needs you")
 	u.notify("Agentium needs your answer: " + title)
@@ -739,7 +739,7 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 		gap := time.Since(last)
 		last = time.Now()
 		ans := strings.ToLower(k)
-		isAnswer := ans == "y" || ans == "a" || ans == "p" || ans == "n" || ans == "t" || ans == "\r" || ans == "\n"
+		isAnswer := ans == "y" || ans == "a" || ans == "p" || ans == "n" || ans == "t" || ans == "c" || ans == "\r" || ans == "\n"
 		if gap >= 400*time.Millisecond && isAnswer {
 			if next, ok := u.keyWithin(400 * time.Millisecond); !ok {
 				switch ans {
@@ -759,6 +759,9 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 				case "t":
 					fmt.Fprint(os.Stderr, u.paint(cRed, "no")+"\n  "+u.paint(cInk, "tell Agentium:")+" ")
 					return "t:" + u.readReply(), nil
+				case "c":
+					fmt.Fprint(os.Stderr, u.paint(cGreen, "yes")+"\n  "+u.paint(cInk, "and tell Agentium:")+" ")
+					return "c:" + u.readReply(), nil
 				default:
 					fmt.Fprintln(os.Stderr, u.paint(cRed, "no"))
 					return "n", nil

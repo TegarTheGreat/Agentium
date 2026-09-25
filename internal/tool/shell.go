@@ -89,7 +89,9 @@ var bashTool = Tool{
 		if env.Sandbox != nil {
 			cfg := *env.Sandbox
 			if plan {
-				cfg.Write = sandbox.ReadOnly(cfg.Write, env.Root)
+				for _, r := range env.roots() {
+					cfg.Write = sandbox.ReadOnly(cfg.Write, r)
+				}
 			}
 			if a.Net {
 				ok, why := true, ""
@@ -128,13 +130,13 @@ var bashTool = Tool{
 		}
 		var guard *gitGuard
 		if guarded {
-			guard = snapGit(env.Root)
+			guard = snapGit(env.roots()...)
 		}
 		out, err := runShell(ctx, env.Root, a.Cmd, time.Duration(t)*time.Second, box, env.PassEnv)
 		out += late + guard.check()
 		if guarded {
 			env.mu.Lock()
-			env.gitg = snapGit(env.Root)
+			env.gitg = snapGit(env.roots()...)
 			env.mu.Unlock()
 		}
 		if box != nil && err == nil && sandboxHint.MatchString(out) {

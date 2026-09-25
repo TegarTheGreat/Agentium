@@ -107,6 +107,14 @@ func (e *Env) markSeen(p string) {
 	}
 }
 
+// roots are the workspace and the directories the user added.
+func (e *Env) roots() []string {
+	if e.Gate == nil {
+		return []string{e.Root}
+	}
+	return append([]string{e.Root}, e.Gate.Dirs()...)
+}
+
 // Child returns an Env for a sub-agent: same workspace, sandbox and
 // settings, its own view of what was read (it has its own context) and
 // its own jobs. gate may differ (read-only exploration). Checkpointing

@@ -14,6 +14,11 @@ import (
 // handle instead ("" when vim consumed it).
 func (e *editor) vimKey(k string) string {
 	if !e.vimNormal {
+		// Esc then a key typed quickly arrives as one Alt+key sequence.
+		if len(k) == 2 && k[0] == 0x1b && k[1] != '[' && k[1] != 'O' && len(e.sugg) == 0 && len(e.buf) > 0 {
+			e.vimKey("\x1b")
+			return e.vimKey(k[1:])
+		}
 		if k == "\x1b" && len(e.sugg) == 0 && len(e.buf) > 0 {
 			e.vimNormal = true
 			if e.pos > 0 && e.pos == len(e.buf) {
@@ -32,7 +37,7 @@ func (e *editor) vimKey(k string) string {
 	if op := e.vimPending; op != "" {
 		e.vimPending = ""
 		if op == "r" {
-			if r := []rune(k); len(r) == 1 && r[0] >= 0x20 && e.pos < len(e.buf) {
+			if r := []rune(k); len(r) == 1 && r[0] >= 0x20 && e.pos < e.lineEnd(e.pos) {
 				e.buf[e.pos] = r[0]
 				changed()
 			}
@@ -55,6 +60,7 @@ func (e *editor) vimKey(k string) string {
 			}
 		case "w", "e":
 			j = e.wordEnd(e.pos, k == "w" && op != "c")
+			j = min(j, max(e.lineEnd(e.pos), e.pos+1)) // an operator stays on its line
 		case "b":
 			i = e.wordBack(e.pos)
 		case "$":
@@ -64,11 +70,14 @@ func (e *editor) vimKey(k string) string {
 		default:
 			return "" // not a motion: the operator is dropped
 		}
+		linewise := k == string(op[0])
 		if op == "y" {
 			e.killed = e.capture(e.buf[i:j])
+			e.killedLine = linewise
 			return ""
 		}
 		e.cut(i, j)
+		e.killedLine = linewise && op == "d"
 		changed()
 		if op == "c" {
 			e.vimNormal = false
@@ -81,7 +90,7 @@ func (e *editor) vimKey(k string) string {
 		e.vimNormal = false
 	case "a":
 		e.vimNormal = false
-		if e.pos < len(e.buf) {
+		if e.pos < e.lineEnd(e.pos) {
 			e.pos++
 		}
 	case "I":
@@ -124,8 +133,12 @@ func (e *editor) vimKey(k string) string {
 	case "w":
 		e.pos = e.wordEnd(e.pos, true)
 	case "e":
-		if e.pos+1 < len(e.buf) {
-			e.pos = max(e.wordEnd(e.pos+1, false)-1, e.pos)
+		p := e.pos + 1
+		for p < len(e.buf) && unicode.IsSpace(e.buf[p]) {
+			p++
+		}
+		if p < len(e.buf) {
+			e.pos = max(e.wordEnd(p, false)-1, e.pos)
 		}
 	case "b":
 		e.pos = e.wordBack(e.pos)
@@ -163,15 +176,30 @@ func (e *editor) vimKey(k string) string {
 		e.vimNormal = false
 	case "p", "P":
 		if len(e.killed.buf) > 0 {
-			if k == "p" && e.pos < len(e.buf) {
-				e.pos++
+			text := string(e.restore(e.killed))
+			if e.killedLine {
+				// A whole line goes below (p) or above (P) this one.
+				text = strings.TrimSuffix(strings.TrimPrefix(text, "\n"), "\n")
+				if k == "p" {
+					e.pos = e.lineEnd(e.pos)
+					e.insert("\n" + text)
+					e.pos -= len([]rune(text))
+				} else {
+					e.pos = e.lineStart(e.pos)
+					e.insert(text + "\n")
+					e.pos = e.lineStart(e.pos - 1)
+				}
+			} else {
+				if k == "p" && e.pos < e.lineEnd(e.pos) {
+					e.pos++
+				}
+				e.insert(text)
+				e.pos--
 			}
-			e.insert(string(e.restore(e.killed)))
-			e.pos--
 			changed()
 		}
 	case "~":
-		if e.pos < len(e.buf) {
+		if e.pos < e.lineEnd(e.pos) {
 			r := e.buf[e.pos]
 			if unicode.IsUpper(r) {
 				r = unicode.ToLower(r)
@@ -186,7 +214,11 @@ func (e *editor) vimKey(k string) string {
 		return "\x1f" // the editor's undo
 	case "\x1b":
 		return k // Esc Esc still rewinds, and closes popups
-	case "\r", "\x03", "\x04", "\x12", "\x07", "\x0f", "\x0c", "\x1b[Z", "\x1b[A", "\x1b[B", "?":
+	case "?":
+		if len(e.buf) == 0 {
+			return k // help
+		}
+	case "\r", "\x03", "\x04", "\x12", "\x07", "\x0f", "\x0c", "\x1b[Z", "\x1b[A", "\x1b[B":
 		return k // send, quit, search, editor, viewer … work as usual
 	default:
 		if strings.HasPrefix(k, "\x1b") {

@@ -63,6 +63,9 @@ func enterWorktree(cwd, name string) (dir string, done func() string, err error)
 			return "", nil, err
 		}
 	}
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		path = r // the workspace root is compared with resolved paths
+	}
 	base, _ := gitOut(path, "rev-parse", "HEAD")
 	dir = filepath.Join(path, rel)
 	if _, err := os.Stat(dir); err != nil {

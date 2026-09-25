@@ -426,6 +426,16 @@ func (a *approver) ask(action, reason string) bool {
 			case k == "p":
 				keep()
 			}
+			if note, ok := strings.CutPrefix(k, "c:"); ok {
+				// Approved with a note: it reaches the model at its next
+				// step, like a message sent mid-turn.
+				if note = strings.TrimSpace(note); note != "" {
+					a.ui.mu.Lock()
+					a.ui.steer = append(a.ui.steer, note)
+					a.ui.mu.Unlock()
+				}
+				return true
+			}
 			if fb, ok := strings.CutPrefix(k, "t:"); ok {
 				if a.feedback == nil {
 					a.feedback = map[string]string{}
@@ -613,6 +623,7 @@ func run(args []string) error {
 	if r, err := filepath.EvalSymlinks(cwd); err == nil {
 		cwd = r
 	}
+	startDir := cwd // relative --add-dir paths mean the folder agentium started in
 	if *worktree != "" {
 		dir, done, err := enterWorktree(cwd, *worktree)
 		if err != nil {
@@ -670,14 +681,28 @@ func run(args []string) error {
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
-	extraDirs, err := resolveDirs(append(append([]string(nil), cfg.Dirs...), addDirs...), cwd)
+	extraDirs, err := resolveDirs(addDirs, startDir)
 	if err != nil {
 		return err
 	}
-	for _, d := range extraDirs {
-		gate.AddDir(d)
+	// "dirs" in the config apply to every project: absolute paths only,
+	// and one that is missing here is skipped, not fatal.
+	for _, d := range cfg.Dirs {
+		if !filepath.IsAbs(d) && d != "~" && !strings.HasPrefix(d, "~/") {
+			fmt.Fprintln(os.Stderr, u.dim("· \"dirs\": "+d+" ignored (use an absolute or ~/ path)"))
+			continue
+		}
+		if r, err := resolveDirs([]string{d}, startDir); err == nil {
+			extraDirs = append(extraDirs, r...)
+		} else if !*quiet {
+			fmt.Fprintln(os.Stderr, u.dim("· "+err.Error()))
+		}
 	}
 	gate.Protected = gitProtected(cwd)
+	for _, d := range extraDirs {
+		gate.AddDir(d)
+		gate.Protected = append(gate.Protected, gitProtected(d)...)
+	}
 	ap := &approver{in: in, ui: u, gate: gate, enable: stdinTTY && !*asJSON, saved: loadApprovals(cwd)}
 	if ap.enable {
 		gate.Approve, gate.Feedback = ap.ask, ap.takeFeedback
@@ -1040,6 +1065,9 @@ func run(args []string) error {
 		return err
 	}
 
+	if *bestOf > 1 && len(extraDirs) > 0 {
+		fmt.Fprintln(os.Stderr, u.dim("· --best-of works in the main folder only; added directories are not part of the attempts"))
+	}
 	if *bestOf > 1 {
 		if *prompt == "" {
 			return errors.New("--best-of needs a prompt")
@@ -1694,6 +1722,7 @@ func slash(line string, e *slashEnv) (exit bool) {
 			return false
 		}
 		gate.AddDir(dirs[0])
+		gate.Protected = append(gate.Protected, gitProtected(dirs[0])...)
 		if a.Env.Sandbox != nil {
 			a.Env.Sandbox.Write = append(a.Env.Sandbox.Write, dirs[0])
 		}

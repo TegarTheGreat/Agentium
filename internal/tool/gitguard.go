@@ -100,7 +100,23 @@ func gitDirs(root string) []string {
 	return dirs
 }
 
-func snapGit(root string) *gitGuard {
+// snapGit snapshots git's config and hooks for every workspace root.
+func snapGit(roots ...string) *gitGuard {
+	g := snapGitOne(roots[0])
+	for _, r := range roots[1:] {
+		o := snapGitOne(r)
+		for k, v := range o.configs {
+			g.configs[k] = v
+		}
+		for k, v := range o.hooks {
+			g.hooks[k] = v
+		}
+		g.dirs = append(g.dirs, o.dirs...)
+	}
+	return g
+}
+
+func snapGitOne(root string) *gitGuard {
 	g := &gitGuard{configs: map[string][]byte{}, hooks: map[string][]byte{}}
 	for _, d := range gitDirs(root) {
 		for _, f := range []string{"config", "config.worktree"} {

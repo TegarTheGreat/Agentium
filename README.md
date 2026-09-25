@@ -124,6 +124,7 @@ On Linux and macOS, `agentium` opens a full-screen workspace; Windows uses the i
   - `y` yes
   - `a` always, for this session
   - `p` always, in this project (kept in Agentium's data folder, never in the repository; `/permissions` lists and revokes them)
+  - `c` yes, and tell Agentium something (it arrives at the next step)
   - `n` no
   - `t` no, and tell Agentium why; your words go to the model.
 - **Status line.** Model, mode, git branch and changed files, tokens and cost. `"status_line": "<command>"` shows your own instead (session JSON on stdin).
@@ -140,7 +141,7 @@ Night Shift, the default palette, uses truecolor and follows your terminal's lig
 | **More commands** | `!command` runs a shell command yourself (the agent sees the output with your next message) · `/diff` shows what changed · `/context` shows what fills the context window · `/compact` summarizes older conversation · `/btw <question>` asks on the side without adding to the conversation · `/theme` switches the palette |
 | **Anytime** | `Shift-Tab` cycles approval modes · `Esc Esc` rewinds file changes to an earlier turn · `?` lists commands and keys · `PgUp`/`PgDn` or the wheel scroll |
 
-**More folders.** `agentium --add-dir ../lib` (repeatable, or `"dirs"` in the config, or `/add-dir` in a session) lets the agent work in another directory as freely as in the current one.
+**More folders.** `agentium --add-dir ../lib` (repeatable, or `"dirs"` in the config, or `/add-dir` in a session) lets the agent work in another directory as freely as in the current one (git internals there still ask). `/undo` and `/rewind` cover the main folder only. Your home folder and `/` cannot be added.
 
 **Vim keys.** `/vim` (or `"vim": true`) gives the message box normal and insert modes.
 

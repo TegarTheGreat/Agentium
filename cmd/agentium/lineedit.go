@@ -102,6 +102,7 @@ type editor struct {
 	vim        bool   // vim mode ("vim": true, /vim)
 	vimNormal  bool   // in vim's normal mode (else insert)
 	vimPending string // an operator waiting for its motion (d, c, y, g, r)
+	killedLine bool   // the cut buffer holds whole lines (dd, yy)
 
 	killed   clip        // the last text cut with ctrl+k/u/w (ctrl+y puts it back)
 	stash    clip        // a draft put aside with ctrl+s
@@ -785,6 +786,9 @@ func (e *editor) readLine() (string, error) {
 			}
 			e.lastEdit = kind
 		}
+		if e.vim {
+			e.clampNormal() // history, search or undo may leave the cursor past the end
+		}
 		e.suggest()
 		width = termWidth(e.out)
 		e.render(width)
@@ -810,7 +814,7 @@ func (e *editor) cut(i, j int) {
 	if i >= j {
 		return
 	}
-	e.killed = e.capture(e.buf[i:j])
+	e.killed, e.killedLine = e.capture(e.buf[i:j]), false
 	e.buf = append(e.buf[:i], e.buf[j:]...)
 	e.pos = i
 }

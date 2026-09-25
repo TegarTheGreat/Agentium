@@ -318,6 +318,13 @@ func (g *Gate) AddDir(dir string) {
 	g.Extra = append(g.Extra, dir)
 }
 
+// Dirs returns the added workspace directories.
+func (g *Gate) Dirs() []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return append([]string(nil), g.Extra...)
+}
+
 // outside reports whether path is outside Root and every added directory.
 func (g *Gate) outside(path string) bool {
 	if !Outside(g.Root, path) {

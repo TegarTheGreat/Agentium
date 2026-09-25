@@ -37,6 +37,14 @@ func TestVimKeys(t *testing.T) {
 		{"abc", 1, []string{"r", "X"}, "aXc", 1},
 		{"abc def", 0, []string{"y", "w", "$", "p"}, "abc defabc ", 10},
 		{"a\nb", 2, []string{"g", "g"}, "a\nb", 0},
+		// From the audit: e past a word end, dw at a line end, linewise p.
+		{"foo bar", 1, []string{"e", "e"}, "foo bar", 6},
+		{"foo\nbar", 0, []string{"d", "w"}, "\nbar", 0},
+		{"hello", 0, []string{"y", "y", "p"}, "hello\nhello", 6},
+		{"a\nb", 0, []string{"d", "d", "p"}, "b\na", 2},
+		{"a\n\nb", 2, []string{"r", "x"}, "a\n\nb", 2},
+		{"a\n\nb", 2, []string{"~"}, "a\n\nb", 2},
+		{"hi", 0, []string{"?"}, "hi", 0},
 	} {
 		e := run(c.start, c.pos, c.keys...)
 		if string(e.buf) != c.want || e.pos != c.wpos {
@@ -50,5 +58,10 @@ func TestVimKeys(t *testing.T) {
 	}
 	if e.vimKey("\r") != "\r" || e.vimKey("i") != "" || e.vimNormal {
 		t.Fatal("enter passes, i inserts")
+	}
+	// Esc and d typed fast arrive as Alt-d: still Esc, then d.
+	e = &editor{buf: []rune("one two"), pos: 7, vim: true}
+	if out := e.vimKey("\x1bd"); out != "" || !e.vimNormal || e.vimPending != "d" {
+		t.Fatalf("fast esc: %q normal=%v pending=%q", out, e.vimNormal, e.vimPending)
 	}
 }

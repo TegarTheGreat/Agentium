@@ -8,6 +8,7 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 - **Vim keys in the message box** (`/vim`, or `"vim": true`). Esc enters normal mode, which has motions (`h` `l` `w` `b` `e` `0` `$` `gg` `G`), operators (`d`, `c` and `y` with a motion, or doubled), `x` `D` `C` `p` `u` `~` `r`, and `i` `a` `A` `o` to type again. Enter sends from either mode.
 - **`@file` brings the file along.** A mentioned text file goes into the message with line numbers, which saves the agent a read. `@file:10-40` sends only those lines and `@dir/` sends a listing. Big or binary files are left to the read tool.
+- **Approve with a note.** `c` at an approval says yes, and what you type reaches the agent at its next step ("yes, and run the tests after").
 - **More working directories.** `--add-dir PATH` (repeatable), `"dirs"` in the config, or `/add-dir` in a session. The agent may change files there without asking, as in the main folder, and the sandbox lets commands write there.
 
 ## [0.17.0] - 2026-09-25

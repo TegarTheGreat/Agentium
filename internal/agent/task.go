@@ -56,7 +56,7 @@ func (a *Agent) runSub(ctx context.Context, env *tool.Env, prompt string, explor
 	if explore || gate != nil && gate.GetMode() == policy.Plan {
 		g := &policy.Gate{Mode: policy.Plan}
 		if gate != nil {
-			g.Root, g.Approve = gate.Root, gate.Approve
+			g.Root, g.Approve, g.Extra, g.Protected = gate.Root, gate.Approve, gate.Dirs(), gate.Protected
 		}
 		gate = g
 	}

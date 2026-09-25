@@ -323,3 +323,23 @@ func TestMentionedFiles(t *testing.T) {
 		t.Fatalf("user words %q", got)
 	}
 }
+
+func TestResolveDirsRefusesBroadOnes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENTIUM_HOME", filepath.Join(home, ".agentium"))
+	proj := filepath.Join(home, "src", "lib")
+	os.MkdirAll(proj, 0o755)
+	for _, p := range []string{"/", home, home + "/", filepath.Join(home, "src", ".."), filepath.Dir(home)} {
+		if _, err := resolveDirs([]string{p}, home); err == nil {
+			t.Errorf("%s was accepted", p)
+		}
+	}
+	got, err := resolveDirs([]string{"src/lib"}, home)
+	if err != nil || len(got) != 1 || !strings.HasSuffix(got[0], filepath.Join("src", "lib")) {
+		t.Fatalf("got %v %v", got, err)
+	}
+	if _, err := resolveDirs([]string{"missing"}, home); err == nil {
+		t.Fatal("a missing directory is an error")
+	}
+}
