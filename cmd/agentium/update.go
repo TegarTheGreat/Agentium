@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -159,6 +160,11 @@ func updateNotice() string {
 
 // cmdUpdate replaces this binary with the latest release.
 func cmdUpdate(args []string) error {
+	for _, a := range args {
+		if a == "--rollback" {
+			return rollback()
+		}
+	}
 	_, err := runUpdate(args)
 	return err
 }
@@ -333,22 +339,64 @@ func replaceExecutable(path string, bin []byte) error {
 		os.Remove(tmp)
 		return err
 	}
-	old := ""
+	// The new binary must start before it replaces the working one.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	out, err := exec.CommandContext(ctx, tmp, "version").CombinedOutput()
+	cancel()
+	if err != nil || !strings.HasPrefix(string(out), "agentium ") {
+		os.Remove(tmp)
+		return fmt.Errorf("the downloaded binary does not run here (%v); nothing was changed", firstLine(strings.TrimSpace(string(out)+" "+errString(err))))
+	}
+	// The current binary is kept as .old: `agentium update --rollback`
+	// puts it back.
+	old := path + ".old"
+	_ = os.Remove(old)
 	if runtime.GOOS == "windows" {
-		old = path + ".old"
-		_ = os.Remove(old)
 		if err := os.Rename(path, old); err != nil {
 			os.Remove(tmp)
 			return err
 		}
+	} else if err := os.Link(path, old); err != nil {
+		if b, rerr := os.ReadFile(path); rerr == nil {
+			_ = os.WriteFile(old, b, 0o755)
+		}
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
-		if old != "" {
+		if runtime.GOOS == "windows" {
 			_ = os.Rename(old, path)
 		}
 		return err
 	}
+	return nil
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// rollback puts back the binary the last update replaced.
+func rollback() error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if r, err := filepath.EvalSymlinks(self); err == nil {
+		self = r
+	}
+	old := self + ".old"
+	b, err := os.ReadFile(old)
+	if err != nil {
+		return errors.New("no earlier version is kept here (" + old + ")")
+	}
+	if err := replaceExecutable(self, b); err != nil {
+		return err
+	}
+	out, _ := exec.Command(self, "version").Output()
+	fmt.Println("Rolled back to", strings.TrimSpace(string(out)))
 	return nil
 }
 

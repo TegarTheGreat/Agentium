@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +52,23 @@ func TestJustUpdated(t *testing.T) {
 	version = "0.20.0" // a downgrade is not news
 	if p := justUpdated(); p != "" {
 		t.Fatalf("downgrade: %q", p)
+	}
+}
+
+func TestReplaceExecutableRejectsBrokenBinary(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "agentium")
+	os.WriteFile(self, []byte("#!/bin/sh\necho agentium 1.0\n"), 0o755)
+	if err := replaceExecutable(self, []byte("not a program")); err == nil {
+		t.Fatal("a binary that does not run must not be installed")
+	}
+	if b, _ := os.ReadFile(self); !strings.Contains(string(b), "agentium 1.0") {
+		t.Fatal("the working binary was changed")
+	}
+	if err := replaceExecutable(self, []byte("#!/bin/sh\necho agentium 2.0\n")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(self + ".old"); !strings.Contains(string(b), "agentium 1.0") {
+		t.Fatal("the previous binary is kept for --rollback")
 	}
 }
