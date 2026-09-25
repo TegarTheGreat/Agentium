@@ -2,7 +2,10 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/tegarthegreat/agentium/internal/config"
 )
 
 // Chat-style rendering for the full-screen UI: the user's messages are
@@ -27,13 +30,46 @@ func (u *ui) welcome(model, mode, box, cwd string) {
 	var sb strings.Builder
 	sb.WriteString("\n  " + u.paint(cAccent, "◆") + " " + u.paint(cBold, "Agentium") + " " + u.paint(cGray, version) + "\n")
 	sb.WriteString(u.paint(cGray, "    "+shortPath(cwd)+" · "+model+" · "+mode+" mode · "+box) + "\n\n")
-	sb.WriteString(u.paint(cDim, "    Try: explain this project · fix the failing test · add a --json flag") + "\n")
+	sb.WriteString(u.paint(cDim, "    Try: "+strings.Join(welcomeTips(cwd), " · ")) + "\n")
 	keys := "    / commands · @ mention a file · ! shell · ? shortcuts"
 	if termWidth(realTTY()) >= sideMinW {
 		keys += " · ctrl+t panel"
 	}
 	sb.WriteString(u.paint(cDim, keys) + "\n")
 	os.Stderr.WriteString(sb.String())
+}
+
+// welcomeTips are three things to try, fitted to the folder: an empty one,
+// a repository without instructions, uncommitted work, or a clean tree.
+func welcomeTips(cwd string) []string {
+	ents, _ := os.ReadDir(cwd)
+	if len(ents) == 0 {
+		return []string{"create a small CLI in Go", "scaffold a web app", "/help"}
+	}
+	tips := []string{"explain this project"}
+	if !hasInstructions(cwd) {
+		tips = append(tips, "/init writes AGENTS.md")
+	}
+	if out, err := git(cwd, "status", "--porcelain"); err == nil && strings.TrimSpace(out) != "" {
+		tips = append(tips, "/review your changes", "/commit")
+	} else if err == nil {
+		tips = append(tips, "fix the failing test", "@file to include a file")
+	} else {
+		tips = append(tips, "fix the failing test", "add a --json flag")
+	}
+	return tips[:min(len(tips), 3)]
+}
+
+// hasInstructions reports an AGENTS.md or CLAUDE.md in the project.
+func hasInstructions(cwd string) bool {
+	for _, d := range []string{cwd, config.ProjectRoot(cwd)} {
+		for _, f := range []string{"AGENTS.md", "CLAUDE.md"} {
+			if _, err := os.Stat(filepath.Join(d, f)); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // shortPath abbreviates the home directory as ~.
