@@ -232,6 +232,9 @@ func (a *Agent) Run(ctx context.Context, input string) (Stats, error) {
 		})
 		st.Turns++
 		a.Turns++
+		if err != nil && resp.Usage == (provider.Usage{}) {
+			resp.Usage = estimateUsage(a.size(), resp)
+		}
 		st.Usage.Add(resp.Usage)
 		a.Charge(resp.Usage, true) // under the lock sub-agents charge with
 		if in := resp.Usage.Input + resp.Usage.CacheRead + resp.Usage.CacheWrite; in > 0 {
@@ -653,6 +656,21 @@ func safeRun(ctx context.Context, t tool.Tool, env *tool.Env, args json.RawMessa
 		}
 	}()
 	return t.Run(ctx, env, args)
+}
+
+// estimateUsage guesses the tokens of a call that was stopped or broke
+// after output began: the provider sends usage only at the end, but the
+// request was processed and the streamed output is billed all the same
+// (a stopped reply used to cost $0, and --max-cost could be exceeded).
+func estimateUsage(requestChars int, resp provider.Response) provider.Usage {
+	out := len(resp.Text) + len(resp.Reasoning) + len(resp.Thought)
+	for _, c := range resp.ToolCalls {
+		out += len(c.Args) + len(c.Name)
+	}
+	if out == 0 {
+		return provider.Usage{}
+	}
+	return provider.Usage{Input: requestChars / 4, Output: out/4 + 1}
 }
 
 // Charge adds usage from a call made outside Run (a side question, a

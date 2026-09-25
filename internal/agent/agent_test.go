@@ -944,3 +944,19 @@ func TestOneBatchOfEditsIsOneAttempt(t *testing.T) {
 		}
 	}
 }
+
+// A reply stopped mid-stream has no usage from the provider; it is still
+// charged (estimated) so /cost and --max-cost see it.
+func TestStoppedReplyIsCharged(t *testing.T) {
+	a := newAgent(t, &script{steps: []func(provider.Request) (provider.Response, error){
+		func(provider.Request) (provider.Response, error) {
+			return provider.Response{Text: strings.Repeat("essay ", 200)}, context.Canceled
+		},
+	}})
+	a.Cost = func(u provider.Usage) float64 { return float64(u.Input+u.Output) / 1e6 }
+	a.Run(context.Background(), "write an essay")
+	us, spent := a.Totals()
+	if us.Output < 200 || us.Input == 0 || spent == 0 {
+		t.Fatalf("usage %+v spent %v", us, spent)
+	}
+}
