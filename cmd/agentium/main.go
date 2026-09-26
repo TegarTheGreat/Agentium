@@ -39,7 +39,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.26.3"
+var version = "0.27.0"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -390,7 +390,7 @@ func summarizeCall(c provider.ToolCall) string {
 		}
 		return ""
 	}
-	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "query", "title", "prompt")
+	s := pick("cmd", "path", "pattern", "url", "glob", "symbol", "refs", "memory", "search", "query", "title", "prompt", "question")
 	if j, ok := m["job"].(float64); ok {
 		s = fmt.Sprintf("job %d", int(j))
 		if pick("stdin") != "" {

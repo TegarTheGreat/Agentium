@@ -541,7 +541,7 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 	var line string
 	switch {
 	case f.asking:
-		line = sgr(cGray) + "❯ answer the question above · typing here is paused\x1b[0m"
+		line = sgr(cGray) + "❯ choose an answer above · typing here is paused\x1b[0m"
 	case f.input:
 		line, _ = f.vt.renderW(inputRow, inner)
 	case f.busy && f.typing != "":
@@ -563,7 +563,7 @@ func (f *fullscreen) composer(w, inputRow int) []string {
 	switch {
 	case f.asking:
 		left = sgr(cYellow) + "▲\x1b[0m " + "Waiting for your answer"
-		keys = []string{"y yes", "n no", "esc no", "pgup scroll"}
+		keys = []string{"enter confirm", "↑↓ choose", "pgup scroll"}
 	case f.busy:
 		left = f.strip
 		keys = []string{"enter steer", "tab queue", "↑ take back"}

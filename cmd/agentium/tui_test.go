@@ -661,3 +661,27 @@ func TestDroppedLeadingOnly(t *testing.T) {
 		t.Fatalf("got %d, want the 2 leading ones", len(imgs))
 	}
 }
+
+func TestPickList(t *testing.T) {
+	opts := approvalOptions("for `rm`", true)
+	if len(opts) != 6 || opts[0].key != "y" || opts[len(opts)-1].key != "t" || !opts[4].no {
+		t.Fatalf("options: %+v", opts)
+	}
+	if len(approvalOptions("for `rm`", false)) != 5 {
+		t.Fatal("p offered for a kind that is not kept")
+	}
+	if s, ok := pickMove("\x1b[A", 0, 6); !ok || s != 5 {
+		t.Fatalf("up from the top: %d %v", s, ok)
+	}
+	if s, ok := pickMove("\x1b[B", 5, 6); !ok || s != 0 {
+		t.Fatalf("down from the bottom: %d %v", s, ok)
+	}
+	if _, ok := pickMove("y", 0, 6); ok {
+		t.Fatal("a letter moved the selection")
+	}
+	u := &ui{}
+	rows := u.pickRows(opts, 2, "", "no")
+	if !strings.Contains(rows, "❯ 3. Yes, and always allow in this project (p)") || strings.Count(rows, "\n") != len(opts)+1 {
+		t.Fatalf("rows:\n%s", rows)
+	}
+}

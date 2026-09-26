@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -686,43 +687,70 @@ func reasonNote(reason, title string) string {
 	return "  · " + reason
 }
 
-// approvalKeys lays the answers out as a key grid: the key, then what it
-// does, two columns when the terminal is wide enough.
-func (u *ui) approvalKeys(scope string, keep bool, width int) string {
-	type opt struct{ key, label string }
-	left := []opt{{"y", "yes"}, {"n", "no"}, {"c", "yes, and add a note"}}
-	right := []opt{{"a", "always allow " + scope}, {"t", "no, and tell the agent why"}}
-	if keep {
-		right = append(right[:1], append([]opt{{"p", "always allow in this project"}}, right[1:]...)...)
-	}
-	cell := func(o opt) string {
-		c := cGreen
-		if o.key == "n" || o.key == "t" {
-			c = cRed
-		}
-		return u.paint(c, o.key) + "  " + o.label
-	}
-	colW := 26
+// pickOpt is one answer in a numbered list: picked by its number, its
+// letter, or the arrow keys and Enter.
+type pickOpt struct {
+	key   string // a letter that picks it, "" for none
+	label string
+	no    bool // a refusal, shown in red
+}
+
+// pickRows draws the list with the selected answer marked, then the key
+// line (note replaces it, e.g. to say a key was ignored). The rows end
+// with the cursor on the key line.
+func (u *ui) pickRows(opts []pickOpt, sel int, note, esc string) string {
 	var b strings.Builder
-	if width >= 2+colW+2+4+len("always allow "+scope)+4 {
-		for i := 0; i < max(len(left), len(right)); i++ {
-			b.WriteString("  ")
-			if i < len(left) {
-				b.WriteString(cell(left[i]) + strings.Repeat(" ", max(colW-3-len(left[i].label), 1)))
-			} else {
-				b.WriteString(strings.Repeat(" ", colW))
-			}
-			if i < len(right) {
-				b.WriteString(cell(right[i]))
-			}
-			b.WriteString("\n")
+	for i, o := range opts {
+		num := fmt.Sprintf("%d.", i+1)
+		key := ""
+		if o.key != "" {
+			key = u.paint(cDim, " ("+o.key+")")
 		}
-	} else {
-		for _, o := range append(left, right...) {
-			b.WriteString("  " + cell(o) + "\n")
+		if i == sel {
+			c := cGreen
+			if o.no {
+				c = cRed
+			}
+			b.WriteString("  " + u.paint(c, "❯ "+num+" ") + u.paint(cBold, u.paint(c, o.label)) + key + "\n")
+			continue
 		}
+		b.WriteString("    " + u.paint(cGray, num) + " " + o.label + key + "\n")
 	}
+	if note == "" {
+		note = u.paint(cDim, "enter confirm · ↑↓ or 1-"+strconv.Itoa(len(opts))+" choose · esc "+esc)
+	}
+	b.WriteString("\n  " + note + " ")
 	return b.String()
+}
+
+// redrawPick rewrites a list drawn by pickRows in place.
+func (u *ui) redrawPick(opts []pickOpt, sel int, note, esc string) {
+	fmt.Fprintf(os.Stderr, "\r\x1b[%dA\x1b[J%s", len(opts)+1, u.pickRows(opts, sel, note, esc))
+}
+
+// pickMove handles an arrow key (or j/k) on a list; ok is false for
+// other keys.
+func pickMove(k string, sel, n int) (int, bool) {
+	switch k {
+	case "\x1b[A", "\x1bOA", "k":
+		return (sel + n - 1) % n, true
+	case "\x1b[B", "\x1bOB", "j", "\t":
+		return (sel + 1) % n, true
+	}
+	return sel, false
+}
+
+// approvalOptions are the answers to a permission question, safest last
+// so Esc ("no") is at the bottom like the list reads.
+func approvalOptions(scope string, keep bool) []pickOpt {
+	opts := []pickOpt{{key: "y", label: "Yes"}, {key: "a", label: "Yes, and always allow " + scope}}
+	if keep {
+		opts = append(opts, pickOpt{key: "p", label: "Yes, and always allow in this project"})
+	}
+	return append(opts,
+		pickOpt{key: "c", label: "Yes, with a note for the agent"},
+		pickOpt{key: "n", label: "No", no: true},
+		pickOpt{key: "t", label: "No, and tell the agent what to do instead", no: true})
 }
 
 // approve asks for permission with a single key press.
@@ -792,9 +820,11 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 			body.WriteString("  " + u.paint(cYellow, fmt.Sprintf("%d changes to this file are pending; each is asked for separately", len(match))) + "\n")
 		}
 	}
-	card := fmt.Sprintf("\n%s %s%s\n%s\n%s%s ",
+	opts := approvalOptions(scope, keep)
+	sel := 0
+	card := fmt.Sprintf("\n%s %s%s\n%s\n%s",
 		u.paint(cYellow, "▲"), u.paint(cBold, title), u.paint(cDim, reasonNote(reason, title)), body.String(),
-		u.approvalKeys(scope, keep, width), "  "+u.paint(cDim, "press a key")+" "+u.paint(cYellow, "›"))
+		u.pickRows(opts, sel, "", "no"))
 	fmt.Fprint(os.Stderr, card)
 	u.mu.Unlock()
 	u.inOffice(func(o *office) { o.setLead(actWait, "") })
@@ -841,20 +871,52 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 	}
 	allowed := func(s string) string { return u.paint(cGreen, "✓ "+s) }
 	declined := func(s string) string { return u.paint(cRed, "✗ "+s) }
+	answer := func(key string) (string, error) {
+		switch key {
+		case "y":
+			return finish("y", allowed("Allowed"))
+		case "a":
+			return finish("a", allowed("Always allowed "+scope))
+		case "p":
+			if !keep {
+				return finish("a", allowed("Always allowed this session")+u.paint(cDim, " (this kind is not kept)"))
+			}
+			return finish("p", allowed("Always allowed in this project")+u.paint(cDim, " (/permissions to review)"))
+		case "t":
+			fmt.Fprint(os.Stderr, "\r\x1b[K  "+u.paint(cRed, "No.")+" "+u.paint(cInk, "What should the agent do instead?")+" ")
+			reply, _ := u.readReply()
+			extra++
+			return finish("t:"+reply, declined("Declined")+u.paint(cDim, ": ")+sanitize(oneLine(reply, 80)))
+		case "c":
+			fmt.Fprint(os.Stderr, "\r\x1b[K  "+u.paint(cGreen, "Yes.")+" "+u.paint(cInk, "Note for the agent:")+" ")
+			reply, ok := u.readReply()
+			extra++
+			if !ok { // Esc or Ctrl-C: no after all
+				return finish("n", declined("Declined (cancelled)"))
+			}
+			return finish("c:"+reply, allowed("Allowed")+u.paint(cDim, ", note: ")+sanitize(oneLine(reply, 80)))
+		}
+		return finish("n", declined("Declined"))
+	}
 	// Keys typed just before the question (a message typed ahead) mean
 	// the user is typing: a key then only counts once there is a pause.
 	var last time.Time
 	if u.drainKeys() {
 		last = time.Now()
 	}
-	hinted := false
+	note := ""
 	for {
 		k, err := u.nextKey()
 		if err != nil {
 			return "", err
 		}
 		if k == "\x1b" || k == "\x03" { // Esc and Ctrl-C always mean no
-			return finish("n", declined("Declined"))
+			return answer("n")
+		}
+		if next, ok := pickMove(k, sel, len(opts)); ok && k != "j" && k != "k" {
+			sel, note = next, ""
+			u.redrawPick(opts, sel, note, "no")
+			continue
 		}
 		// An answer is a key on its own: no key right before it, and none
 		// right after it. Keys inside a burst of typing ("add tests" must
@@ -862,44 +924,30 @@ func (u *ui) approve(action, reason, scope string, keep bool) (string, error) {
 		gap := time.Since(last)
 		last = time.Now()
 		ans := strings.ToLower(k)
-		isAnswer := ans == "y" || ans == "a" || ans == "p" || ans == "n" || ans == "t" || ans == "c" || ans == "\r" || ans == "\n"
-		if gap >= 250*time.Millisecond && isAnswer {
-			if next, ok := u.keyWithin(250 * time.Millisecond); !ok {
-				switch ans {
-				case "y":
-					return finish("y", allowed("Allowed"))
-				case "a":
-					return finish("a", allowed("Always allowed "+scope))
-				case "p":
-					if !keep {
-						return finish("a", allowed("Always allowed this session")+u.paint(cDim, " (this kind is not kept)"))
-					}
-					return finish("p", allowed("Always allowed in this project")+u.paint(cDim, " (/permissions to review)"))
-				case "t":
-					fmt.Fprint(os.Stderr, u.paint(cRed, "no")+"\n  "+u.paint(cInk, "tell the agent why:")+" ")
-					reply, _ := u.readReply()
-					extra += 2
-					return finish("t:"+reply, declined("Declined")+u.paint(cDim, ": ")+sanitize(oneLine(reply, 80)))
-				case "c":
-					fmt.Fprint(os.Stderr, u.paint(cGreen, "yes")+"\n  "+u.paint(cInk, "note for the agent:")+" ")
-					reply, ok := u.readReply()
-					extra += 2
-					if !ok { // Esc or Ctrl-C: no after all
-						return finish("n", declined("Declined (cancelled)"))
-					}
-					return finish("c:"+reply, allowed("Allowed")+u.paint(cDim, ", note: ")+sanitize(oneLine(reply, 80)))
-				default:
-					return finish("n", declined("Declined"))
+		pick := -1
+		switch {
+		case ans == "\r" || ans == "\n":
+			pick = sel
+		case len(ans) == 1 && ans[0] >= '1' && int(ans[0]-'0') <= len(opts):
+			pick = int(ans[0] - '1')
+		default:
+			for i, o := range opts {
+				if o.key == ans {
+					pick = i
 				}
+			}
+		}
+		if gap >= 250*time.Millisecond && pick >= 0 {
+			if next, ok := u.keyWithin(250 * time.Millisecond); !ok {
+				return answer(opts[pick].key)
 			} else if next == "\x1b" || next == "\x03" {
-				return finish("n", declined("Declined"))
+				return answer("n")
 			}
 			last = time.Now()
 		}
-		if !hinted {
-			hinted = true
-			extra++
-			fmt.Fprint(os.Stderr, "\n  "+u.paint(cDim, "you were typing, so that key was ignored: press y or n on its own")+" "+u.paint(cYellow, "›")+" ")
+		if note == "" {
+			note = u.paint(cYellow, "You were typing, so that key was ignored.") + u.paint(cDim, " Choose with ↑↓ and enter, or a number.")
+			u.redrawPick(opts, sel, note, "no")
 		}
 	}
 }
@@ -959,17 +1007,18 @@ func (u *ui) askUser(question string, options []string) (string, error) {
 	u.afterTool = false
 	width := termWidth(os.Stderr)
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n%s %s\n", u.paint(cCyan, "?"), u.paint(cBold, "The agent asks"))
+	fmt.Fprintf(&b, "\n%s %s\n", u.paint(cCyan, "?"), u.paint(cDim, "The agent needs your answer"))
 	for _, row := range wrapRows(sanitize(question), width-6) {
-		b.WriteString("  " + row + "\n")
+		b.WriteString("  " + u.paint(cBold, row) + "\n")
 	}
 	b.WriteString("\n")
-	for i, o := range options {
-		fmt.Fprintf(&b, "  %s  %s\n", u.paint(cGreen, fmt.Sprint(i+1)), sanitize(o))
+	var opts []pickOpt
+	for _, o := range options {
+		opts = append(opts, pickOpt{label: sanitize(o)})
 	}
-	fmt.Fprintf(&b, "  %s  %s\n", u.paint(cGreen, "o"), "my own answer (type it)")
-	fmt.Fprintf(&b, "  %s  %s\n", u.paint(cDim, "esc"), u.paint(cDim, "skip: let the agent decide"))
-	b.WriteString("  " + u.paint(cDim, "press a key") + " " + u.paint(cYellow, "›") + " ")
+	opts = append(opts, pickOpt{key: "o", label: "Type my own answer"})
+	sel := 0
+	b.WriteString(u.pickRows(opts, sel, "", "skip (the agent decides)"))
 	fmt.Fprint(os.Stderr, b.String())
 	rows, extra := strings.Count(b.String(), "\n"), 0
 	// Answered, the question folds into one line with the answer.
@@ -980,7 +1029,7 @@ func (u *ui) askUser(question string, options []string) (string, error) {
 		} else {
 			fmt.Fprint(os.Stderr, "\r\n")
 		}
-		fmt.Fprintln(os.Stderr, u.paint(cCyan, "?")+" "+sanitize(oneLine(question, max(width-40, 30)))+u.paint(cDim, " → ")+shown)
+		fmt.Fprintln(os.Stderr, u.paint(cCyan, "?")+" "+sanitize(oneLine(question, max(width-strWidth(stripANSI(shown))-8, 30)))+u.paint(cDim, " → ")+shown)
 		return ans, nil
 	}
 	u.mu.Unlock()
@@ -1007,25 +1056,41 @@ func (u *ui) askUser(question string, options []string) (string, error) {
 		u.mu.Unlock()
 	}()
 	u.drainKeys()
+	own := func() (string, error) {
+		fmt.Fprint(os.Stderr, "\r\x1b[K  "+u.paint(cInk, "Your answer:")+" ")
+		reply, ok := u.readReply()
+		extra++
+		if !ok {
+			return finish("", u.paint(cDim, "skipped: the agent decides"))
+		}
+		return finish(reply, u.paint(cGreen, sanitize(oneLine(reply, 100))))
+	}
 	for {
 		k, err := u.nextKey()
 		if err != nil {
 			return "", err
 		}
+		if next, ok := pickMove(k, sel, len(opts)); ok {
+			sel = next
+			u.redrawPick(opts, sel, "", "skip (the agent decides)")
+			continue
+		}
+		pick := -1
 		switch {
 		case k == "\x1b" || k == "\x03":
 			return finish("", u.paint(cDim, "skipped: the agent decides"))
-		case k == "o" || k == "O" || len(options) == 0 && (k == "\r" || k == "\n"):
-			fmt.Fprint(os.Stderr, "\n  "+u.paint(cInk, "your answer:")+" ")
-			reply, ok := u.readReply()
-			extra += 2
-			if !ok {
-				return finish("", u.paint(cDim, "skipped: the agent decides"))
-			}
-			return finish(reply, u.paint(cGreen, sanitize(oneLine(reply, 100))))
-		case len(k) == 1 && k[0] >= '1' && int(k[0]-'0') <= len(options):
-			pick := options[k[0]-'1']
-			return finish(pick, u.paint(cGreen, sanitize(pick)))
+		case k == "o" || k == "O":
+			return own()
+		case k == "\r" || k == "\n":
+			pick = sel
+		case len(k) == 1 && k[0] >= '1' && int(k[0]-'0') <= len(opts):
+			pick = int(k[0] - '1')
+		}
+		switch {
+		case pick == len(opts)-1:
+			return own()
+		case pick >= 0:
+			return finish(options[pick], u.paint(cGreen, sanitize(options[pick])))
 		}
 	}
 }

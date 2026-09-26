@@ -119,8 +119,8 @@ On Linux and macOS, `agentium` opens a full-screen workspace; Windows uses the i
   - **Plan:** the todo list, with progress.
   - **Changes:** the files changed so far.
   - **Context:** a meter of how much of the context window is used.
-- **Composer.** Its border shows what is running (`◐ Running go test · 0:04 · esc to stop`). Messages typed during a turn queue up there.
-- **Approvals.** File changes show their diff before you answer:
+- **Composer.** The line under it shows what is running (`◐ Running go test · 0:04 · esc to stop`) and the keys that work now. Messages typed during a turn queue up in it.
+- **Approvals.** A numbered list of answers, the first selected. Move with `↑`/`↓` and press `Enter`, or press a number or the letter shown. `Esc` means no. A key pressed while you are still typing is ignored. File changes show their diff first. The answers:
   - `y` yes
   - `a` always, for this session
   - `p` always, in this project (kept in Agentium's data folder, never in the repository; `/permissions` lists and revokes them)

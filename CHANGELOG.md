@@ -4,6 +4,24 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-26
+
+### Changed
+- Permission questions and the agent's own questions are now one clear
+  numbered list with the selected answer marked (`❯ 1. Yes`). Move with
+  ↑/↓ and press Enter, or press a number or the letter shown. The keys are
+  explained on one line under the list, and Esc still means no (or "skip"
+  for the agent's questions). The answers read as sentences, for example
+  "No, and tell the agent what to do instead". This replaces the two-column
+  key grid.
+- While a question waits, the composer says "choose an answer above", and
+  the line under it lists enter, ↑↓ and pgup.
+
+### Fixed
+- The agent's question was cut short when it folded into the transcript
+  after the answer.
+- The tool line for the ask tool showed its raw JSON arguments.
+
 ## [0.26.3] - 2026-09-25
 
 ### Changed
