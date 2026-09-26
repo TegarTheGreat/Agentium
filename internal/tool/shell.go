@@ -87,7 +87,7 @@ var bashTool = Tool{
 				if plan {
 					return "", fmt.Errorf("denied (%s); only read-only commands run in plan mode", why)
 				}
-				return "", fmt.Errorf("denied (%s); choose another approach or ask the user", why)
+				return "", fmt.Errorf("denied (%s); do not get the same effect another way (other commands, or deleting, moving or recreating files): continue with the rest, or ask the user", why)
 			}
 		}
 		var box *sandbox.Config

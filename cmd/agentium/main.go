@@ -39,7 +39,7 @@ import (
 	"github.com/tegarthegreat/agentium/internal/tool"
 )
 
-var version = "0.27.0"
+var version = "0.27.1"
 
 const usage = `agentium — fast, minimal coding agent
 
@@ -533,7 +533,11 @@ func (a *approver) ask(action, reason string) bool {
 	}
 	fmt.Fprintf(os.Stderr, "⚠ %s  (%s)\n  allow? [y]es / [N]o / [a]lways %s%s: ", action, reason, scope, keepHint)
 	a.ui.mu.Unlock()
-	line, _ := a.in.ReadString('\n')
+	line, err := a.in.ReadString('\n')
+	if err != nil && strings.TrimSpace(line) == "" {
+		fmt.Fprintln(os.Stderr, "no answer (input closed): declined")
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true
@@ -660,6 +664,14 @@ func run(args []string) error {
 		if *prompt == "" {
 			return errors.New("empty prompt on stdin")
 		}
+	} else if !stdinTTY && stdinPiped() {
+		// `cat build.log | agentium -p "why did this fail"`: the piped
+		// text is what the prompt is about.
+		piped, err := readPiped(os.Stdin)
+		if err != nil {
+			return err
+		}
+		*prompt = attachPiped(*prompt, piped)
 	}
 
 	cfg, err := config.Load()
@@ -782,6 +794,9 @@ func run(args []string) error {
 	}
 	in := bufio.NewReader(os.Stdin)
 	gate := &policy.Gate{Mode: m, Root: cwd}
+	if err := policy.CheckRules(policy.Rules{Allow: allowRules, Deny: denyRules}); err != nil {
+		return err
+	}
 	gate.SetRules(cfg.Permissions)
 	gate.SetRules(policy.Rules{Allow: allowRules, Deny: denyRules})
 	broadRoot := tooBroad(cwd)
@@ -989,6 +1004,8 @@ func run(args []string) error {
 				}
 			}
 			sess.SystemHash = hashString(system)
+		} else if *cont && !*asJSON {
+			fmt.Fprintln(os.Stderr, u.paint(cDim, "· no earlier conversation in this folder: starting a new one"))
 		}
 		for _, c := range session.TakeCorrupt() {
 			fmt.Fprintln(os.Stderr, u.paint(cYellow, "· a saved conversation could not be read and was skipped: "+sanitize(oneLine(c, 160))))

@@ -211,6 +211,12 @@ func lock(path string) func() {
 func Load() (Config, error) {
 	var c Config
 	err := readJSON(filepath.Join(Home(), "config.json"), &c)
+	if err == nil {
+		// A deny rule with a typo would protect nothing without a word.
+		if perr := policy.CheckRules(c.Permissions); perr != nil {
+			err = fmt.Errorf("%s: %w", filepath.Join(Home(), "config.json"), perr)
+		}
+	}
 	return c, err
 }
 

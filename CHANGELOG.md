@@ -4,6 +4,30 @@ All notable changes to Agentium are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-09-26
+
+### Fixed
+- `cat build.log | agentium -p "why did this fail?"` now sends the piped
+  text along with the prompt. Before, it was dropped whenever a prompt was
+  given, and the agent answered without it. Text over 200 KB is cut, and
+  the full text is saved to a temporary file named in the prompt. If the
+  pipe stays silent, a note after 5 seconds says Agentium is waiting for
+  stdin.
+- A permission rule that can never match is now an error, not silently
+  ignored. That covers an unknown kind (`bsh(rm*)`, `fetch(...)`) and an
+  unclosed or empty pattern, whether it comes from `--allow`, `--deny` or
+  `permissions` in config.json. Before, a deny rule with a typo protected
+  nothing without a word.
+- After an action is denied, the agent no longer gets the same effect
+  another way. In testing, a denied edit through a symlink led it to
+  delete the user's symlink and write a plain file in its place. The
+  denial message and the system prompt now say to leave it and report
+  what was not done.
+- `-c` with no earlier conversation in the folder says so before it
+  starts a new one.
+- A text approval prompt whose input is closed now prints "declined"
+  instead of leaving the question hanging.
+
 ## [0.27.0] - 2026-09-26
 
 ### Changed

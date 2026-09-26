@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -157,6 +158,27 @@ func (g *Gate) ruleFor(kind, subject string) (deny string, allowed bool) {
 		}
 	}
 	return "", false
+}
+
+// CheckRules reports a rule that could never match: an unknown kind
+// ("bsh(...)", "fetch(...)") or an unclosed pattern. A deny rule with a
+// typo would otherwise protect nothing without a word.
+func CheckRules(r Rules) error {
+	for _, list := range [][]string{r.Allow, r.Deny} {
+		for _, text := range list {
+			t := strings.TrimSpace(text)
+			kind, pat, hasPat := strings.Cut(t, "(")
+			switch strings.ToLower(strings.TrimSpace(kind)) {
+			case "bash", "edit", "write", "read", "mcp":
+			default:
+				return fmt.Errorf("permission rule %q: unknown kind %q (use bash, edit, read or mcp, e.g. \"bash(go test*)\")", text, strings.TrimSpace(kind))
+			}
+			if hasPat && (!strings.HasSuffix(pat, ")") || strings.TrimSpace(strings.TrimSuffix(pat, ")")) == "") {
+				return fmt.Errorf("permission rule %q: the pattern must be closed with ) and not empty, e.g. \"bash(go test*)\"", text)
+			}
+		}
+	}
+	return nil
 }
 
 // SetRules installs the user's permission rules.

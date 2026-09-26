@@ -71,7 +71,7 @@ func runEdit(ctx context.Context, env *Env, raw json.RawMessage) (string, error)
 	p := real(env.abs(a.Path))
 	if env.Gate != nil {
 		if ok, why := env.Gate.Write(p); !ok {
-			return "", fmt.Errorf("denied (%s); choose another approach or ask the user", why)
+			return "", fmt.Errorf("denied (%s); do not get the same effect another way (other commands, or deleting, moving or recreating files): continue with the rest, or ask the user", why)
 		}
 	}
 	unlock := env.lock(p)
